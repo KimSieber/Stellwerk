@@ -1,7 +1,7 @@
 # Stellwerk – Konzept, Umsetzungsweg und Entscheidungen
 
 Stand: 06.11.2026 · Status: Konzeptphase
-
+ 
 ---
 
 ## 1. Idee und Ausgangslage
