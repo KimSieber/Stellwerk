@@ -1,7 +1,7 @@
 # Stellwerk – Konzept, Umsetzungsweg und Entscheidungen
 
 Stand: 06.11.2026 · Status: Konzeptphase
- 
+
 ---
 
 ## 1. Idee und Ausgangslage
@@ -54,6 +54,8 @@ Weiche (Gleis teilt sich) + grünes Signal (Freigabe). Quelle: `assets/icon/stel
 | E7 | **Zugangsdaten im macOS-Schlüsselbund**, nie in Konfigurationsdateien. | Sicherheit. |
 | E8 | **Jede Aktion wird protokolliert** (SQLite). | Nachvollziehbarkeit. |
 | E9 | **Ausnahmen/Unterschiede nur bewusst gesetzt**, kein Automatismus, getrennt pro Stufe. | Volle Flexibilität, z. B. Server-Konfiguration bewusst im Spiegel. |
+| E10 | **Stufen werden nie in einem Zug ausgeführt**, immer einzeln. | Die Zwischenstufe dient dem Qualitäts-Check – sonst bräuchte es sie nicht. |
+| E11 | **Manifest nur für entfernte Ziele**, lokal immer direkter Vergleich. | Lokal lohnt es nicht und schränkt nur ein. |
 
 ---
 
@@ -98,7 +100,7 @@ Dropbox-Konfliktkopien werden nicht übertragen, sondern als **Warnung** angezei
 ## 6. Vergleichsverfahren & Manifest
 
 - FTP liefert keine verlässlichen Zeitstempel und keine Hashes.
-- Deshalb führt Stellwerk pro Stufe ein **Manifest** (Pfad, Größe, Hash [BLAKE3], Zeitpunkt) des zuletzt übertragenen Stands.
+- Deshalb führt Stellwerk pro Stufe ein **Manifest** (Pfad, Größe, Hash [BLAKE3], Zeitpunkt) – nur für entfernte Ziele (E11) des zuletzt übertragenen Stands.
 - Vergleich Quelle ↔ Manifest statt Quelle ↔ Server-Zeitstempel. **Vollabgleich** (Server neu einlesen) als langsamer Kontroll-/Notfallmodus.
 - Lokal ↔ Lokal: direkter Vergleich (Größe, mtime, bei Bedarf Hash).
 
@@ -138,7 +140,7 @@ Original → `name.bak-<id>`, Schattendatei → Original. Löschungen ebenfalls 
 | Lokale Kopien | mtime übernehmen; leere Ordner mitübertragen. |
 | Dropbox „nur online“ | Standard: **herunterladen**, vorher Anzahl/Volumen in der Vorschau anzeigen. Optional pro Stufe: überspringen + warnen. |
 | Große Dateien | Fortschritt pro Datei, Wiederaufnahme per `REST`. |
-| Performance | Manifest statt rekursivem `LIST`, Caching, parallele Verbindungen. |
+| Performance | Manifest statt rekursivem `LIST`, Caching, **adaptive parallele Verbindungen** (möglichst viele, bei Überlastung herunterregeln; gelernter Wert je Stufe). |
 
 ---
 

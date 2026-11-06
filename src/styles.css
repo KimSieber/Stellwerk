@@ -1,0 +1,90 @@
+/* Farben angelehnt an das Icon (dunkelblau + Signalgrün) und das Farbschema
+   der Vergleichsansicht (KONZEPT Kap. 4). */
+:root {
+  --blau-dunkel: #13294b;
+  --blau: #1f3f73;
+  --signal: #2fbf71;
+  --neu: #2fbf71;
+  --geaendert: #e0b324;
+  --loeschen: #e0503c;
+  --geschuetzt: #9aa3ad;
+
+  --hg: #f4f6f9;
+  --flaeche: #ffffff;
+  --text: #1b2430;
+  --text-leise: #5f6b7a;
+  --rand: #dde2e8;
+
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", sans-serif;
+  font-size: 14px;
+  color: var(--text);
+  background: var(--hg);
+  -webkit-font-smoothing: antialiased;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --hg: #10161f;
+    --flaeche: #19212c;
+    --text: #e4e9ef;
+    --text-leise: #93a0af;
+    --rand: #2a3542;
+  }
+}
+
+* { box-sizing: border-box; }
+body { margin: 0; }
+
+.app { min-height: 100vh; display: flex; flex-direction: column; }
+
+.kopf {
+  display: flex; align-items: center; gap: 12px;
+  padding: 12px 20px;
+  background: linear-gradient(135deg, var(--blau-dunkel), var(--blau));
+  color: #fff;
+}
+.kopf h1 { font-size: 18px; margin: 0; font-weight: 600; }
+.kopf-icon { width: 28px; height: 28px; }
+.kopf-untertitel { color: #b9c6da; font-size: 13px; }
+
+.inhalt { padding: 20px; flex: 1; }
+
+.leiste { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+.leiste h2 { font-size: 16px; margin: 0; }
+
+button {
+  font: inherit; padding: 5px 12px; border-radius: 6px;
+  border: 1px solid var(--rand); background: var(--flaeche); color: var(--text); cursor: pointer;
+}
+button:disabled { opacity: .5; cursor: default; }
+
+.karten { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 14px; }
+.karte {
+  background: var(--flaeche); border: 1px solid var(--rand); border-radius: 10px; padding: 14px 16px;
+}
+.karte h3 { margin: 0; font-size: 15px; }
+.karte.defekt { border-color: var(--loeschen); }
+.kennung { color: var(--text-leise); font-size: 12px; }
+
+.stufen { list-style: none; padding: 0; margin: 12px 0 0; display: grid; gap: 8px; }
+.stufen li { display: flex; gap: 10px; align-items: flex-start; }
+.stufe-nr {
+  flex: none; width: 22px; height: 22px; border-radius: 50%;
+  background: var(--signal); color: #fff; font-size: 12px; font-weight: 600;
+  display: grid; place-items: center;
+}
+.stufe-name { font-weight: 500; }
+.stufe-weg {
+  color: var(--text-leise); font-size: 12px; max-width: 290px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+
+.probleme { list-style: none; padding: 0; margin: 12px 0 0; font-size: 12px; display: grid; gap: 4px; }
+.probleme li { padding-left: 10px; border-left: 3px solid; }
+.probleme li.fehler { border-color: var(--loeschen); }
+.probleme li.warnung { border-color: var(--geaendert); }
+
+.meldung.fehler { color: var(--loeschen); }
+.hinweis { color: var(--text-leise); }
+.leer { text-align: center; padding: 60px 20px; }
+code { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 12px; }

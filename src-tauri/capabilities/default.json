@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Minimale Rechte: kein Dateisystemzugriff aus dem Frontend – alles über Commands (ARCHITEKTUR Kap. 11).",
+  "windows": ["main"],
+  "permissions": ["core:default"]
+}

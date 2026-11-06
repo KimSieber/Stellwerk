@@ -7,7 +7,7 @@
 
 ---
 
-> **Status:** Konzeptphase – noch kein lauffähiger Code.
+> **Status:** Grundgerüst (Schritt 1) – Modell, Konfiguration und Startseite; noch keine Übertragung.
 
 ## Worum geht es?
 
@@ -33,9 +33,22 @@ vergleichen → bewusst auswählen → freigeben → übertragen → protokollie
 
 Tauri 2 · Rust (Logik) · React + TypeScript (Oberfläche) · SQLite (Journal, Protokoll)
 
+## Entwicklung
+
+Voraussetzungen: Rust (stable), Node.js ≥ 20, Xcode Command Line Tools.
+
+```bash
+npm install
+npm run tauri dev                 # App im Entwicklungsmodus
+cargo test -p stellwerk-core      # Tests des Kerns
+```
+
+Konfiguration: `~/Library/Application Support/de.sieber-bw.stellwerk/` (`config.toml`, `strecken/<id>.toml`).
+
 ## Dokumentation
 
 - [Konzept & Entscheidungen](docs/KONZEPT.md)
+- [Architektur](docs/ARCHITEKTUR.md)
 - Interne Notizen: `docs/intern/`
 
 ## Lizenz
