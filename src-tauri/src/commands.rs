@@ -4,6 +4,7 @@ use serde::Serialize;
 use tauri::State;
 
 use stellwerk_core::config::{validiere_strecke, Problem};
+use stellwerk_core::secrets::konten_der_strecke;
 use stellwerk_core::model::{Endpunkt, Quelle, Strecke};
 use stellwerk_core::StellwerkError;
 
@@ -115,13 +116,43 @@ pub fn strecke_pruefen(state: State<'_, AppState>, strecke: Strecke) -> Antwort<
     Ok(validiere_strecke(&strecke, &global))
 }
 
+/// Legt eine neue Strecke an; eine vorhandene Kennung wird nie überschrieben.
+#[tauri::command]
+pub fn strecke_anlegen(state: State<'_, AppState>, strecke: Strecke) -> Antwort<Vec<Problem>> {
+    Ok(state.store.strecke_anlegen(&strecke)?)
+}
+
 /// Speichert und liefert verbleibende Warnungen.
 #[tauri::command]
 pub fn strecke_speichern(state: State<'_, AppState>, strecke: Strecke) -> Antwort<Vec<Problem>> {
     Ok(state.store.strecke_speichern(&strecke)?)
 }
 
+/// Löscht die Strecke und die Passwörter ihrer FTPS-Ziele. Dateien werden nie gelöscht.
 #[tauri::command]
 pub fn strecke_loeschen(state: State<'_, AppState>, id: String) -> Antwort<()> {
-    Ok(state.store.strecke_loeschen(&id)?)
+    // Eine defekte Datei lässt sich trotzdem löschen – dann ohne Passwörter
+    let konten = state.store.strecke_laden(&id).map(|s| konten_der_strecke(&s)).unwrap_or_default();
+    state.store.strecke_loeschen(&id)?;
+    for konto in konten {
+        state.tresor.entfernen(&konto)?;
+    }
+    Ok(())
+}
+
+/// Legt ein Passwort im Schlüsselbund ab. Es wird nie zurückgegeben.
+#[tauri::command]
+pub fn passwort_speichern(state: State<'_, AppState>, konto: String, passwort: String) -> Antwort<()> {
+    Ok(state.tresor.setzen(&konto, &passwort)?)
+}
+
+/// Nur ob ein Passwort hinterlegt ist – nie das Passwort selbst.
+#[tauri::command]
+pub fn passwort_vorhanden(state: State<'_, AppState>, konto: String) -> Antwort<bool> {
+    Ok(state.tresor.vorhanden(&konto)?)
+}
+
+#[tauri::command]
+pub fn passwort_entfernen(state: State<'_, AppState>, konto: String) -> Antwort<()> {
+    Ok(state.tresor.entfernen(&konto)?)
 }

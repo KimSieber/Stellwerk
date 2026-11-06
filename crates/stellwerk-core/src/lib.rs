@@ -6,9 +6,10 @@
 //! - [`rules`]  – Regel-Engine (Ebenen, gitignore-Muster, Herkunft)
 //! - [`scan`]   – Erfassen lokaler Verzeichnisse
 //! - [`diff`]   – Vergleich Quelle ↔ Ziel (Vorschau)
+//! - [`secrets`] – Passwörter im Schlüsselbund
 //!
 //! Folgende Module kommen in späteren Schritten hinzu:
-//! `endpoint`, `plan`, `exec`, `store`, `secrets`.
+//! `endpoint`, `plan`, `exec`, `store`.
 
 pub mod config;
 pub mod diff;
@@ -16,5 +17,6 @@ pub mod error;
 pub mod model;
 pub mod rules;
 pub mod scan;
+pub mod secrets;
 
 pub use error::{Result, StellwerkError};

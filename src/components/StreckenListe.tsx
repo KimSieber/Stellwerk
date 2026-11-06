@@ -3,7 +3,9 @@ import { useQuery } from "@tanstack/react-query";
 import { api, fehlerText, type Problem, type StreckeUebersicht } from "../api";
 
 /** Startseite: Strecken als Karten mit ihren Stufen (ARCHITEKTUR Kap. 10, Ansicht 1). */
-export function StreckenListe() {
+type Props = { onNeu: () => void; onOeffnen: (id: string) => void };
+
+export function StreckenListe({ onNeu, onOeffnen }: Props) {
   const liste = useQuery({ queryKey: ["strecken"], queryFn: api.streckenListe });
   const ort = useQuery({ queryKey: ["konfig_ort"], queryFn: api.konfigOrt });
 
@@ -14,16 +16,24 @@ export function StreckenListe() {
     <section>
       <div className="leiste">
         <h2>Strecken</h2>
-        <button onClick={() => liste.refetch()} disabled={liste.isFetching}>
-          Neu laden
-        </button>
+        <div className="knoepfe">
+          <button onClick={() => liste.refetch()} disabled={liste.isFetching}>
+            Neu laden
+          </button>
+          <button className="primaer" onClick={onNeu}>
+            + Neue Strecke
+          </button>
+        </div>
       </div>
 
       {liste.data.length === 0 ? (
         <div className="leer">
           <p>Noch keine Strecke angelegt.</p>
+          <button className="primaer" onClick={onNeu}>
+            Erste Strecke anlegen
+          </button>
           <p className="hinweis">
-            Bis der Editor folgt: eine Datei <code>&lt;id&gt;.toml</code> anlegen in
+            Gespeichert wird in
             <br />
             <code>{ort.data ?? "…"}/strecken/</code>
           </p>
@@ -31,7 +41,7 @@ export function StreckenListe() {
       ) : (
         <div className="karten">
           {liste.data.map((s) => (
-            <StreckeKarte key={s.id} strecke={s} />
+            <StreckeKarte key={s.id} strecke={s} onOeffnen={() => onOeffnen(s.id)} />
           ))}
         </div>
       )}
@@ -39,12 +49,13 @@ export function StreckenListe() {
   );
 }
 
-function StreckeKarte({ strecke }: { strecke: StreckeUebersicht }) {
+function StreckeKarte({ strecke, onOeffnen }: { strecke: StreckeUebersicht; onOeffnen: () => void }) {
   if (strecke.fehler) {
     return (
       <article className="karte defekt">
         <h3>{strecke.id}</h3>
         <p className="meldung fehler">{strecke.fehler}</p>
+        <p className="hinweis">Die Datei lässt sich nicht lesen und muss von Hand korrigiert werden.</p>
       </article>
     );
   }
@@ -66,6 +77,9 @@ function StreckeKarte({ strecke }: { strecke: StreckeUebersicht }) {
         ))}
       </ol>
       <Probleme probleme={strecke.probleme} />
+      <button className="karte-knopf" onClick={onOeffnen}>
+        Bearbeiten
+      </button>
     </article>
   );
 }

@@ -88,3 +88,59 @@ button:disabled { opacity: .5; cursor: default; }
 .hinweis { color: var(--text-leise); }
 .leer { text-align: center; padding: 60px 20px; }
 code { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 12px; }
+
+/* --- Knöpfe ------------------------------------------------------------- */
+.knoepfe { display: flex; gap: 8px; }
+button.primaer { background: var(--signal); border-color: var(--signal); color: #fff; font-weight: 500; }
+button.leise { border-color: transparent; background: transparent; color: var(--text-leise); }
+button.link { border: none; background: none; color: var(--blau); padding: 2px; }
+@media (prefers-color-scheme: dark) { button.link { color: #8fb4ec; } }
+.karte-knopf { margin-top: 12px; }
+
+/* --- Editor ------------------------------------------------------------- */
+.editor { display: grid; gap: 16px; max-width: 1100px; }
+.editor .leiste { position: sticky; top: 0; z-index: 1; background: var(--hg); padding: 8px 0; }
+.editor .leiste h2 { flex: 1; margin: 0 12px; }
+fieldset { border: 1px solid var(--rand); border-radius: 10px; background: var(--flaeche); padding: 12px 16px; margin: 0; }
+legend { font-weight: 600; padding: 0 6px; }
+.raster { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 10px 16px; }
+.feld { display: grid; gap: 4px; align-content: start; }
+.feld label, .feld-name { font-size: 12px; color: var(--text-leise); }
+.passwort-hinterlegt { display: flex; gap: 10px; align-items: center; color: var(--signal); }
+.feld input, .feld select {
+  font: inherit; padding: 5px 8px; border-radius: 6px; border: 1px solid var(--rand);
+  background: var(--hg); color: var(--text); min-width: 0;
+}
+.feld input[readonly] { opacity: .7; }
+.feld-meldung { font-size: 12px; padding-left: 8px; border-left: 3px solid; }
+.feld-meldung.fehler { border-color: var(--loeschen); color: var(--loeschen); }
+.feld-meldung.warnung { border-color: var(--geaendert); }
+.pfad { display: flex; gap: 6px; }
+.pfad input { flex: 1; }
+.ftps { display: grid; gap: 8px; }
+
+.stufe { border: 1px solid var(--rand); border-radius: 12px; padding: 14px 16px; display: grid; gap: 12px; background: var(--flaeche); }
+.stufe-kopf { display: flex; align-items: center; gap: 10px; }
+.stufe-kopf h3 { flex: 1; margin: 0; font-size: 15px; }
+.strecke-weg { display: grid; grid-template-columns: 1fr auto 1fr; gap: 12px; align-items: start; }
+.strecke-weg fieldset { display: grid; gap: 8px; }
+.pfeil { font-size: 22px; color: var(--signal); align-self: center; }
+
+.regeln { display: grid; gap: 8px; }
+.regel { display: grid; grid-template-columns: 2fr 1fr 2fr auto auto; gap: 8px; align-items: end; }
+.schalter { display: flex; gap: 4px; align-items: center; font-size: 12px; padding-bottom: 6px; }
+
+.uebersicht { background: var(--flaeche); border: 1px solid var(--rand); border-radius: 10px; padding: 10px 14px; }
+.rueckfrage { display: flex; gap: 8px; align-items: center; padding: 8px 12px; border-radius: 8px; background: var(--flaeche); border: 1px solid var(--geaendert); }
+.gefahr { border-color: var(--loeschen); }
+.meldung.ok { color: var(--signal); }
+
+/* --- Dialog „Über“ ------------------------------------------------------ */
+.dialog-hintergrund { position: fixed; inset: 0; background: rgba(10, 20, 35, .45); display: grid; place-items: center; z-index: 10; }
+.dialog { background: var(--flaeche); border-radius: 20px; padding: 28px 32px; box-shadow: 0 20px 60px rgba(0,0,0,.3); }
+.ueber { width: 360px; display: grid; justify-items: center; gap: 6px; text-align: center; }
+.ueber h2 { margin: 6px 0 0; font-size: 20px; }
+.ueber hr { width: 100%; border: none; border-top: 1px solid var(--rand); margin: 8px 0; }
+.ueber-icon { width: 96px; height: 96px; }
+.ueber p { margin: 0; }
+.ueber .schliessen { margin-top: 14px; }

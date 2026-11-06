@@ -21,8 +21,15 @@ pub enum StellwerkError {
     #[error("Nicht gefunden: {0}")]
     NichtGefunden(String),
 
+    #[error("Bereits vorhanden: {0}")]
+    Vorhanden(String),
+
     #[error("Kein Verzeichnis: {}", .0.display())]
     KeinVerzeichnis(PathBuf),
+
+    /// Zugriff auf den Schlüsselbund fehlgeschlagen.
+    #[error("Schlüsselbund: {0}")]
+    Schluesselbund(String),
 
     /// Vom Nutzer abgebrochen.
     #[error("Abgebrochen")]
@@ -43,7 +50,9 @@ impl StellwerkError {
             Self::Konfiguration { .. } => "konfiguration",
             Self::Validierung(_) => "validierung",
             Self::NichtGefunden(_) => "nicht_gefunden",
+            Self::Vorhanden(_) => "vorhanden",
             Self::KeinVerzeichnis(_) => "kein_verzeichnis",
+            Self::Schluesselbund(_) => "schluesselbund",
             Self::Abbruch => "abbruch",
             Self::Io { .. } => "io",
         }

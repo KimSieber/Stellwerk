@@ -108,13 +108,10 @@ fn ftps_ziel_jedes_feld() {
 }
 
 #[test]
-fn ftps_als_quelle_wird_geprueft() {
+fn ftps_ist_nur_als_ziel_erlaubt() {
     let mut s = beispiel();
     s.stufen[0].quelle = Quelle::Ftps(gueltiges_ftps());
-    assert!(fehler_orte(&s).is_empty());
-
-    s.stufen[0].quelle = Quelle::Ftps(ftps("", 21, "/x", "kim", "k"));
-    assert_eq!(fehler_orte(&s), vec!["stufen[0].quelle.host"]);
+    assert_eq!(fehler_orte(&s), vec!["stufen[0].quelle.typ"]);
 }
 
 #[test]

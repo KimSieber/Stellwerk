@@ -3,7 +3,9 @@ import { cleanup } from "@testing-library/react";
 import { clearMocks } from "@tauri-apps/api/mocks";
 import { afterEach } from "vitest";
 
-afterEach(() => {
+afterEach(async () => {
   cleanup();
-  clearMocks(); // IPC-Attrappe nach jedem Test entfernen
+  // Abmeldungen von Ereignis-Empfängern laufen asynchron – erst danach die Attrappe entfernen.
+  await new Promise((r) => setTimeout(r, 0));
+  clearMocks();
 });

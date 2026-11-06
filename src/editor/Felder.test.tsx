@@ -1,0 +1,218 @@
+import { describe, expect, it, vi } from "vitest";
+import { render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+
+import type { Endpunkt, Quelle, Stufe } from "../api";
+import { aufrufeVon, mitQuery, rustAttrappe, Zustand } from "../test/hilfen";
+import { AuswahlFeld, EndpunktFelder, PfadFeld, ProblemeKontext, QuelleFelder, TextFeld, ZielFelder } from "./Felder";
+import { neueStufe } from "./modell";
+
+describe("Feld und Meldungen", () => {
+  it("zeigt nur die Meldungen zum eigenen Ort", () => {
+    render(
+      <ProblemeKontext.Provider
+        value={[
+          { schwere: "fehler", ort: "name", meldung: "Name fehlt" },
+          { schwere: "warnung", ort: "name", meldung: "Hinweis" },
+          { schwere: "fehler", ort: "id", meldung: "anderes Feld" },
+        ]}
+      >
+        <TextFeld label="Name" ort="name" wert="" onChange={() => {}} />
+      </ProblemeKontext.Provider>,
+    );
+    expect(screen.getByLabelText("Name")).toBeInTheDocument();
+    expect(screen.getByText("Name fehlt")).toHaveClass("fehler");
+    expect(screen.getByText("Hinweis")).toHaveClass("warnung");
+    expect(screen.queryByText("anderes Feld")).toBeNull();
+  });
+
+  it("TextFeld: Eingabe und nur lesen", async () => {
+    const f = vi.fn();
+    render(
+      <>
+        <Zustand start="" beobachter={f} kind={(w, s) => <TextFeld label="A" ort="a" wert={w} onChange={s} platzhalter="leer" />} />
+        <TextFeld label="B" ort="b" wert="fest" nurLesen onChange={() => {}} />
+      </>,
+    );
+    await userEvent.type(screen.getByLabelText("A"), "xy");
+    expect(f).toHaveBeenLastCalledWith("xy");
+    expect(screen.getByLabelText("A")).toHaveAttribute("placeholder", "leer");
+    expect(screen.getByLabelText("B")).toHaveAttribute("readonly");
+  });
+
+  it("AuswahlFeld", async () => {
+    const f = vi.fn();
+    render(
+      <AuswahlFeld label="Modus" ort="m" wert="a" optionen={[["a", "Eins"], ["b", "Zwei"]]} onChange={f} />,
+    );
+    await userEvent.selectOptions(screen.getByLabelText("Modus"), "Zwei");
+    expect(f).toHaveBeenCalledWith("b");
+  });
+});
+
+describe("PfadFeld", () => {
+  it("übernimmt den im Dialog gewählten Ordner", async () => {
+    const a = rustAttrappe({ "plugin:dialog|open": () => "/Users/kim/Server" });
+    const f = vi.fn();
+    render(<PfadFeld label="Ordner" ort="p" wert="/Users/kim" onChange={f} />);
+    await userEvent.click(screen.getByRole("button", { name: "Wählen …" }));
+    await waitFor(() => expect(f).toHaveBeenCalledWith("/Users/kim/Server"));
+    expect(aufrufeVon(a, "plugin:dialog|open")).toHaveLength(1);
+  });
+
+  it("Abbruch im Dialog ändert nichts", async () => {
+    const a = rustAttrappe({ "plugin:dialog|open": () => null });
+    const f = vi.fn();
+    render(<PfadFeld label="Ordner" ort="p" wert="" onChange={f} />);
+    await userEvent.click(screen.getByRole("button", { name: "Wählen …" }));
+    await waitFor(() => expect(a).toHaveLength(1));
+    expect(f).not.toHaveBeenCalled();
+  });
+
+  it("Pfad lässt sich auch tippen", async () => {
+    const f = vi.fn();
+    render(<Zustand start="" beobachter={f} kind={(w, s) => <PfadFeld label="Ordner" ort="p" wert={w} onChange={s} />} />);
+    await userEvent.type(screen.getByLabelText("Ordner"), "/x");
+    expect(f).toHaveBeenLastCalledWith("/x");
+  });
+});
+
+describe("Endpunkte", () => {
+  const ftps: Endpunkt = {
+    typ: "ftps", host: "", port: 21, pfad: "/", benutzer: "", tls: "explizit", konto_ref: "stellwerk:s:z",
+  };
+
+  it("lokal zeigt das Ordnerfeld", async () => {
+    let zuletzt: Endpunkt = { typ: "lokal", pfad: "/a" };
+    render(<Zustand<Endpunkt> start={zuletzt} beobachter={(w) => (zuletzt = w)} kind={(w, s) => <EndpunktFelder wert={w} ort="z" onChange={s} />} />);
+    expect(screen.getByLabelText("Ordner")).toHaveValue("/a");
+    await userEvent.type(screen.getByLabelText("Ordner"), "b");
+    expect(zuletzt).toEqual({ typ: "lokal", pfad: "/ab" });
+  });
+
+  it("FTPS: jedes Feld wirkt", async () => {
+    let zuletzt: Endpunkt = ftps;
+    render(<Zustand<Endpunkt> start={ftps} beobachter={(w) => (zuletzt = w)} kind={(w, s) => <EndpunktFelder wert={w} ort="z" onChange={s} />} />);
+    await userEvent.type(screen.getByLabelText("Server"), "ftp.x.de");
+    await userEvent.clear(screen.getByLabelText("Port"));
+    await userEvent.type(screen.getByLabelText("Port"), "990");
+    await userEvent.type(screen.getByLabelText("Serverpfad"), "httpdocs");
+    await userEvent.type(screen.getByLabelText("Benutzer"), "kim");
+    expect(zuletzt).toEqual({ ...ftps, host: "ftp.x.de", port: 990, pfad: "/httpdocs", benutzer: "kim" });
+    expect(screen.getByText(/explizitem TLS/)).toBeInTheDocument();
+    // Der interne Schlüsselbund-Name ist kein Eingabefeld
+    expect(screen.queryByLabelText(/Schlüsselbund/)).toBeNull();
+    expect(screen.queryByLabelText("Passwort")).toBeNull(); // ohne Passwort-Eingabe (Quelle)
+  });
+
+  it("FTPS: ungültiger Port wird 0 (die Prüfung meldet das)", async () => {
+    let zuletzt: Endpunkt = ftps;
+    render(<Zustand<Endpunkt> start={ftps} beobachter={(w) => (zuletzt = w)} kind={(w, s) => <EndpunktFelder wert={w} ort="z" onChange={s} />} />);
+    await userEvent.clear(screen.getByLabelText("Port"));
+    expect(zuletzt).toMatchObject({ port: 0 });
+  });
+
+  it("ZielFelder wechseln die Art", async () => {
+    let zuletzt: Endpunkt = { typ: "lokal", pfad: "/a" };
+    render(
+      <Zustand<Endpunkt>
+        start={zuletzt}
+        beobachter={(w) => (zuletzt = w)}
+        kind={(w, s) => <ZielFelder wert={w} ort="z" konto="stellwerk:s:z" onChange={s} />}
+      />,
+    );
+    await userEvent.selectOptions(screen.getByLabelText("Art"), "FTPS-Server");
+    expect(zuletzt).toEqual(ftps);
+    expect(screen.getByLabelText("Server")).toBeInTheDocument();
+    await userEvent.selectOptions(screen.getByLabelText("Art"), "Lokaler Ordner");
+    expect(zuletzt).toEqual({ typ: "lokal", pfad: "" });
+  });
+});
+
+describe("QuelleFelder", () => {
+  const vor1 = { ...neueStufe({ id: "", name: "", version: 1, stufen: [] }), id: "spiegel", name: "Spiegel" };
+  const vor2: Stufe = { ...vor1, id: "zwei", name: "" };
+
+  function aufbau(start: Quelle, vorstufen: Stufe[]) {
+    const werte: Quelle[] = [];
+    render(
+      <Zustand
+        start={start}
+        beobachter={(w) => werte.push(w)}
+        kind={(w, s) => <QuelleFelder wert={w} ort="q" vorstufen={vorstufen} onChange={s} />}
+      />,
+    );
+    return werte;
+  }
+
+  it("erste Stufe: nur lokaler Ordner – FTPS ist nie Quelle", () => {
+    aufbau({ typ: "lokal", pfad: "" }, []);
+    const optionen = Array.from(screen.getByLabelText<HTMLSelectElement>("Art").options).map((o) => o.text);
+    expect(optionen).toEqual(["Lokaler Ordner"]);
+  });
+
+  it("ältere Konfiguration mit FTPS als Quelle bleibt sichtbar und lässt sich umstellen", async () => {
+    const werte = aufbau({ typ: "ftps", host: "h", port: 21, pfad: "/", benutzer: "b", tls: "explizit", konto_ref: "k" }, []);
+    expect(screen.getByLabelText("Art")).toHaveValue("ftps");
+    expect(screen.getByLabelText("Server")).toHaveValue("h");
+    await userEvent.selectOptions(screen.getByLabelText("Art"), "Lokaler Ordner");
+    expect(werte.at(-1)).toEqual({ typ: "lokal", pfad: "" });
+  });
+
+  it("mit Vorstufen: Ziel der letzten Vorstufe als Vorschlag", async () => {
+    const werte = aufbau({ typ: "lokal", pfad: "" }, [vor2, vor1]);
+    await userEvent.selectOptions(screen.getByLabelText("Art"), "Ziel einer Vorstufe");
+    expect(werte.at(-1)).toEqual({ typ: "stufe", stufe: "spiegel" });
+    // Vorstufe ohne Namen erscheint mit Kennung
+    const vorstufen = Array.from(screen.getByLabelText<HTMLSelectElement>("Vorstufe").options).map((o) => o.text);
+    expect(vorstufen).toEqual(["zwei", "Spiegel"]);
+    await userEvent.selectOptions(screen.getByLabelText("Vorstufe"), "zwei");
+    expect(werte.at(-1)).toEqual({ typ: "stufe", stufe: "zwei" });
+    await userEvent.selectOptions(screen.getByLabelText("Art"), "Lokaler Ordner");
+    expect(werte.at(-1)).toEqual({ typ: "lokal", pfad: "" });
+  });
+
+  it("Verweis ohne Vorstufe bleibt sichtbar (Prüfung meldet ihn)", () => {
+    aufbau({ typ: "stufe", stufe: "weg" }, []);
+    expect(screen.getByLabelText("Art")).toHaveValue("stufe");
+    expect(screen.getByLabelText<HTMLSelectElement>("Vorstufe").options).toHaveLength(0);
+  });
+});
+
+describe("Passwort", () => {
+  const ftps: Endpunkt = {
+    typ: "ftps", host: "h", port: 21, pfad: "/", benutzer: "b", tls: "explizit", konto_ref: "stellwerk:s:z",
+  };
+
+  function aufbau(vorhanden: boolean) {
+    const a = rustAttrappe({ passwort_vorhanden: () => vorhanden });
+    const eingaben: string[] = [];
+    mitQuery(
+      <Zustand
+        start=""
+        beobachter={(w) => eingaben.push(w)}
+        kind={(w, s) => <ZielFelder wert={ftps} ort="z" konto="stellwerk:s:z" onChange={() => {}} passwort={{ wert: w, onChange: s }} />}
+      />,
+    );
+    return { a, eingaben };
+  }
+
+  it("noch keines hinterlegt: verdecktes Eingabefeld", async () => {
+    const { a, eingaben } = aufbau(false);
+    const feld = await screen.findByLabelText("Passwort");
+    expect(feld).toHaveAttribute("type", "password");
+    expect(screen.getByText(/im macOS-Schlüsselbund abgelegt/)).toBeInTheDocument();
+    await userEvent.type(feld, "geheim");
+    expect(eingaben.at(-1)).toBe("geheim");
+    expect(aufrufeVon(a, "passwort_vorhanden")[0].args).toEqual({ konto: "stellwerk:s:z" });
+  });
+
+  it("bereits hinterlegt: Hinweis und Ändern", async () => {
+    aufbau(true);
+    expect(await screen.findByText("Im Schlüsselbund hinterlegt ✓")).toBeInTheDocument();
+    expect(screen.queryByLabelText("Passwort")).toBeNull();
+    await userEvent.click(screen.getByRole("button", { name: "Ändern" }));
+    expect(screen.getByLabelText("Passwort")).toHaveAttribute("placeholder", "Neues Passwort");
+    expect(screen.getByText(/ersetzt beim Speichern das bisherige/)).toBeInTheDocument();
+  });
+});

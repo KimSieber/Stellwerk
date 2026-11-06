@@ -143,6 +143,20 @@ impl ConfigStore {
         Ok(probleme)
     }
 
+    /// Legt eine neue Strecke an. Gibt es die Kennung schon, wird nichts
+    /// geschrieben ([`StellwerkError::Vorhanden`]) – Anlegen überschreibt nie.
+    pub fn strecke_anlegen(&self, s: &Strecke) -> Result<Vec<Problem>> {
+        let global = self.global_laden()?;
+        let probleme = validiere_strecke(s, &global);
+        if probleme.iter().any(Problem::ist_fehler) {
+            return Err(StellwerkError::Validierung(probleme));
+        }
+        if self.strecke_datei(&s.id)?.exists() {
+            return Err(StellwerkError::Vorhanden(format!("Strecke '{}'", s.id)));
+        }
+        self.strecke_speichern(s)
+    }
+
     pub fn strecke_loeschen(&self, id: &str) -> Result<()> {
         let datei = self.strecke_datei(id)?;
         fs::remove_file(&datei).map_err(|e| match e.kind() {

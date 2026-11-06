@@ -89,7 +89,11 @@ pub fn validiere_strecke(s: &Strecke, global: &GlobalConfig) -> Vec<Problem> {
         // Quelle
         match &st.quelle {
             Quelle::Lokal { pfad } => pruefe_lokal(pfad, &format!("{ort}.quelle.pfad"), &mut p),
-            Quelle::Ftps(f) => pruefe_ftps(f, &format!("{ort}.quelle"), &mut p),
+            // Übertragen wird nur zum Server hin, nie von ihm herunter (Einbahn).
+            Quelle::Ftps(_) => p.push(Problem::fehler(
+                format!("{ort}.quelle.typ"),
+                "Ein FTPS-Server kann nur Ziel sein, nicht Quelle",
+            )),
             Quelle::Stufe { stufe } => {
                 let vor = s.stufen[..i].iter().any(|v| &v.id == stufe);
                 if !vor {
@@ -107,32 +111,31 @@ pub fn validiere_strecke(s: &Strecke, global: &GlobalConfig) -> Vec<Problem> {
             Endpunkt::Ftps(f) => pruefe_ftps(f, &format!("{ort}.ziel"), &mut p),
         }
 
-        // Einbahn (E3): Ein lokales Ziel darf keine lokale Quelle der Strecke berühren.
+        // Einbahn (E3): Eine Stufe schreibt nie in ihre eigene Quelle und nie in die
+        // Quelle einer früheren Stufe (z. B. zurück ins Entwicklungsverzeichnis).
+        // Das Ziel einer Stufe darf dagegen Quelle einer späteren sein – so entsteht die Kette.
+        // Leere Pfade meldet bereits „Pfad fehlt“.
+        // Gleiche Quellen (z. B. zwei Stufen lesen denselben Spiegel) nur einmal melden.
         if let Endpunkt::Lokal { pfad: ziel } = &st.ziel {
-            if let Some(Quelle::Lokal { pfad: q }) = effektive_quelle(s, i) {
-                if ueberlappen(&q, ziel) {
-                    p.push(Problem::fehler(
-                        format!("{ort}.ziel.pfad"),
-                        format!(
-                            "Ziel '{}' und Quelle '{}' überschneiden sich",
-                            ziel.display(),
-                            q.display()
-                        ),
-                    ));
+            let mut gemeldet = HashSet::new();
+            for j in (0..=i).rev() {
+                let Some(Quelle::Lokal { pfad: q }) = effektive_quelle(s, j) else { continue };
+                if q.as_os_str().is_empty()
+                    || ziel.as_os_str().is_empty()
+                    || !ueberlappen(&q, ziel)
+                    || !gemeldet.insert(q.clone())
+                {
+                    continue;
                 }
-            }
-            for (j, andere) in s.stufen.iter().enumerate() {
-                if let Quelle::Lokal { pfad: q } = &andere.quelle {
-                    if j != i && ueberlappen(q, ziel) {
-                        p.push(Problem::fehler(
-                            format!("{ort}.ziel.pfad"),
-                            format!(
-                                "Ziel überschneidet sich mit der Quelle von Stufe '{}' – Quellen werden nie beschrieben",
-                                andere.id
-                            ),
-                        ));
-                    }
-                }
+                let meldung = if j == i {
+                    format!("Ziel '{}' und Quelle '{}' überschneiden sich", ziel.display(), q.display())
+                } else {
+                    format!(
+                        "Ziel überschneidet sich mit der Quelle der früheren Stufe '{}' – Quellen werden nie beschrieben",
+                        s.stufen[j].id
+                    )
+                };
+                p.push(Problem::fehler(format!("{ort}.ziel.pfad"), meldung));
             }
         }
 

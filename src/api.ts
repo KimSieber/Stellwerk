@@ -13,7 +13,15 @@ export interface Problem {
 }
 
 export interface BefehlsFehler {
-  kategorie: "validierung" | "konfiguration" | "nicht_gefunden" | "kein_verzeichnis" | "abbruch" | "io";
+  kategorie:
+    | "validierung"
+    | "konfiguration"
+    | "nicht_gefunden"
+    | "vorhanden"
+    | "kein_verzeichnis"
+    | "schluesselbund"
+    | "abbruch"
+    | "io";
   meldung: string;
   probleme?: Problem[];
 }
@@ -97,9 +105,16 @@ export const api = {
   streckenListe: () => invoke<StreckeUebersicht[]>("strecken_liste"),
   streckeLaden: (id: string) => invoke<Strecke>("strecke_laden", { id }),
   streckePruefen: (strecke: Strecke) => invoke<Problem[]>("strecke_pruefen", { strecke }),
+  streckeAnlegen: (strecke: Strecke) => invoke<Problem[]>("strecke_anlegen", { strecke }),
   streckeSpeichern: (strecke: Strecke) => invoke<Problem[]>("strecke_speichern", { strecke }),
   streckeLoeschen: (id: string) => invoke<void>("strecke_loeschen", { id }),
+  /** Passwort in den Schlüsselbund – es kommt nie zurück. */
+  passwortSpeichern: (konto: string, passwort: string) => invoke<void>("passwort_speichern", { konto, passwort }),
+  passwortVorhanden: (konto: string) => invoke<boolean>("passwort_vorhanden", { konto }),
 };
+
+/** Ereignis vom App-Menü „Über Stellwerk“ (siehe src-tauri/src/lib.rs). */
+export const EREIGNIS_UEBER = "menue_ueber";
 
 /** Fehlertext aus einem abgelehnten invoke. */
 export function fehlerText(e: unknown): string {

@@ -8,16 +8,19 @@
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
     "tauri": "tauri",
-    "test": "vitest run",
-    "test:watch": "vitest",
+    "test": "vitest run && cargo test --workspace",
+    "test:frontend": "vitest run",
     "test:rust": "cargo test --workspace",
+    "test:watch": "vitest",
     "abdeckung": "vitest run --coverage",
-    "abdeckung:rust": "cargo llvm-cov --workspace --ignore-filename-regex \"src-tauri/src/(main|start)\\.rs$\" --fail-under-functions 100 --fail-under-lines 100",
+    "abdeckung:rust": "cargo llvm-cov --workspace --ignore-filename-regex \"src-tauri/src/(main|start|schluesselbund)\\.rs$\" --fail-under-functions 100 --fail-under-lines 100",
     "pruefen": "npm run build && npm run abdeckung && npm run abdeckung:rust"
   },
   "dependencies": {
     "@tanstack/react-query": "^5.107.0",
     "@tauri-apps/api": "^2.12.4",
+    "@tauri-apps/plugin-dialog": "^2.8.4",
+    "@tauri-apps/plugin-opener": "^2.7.2",
     "react": "^19.3.1",
     "react-dom": "^19.3.1"
   },

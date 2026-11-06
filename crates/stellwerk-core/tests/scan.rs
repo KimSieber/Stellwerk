@@ -288,4 +288,6 @@ fn kategorien_aller_fehler() {
     assert_eq!(k.kategorie(), "konfiguration");
     let io = hash_datei(Path::new("/gibt/es/nicht")).unwrap_err();
     assert_eq!(io.kategorie(), "io");
+    let s = StellwerkError::Schluesselbund("gesperrt".into());
+    assert_eq!((s.kategorie(), s.to_string().as_str()), ("schluesselbund", "Schlüsselbund: gesperrt"));
 }

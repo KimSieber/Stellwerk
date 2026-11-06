@@ -191,3 +191,24 @@ fn umbenennen_scheitert_ohne_schaden() {
     assert!(matches!(store.strecke_speichern(&beispiel()), Err(StellwerkError::Io { .. })));
     assert!(ziel.join("inhalt").is_dir());
 }
+
+#[test]
+fn anlegen_ueberschreibt_nie() {
+    let (tmp, store) = store();
+    let s = beispiel();
+    assert!(store.strecke_anlegen(&s).unwrap().is_empty());
+    let mut zweite = beispiel();
+    zweite.name = "Andere".into();
+    let e = store.strecke_anlegen(&zweite).unwrap_err();
+    assert!(matches!(e, StellwerkError::Vorhanden(_)), "{e}");
+    assert_eq!(e.kategorie(), "vorhanden");
+    assert_eq!(e.to_string(), "Bereits vorhanden: Strecke 'mailwerk-web'");
+    assert_eq!(store.strecke_laden("mailwerk-web").unwrap().name, "Mailwerk Webseite", "unverändert");
+
+    // Ungültige Strecke: Validierung vor der Existenzprüfung, nichts geschrieben
+    let mut falsch = beispiel();
+    falsch.id = "neu".into();
+    falsch.name = String::new();
+    assert!(matches!(store.strecke_anlegen(&falsch), Err(StellwerkError::Validierung(_))));
+    assert!(!tmp.path().join("strecken/neu.toml").exists());
+}

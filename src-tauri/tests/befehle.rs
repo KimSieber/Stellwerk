@@ -9,6 +9,7 @@ use tauri::webview::InvokeRequest;
 use tauri::{Manager, WebviewWindow, WebviewWindowBuilder};
 
 use stellwerk_core::config::ConfigStore;
+use stellwerk_core::secrets::SpeicherTresor;
 use stellwerk_lib::{befehle, state::AppState};
 
 /// Beispielstrecke im JSON-Format, wie das Frontend sie sendet.
@@ -48,7 +49,7 @@ fn app() -> Testapp {
     let tmp = tempfile::tempdir().unwrap();
     let wurzel = tmp.path().to_path_buf();
     let app = befehle(mock_builder()).build(mock_context(noop_assets())).unwrap();
-    app.manage(AppState::new(ConfigStore::new(&wurzel)));
+    app.manage(AppState::new(ConfigStore::new(&wurzel), Box::new(SpeicherTresor::default())));
     let fenster = WebviewWindowBuilder::new(&app, "main", Default::default()).build().unwrap();
     Testapp { _tmp: tmp, wurzel, fenster, _app: app }
 }
@@ -117,24 +118,38 @@ fn speichern_laden_liste_loeschen() {
 }
 
 #[test]
-fn liste_zeigt_ftps_quelle_warnungen_und_defekte_dateien() {
+fn liste_zeigt_warnungen_alte_ftps_quellen_und_defekte_dateien() {
     let a = app();
     let mut s = strecke_json();
-    s["stufen"][0]["quelle"] = json!({ "typ": "ftps", "host": "quelle.example.de", "pfad": "/www",
-                                       "benutzer": "b", "konto_ref": "k" });
     s["stufen"][1]["rechte"] = json!({ "modus": "fest", "dateien": "777" });
     let w = a.aufruf("strecke_speichern", json!({ "strecke": s })).unwrap();
     assert_eq!(w[0]["schwere"], "warnung");
 
+    // Ältere Datei mit FTPS als Quelle: wird angezeigt, mit Fehlermeldung
+    std::fs::write(
+        a.wurzel.join("strecken/alt.toml"),
+        r#"id = "alt"
+name = "Alt"
+[[stufen]]
+id = "s"
+name = "S"
+quelle = { typ = "ftps", host = "quelle.example.de", pfad = "/www", benutzer = "b", konto_ref = "k" }
+ziel = { typ = "lokal", pfad = "/tmp/x" }
+"#,
+    )
+    .unwrap();
     std::fs::write(a.wurzel.join("strecken/kaputt.toml"), "id = ").unwrap();
 
     let liste = a.aufruf("strecken_liste", json!({})).unwrap();
-    assert_eq!(liste[0]["id"], "kaputt");
-    assert_eq!(liste[0]["name"], Value::Null);
-    assert!(liste[0]["fehler"].as_str().unwrap().starts_with("Konfigurationsfehler"));
+    assert_eq!(liste[0]["id"], "alt");
+    assert_eq!(liste[0]["stufen"][0]["quelle"], "ftps://quelle.example.de/www");
+    assert_eq!(liste[0]["probleme"][0]["ort"], "stufen[0].quelle.typ");
 
-    assert_eq!(liste[1]["stufen"][0]["quelle"], "ftps://quelle.example.de/www");
-    assert_eq!(liste[1]["probleme"][0]["ort"], "stufen[1].rechte");
+    assert_eq!(liste[1]["id"], "kaputt");
+    assert_eq!(liste[1]["name"], Value::Null);
+    assert!(liste[1]["fehler"].as_str().unwrap().starts_with("Konfigurationsfehler"));
+
+    assert_eq!(liste[2]["probleme"][0]["ort"], "stufen[1].rechte");
 }
 
 #[test]
@@ -194,4 +209,54 @@ fn ungueltiges_json_wird_abgewiesen() {
     s["stufen"][1]["ziel"]["tls"] = json!("keins");
     assert!(a.aufruf("strecke_speichern", json!({ "strecke": s })).is_err());
     assert!(!a.wurzel.join("strecken").exists());
+}
+
+#[test]
+fn anlegen_ueberschreibt_keine_vorhandene_strecke() {
+    let a = app();
+    assert_eq!(a.aufruf("strecke_anlegen", json!({ "strecke": strecke_json() })).unwrap(), json!([]));
+    let mut zweite = strecke_json();
+    zweite["name"] = json!("Andere");
+    let e = a.aufruf("strecke_anlegen", json!({ "strecke": zweite })).unwrap_err();
+    assert_eq!(e["kategorie"], "vorhanden");
+    assert_eq!(a.aufruf("strecke_laden", json!({ "id": "mailwerk-web" })).unwrap()["name"], "Mailwerk Webseite");
+}
+
+#[test]
+fn ereignisname_fuer_das_menue() {
+    assert_eq!(stellwerk_lib::EREIGNIS_UEBER, "menue_ueber");
+}
+
+#[test]
+fn passwort_wird_hinterlegt_aber_nie_zurueckgegeben() {
+    let a = app();
+    let konto = json!({ "konto": "stellwerk:mailwerk-web:server" });
+    assert_eq!(a.aufruf("passwort_vorhanden", konto.clone()).unwrap(), json!(false));
+    let r = a
+        .aufruf("passwort_speichern", json!({ "konto": "stellwerk:mailwerk-web:server", "passwort": "geheim" }))
+        .unwrap();
+    assert_eq!(r, Value::Null, "keine Rückgabe des Passworts");
+    assert_eq!(a.aufruf("passwort_vorhanden", konto.clone()).unwrap(), json!(true));
+    a.aufruf("passwort_entfernen", konto.clone()).unwrap();
+    assert_eq!(a.aufruf("passwort_vorhanden", konto).unwrap(), json!(false));
+}
+
+#[test]
+fn loeschen_entfernt_auch_die_passwoerter() {
+    let a = app();
+    a.aufruf("strecke_anlegen", json!({ "strecke": strecke_json() })).unwrap();
+    a.aufruf("passwort_speichern", json!({ "konto": "stellwerk:mailwerk-web:server", "passwort": "geheim" }))
+        .unwrap();
+    a.aufruf("strecke_loeschen", json!({ "id": "mailwerk-web" })).unwrap();
+    let vorhanden = a.aufruf("passwort_vorhanden", json!({ "konto": "stellwerk:mailwerk-web:server" })).unwrap();
+    assert_eq!(vorhanden, json!(false));
+}
+
+#[test]
+fn defekte_datei_laesst_sich_loeschen() {
+    let a = app();
+    std::fs::create_dir_all(a.wurzel.join("strecken")).unwrap();
+    std::fs::write(a.wurzel.join("strecken/kaputt.toml"), "id = ").unwrap();
+    assert_eq!(a.aufruf("strecke_loeschen", json!({ "id": "kaputt" })).unwrap(), Value::Null);
+    assert!(!a.wurzel.join("strecken/kaputt.toml").exists());
 }

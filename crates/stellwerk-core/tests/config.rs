@@ -86,6 +86,43 @@ fn spaetere_stufe_darf_nicht_in_fruehere_quelle_schreiben() {
 }
 
 #[test]
+fn ziel_einer_stufe_darf_quelle_einer_spaeteren_stufe_sein() {
+    // Genau der Zweck der Kette: Stufe 1 füllt den Spiegel, Stufe 2 liest ihn
+    let mut s = beispiel();
+    s.stufen[1].quelle = Quelle::Lokal { pfad: "/Users/kim/Server/mailwerk".into() };
+    assert!(fehler_orte(&s).is_empty(), "{:?}", fehler_orte(&s));
+    // auch, wenn Stufe 2 nur einen Teil des Spiegels liest
+    s.stufen[1].quelle = Quelle::Lokal { pfad: "/Users/kim/Server/mailwerk/web".into() };
+    assert!(fehler_orte(&s).is_empty());
+}
+
+#[test]
+fn spaetere_stufe_darf_nicht_ins_ziel_einer_vorstufe_schreiben_wenn_es_ihre_quelle_ist() {
+    // Drei Stufen: Stufe 3 liest über Verweis aus dem Ziel von Stufe 2 (= Ziel von Stufe 1 bei Verweis)
+    // und darf dorthin nicht zurückschreiben.
+    let mut s = beispiel();
+    let mut dritte = s.stufen[0].clone();
+    dritte.id = "dritte".into();
+    dritte.quelle = Quelle::Stufe { stufe: "spiegel".into() };
+    dritte.ziel = Endpunkt::Lokal { pfad: "/Users/kim/Server/mailwerk/unter".into() };
+    s.stufen[1].quelle = Quelle::Stufe { stufe: "spiegel".into() };
+    s.stufen.push(dritte);
+    // Stufe 3 schreibt in ihre eigene (effektive) Quelle
+    assert_eq!(fehler_orte(&s), vec!["stufen[2].ziel.pfad"]);
+}
+
+#[test]
+fn leere_pfade_ergeben_keine_ueberschneidung() {
+    let mut s = beispiel();
+    s.stufen[0].ziel = Endpunkt::Lokal { pfad: "".into() };
+    s.stufen[1].quelle = Quelle::Lokal { pfad: "".into() };
+    // nur „Pfad fehlt“, keine Überschneidungsmeldung
+    let p = validiere_strecke(&s, &GlobalConfig::default());
+    assert!(p.iter().all(|p| p.meldung == "Pfad fehlt"), "{p:#?}");
+    assert_eq!(p.len(), 2);
+}
+
+#[test]
 fn quelle_stufe_muss_vorher_kommen() {
     let mut s = beispiel();
     s.stufen[0].quelle = Quelle::Stufe { stufe: "server".into() };
@@ -248,4 +285,9 @@ fn rechte_nach_muster_im_toml() {
     let falsch = BEISPIEL.replace(r#"ordner = "755""#, r#"ordner = "799""#);
     let e = strecke_aus_toml(&falsch, Path::new("x.toml")).unwrap_err().to_string();
     assert!(e.contains("ungültiger Dateimodus"), "{e}");
+}
+
+#[test]
+fn konten_der_strecke() {
+    assert_eq!(stellwerk_core::secrets::konten_der_strecke(&beispiel()), vec!["stellwerk:mailwerk-web:server"]);
 }

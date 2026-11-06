@@ -1,7 +1,14 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Minimale Rechte: kein Dateisystemzugriff aus dem Frontend – alles über Commands (ARCHITEKTUR Kap. 11).",
+  "description": "Minimale Rechte: kein Dateisystemzugriff aus dem Frontend – alles über Commands (ARCHITEKTUR Kap. 11). Erlaubt sind nur der Ordner-Auswahldialog (liefert einen Pfad, liest nichts) und das Öffnen von Links (Webseite, Kontakt) im Standardprogramm.",
   "windows": ["main"],
-  "permissions": ["core:default"]
+  "permissions": [
+    "core:default",
+    "dialog:allow-open",
+    {
+      "identifier": "opener:allow-open-url",
+      "allow": [{ "url": "https://*.sieber-bw.de" }, { "url": "mailto:*" }]
+    }
+  ]
 }
