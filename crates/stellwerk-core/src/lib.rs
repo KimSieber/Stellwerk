@@ -5,11 +5,13 @@
 //! - [`config`] – Laden/Speichern/Validieren der TOML-Konfiguration
 //! - [`rules`]  – Regel-Engine (Ebenen, gitignore-Muster, Herkunft)
 //! - [`scan`]   – Erfassen lokaler Verzeichnisse
+//! - [`diff`]   – Vergleich Quelle ↔ Ziel (Vorschau)
 //!
 //! Folgende Module kommen in späteren Schritten hinzu:
-//! `endpoint`, `diff`, `plan`, `exec`, `store`, `secrets`.
+//! `endpoint`, `plan`, `exec`, `store`, `secrets`.
 
 pub mod config;
+pub mod diff;
 pub mod error;
 pub mod model;
 pub mod rules;

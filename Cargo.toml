@@ -19,4 +19,5 @@ tempfile = "3"
 ignore = "0.4"
 walkdir = "2"
 blake3 = "1"
+filetime = "0.2"
 stellwerk-core = { path = "crates/stellwerk-core" }

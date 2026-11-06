@@ -25,6 +25,14 @@ pub enum Warnung {
     Konfliktkopie,
     /// Ein anderer Eintrag unterscheidet sich nur in Groß-/Kleinschreibung.
     GrossKlein { mit: RelPath },
+    /// Quelle und Ziel sind verschiedener Art (z. B. Datei gegen Ordner).
+    ArtVerschieden,
+    /// „Ersetzen durch“: die Ersatzdatei fehlt in der Quelle.
+    ErsatzFehlt { quelle: RelPath },
+    /// Inhalt konnte nicht gelesen werden.
+    Lesefehler { meldung: String },
+    /// Ordner bleibt bestehen, weil darin Geschütztes oder Ignoriertes liegt.
+    EnthaeltBleibendes,
 }
 
 /// BLAKE3-Hash eines Dateiinhalts, als Hex-Text dargestellt.
