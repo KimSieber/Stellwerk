@@ -16,4 +16,7 @@ thiserror = "2"
 unicode-normalization = "0.1"
 dirs = "6"
 tempfile = "3"
+ignore = "0.4"
+walkdir = "2"
+blake3 = "1"
 stellwerk-core = { path = "crates/stellwerk-core" }

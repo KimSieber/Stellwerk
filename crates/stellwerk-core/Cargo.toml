@@ -12,6 +12,9 @@ toml.workspace = true
 thiserror.workspace = true
 unicode-normalization.workspace = true
 dirs.workspace = true
+ignore.workspace = true
+walkdir.workspace = true
+blake3.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

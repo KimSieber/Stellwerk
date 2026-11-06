@@ -3,12 +3,16 @@
 //! Aufbau gemäß `docs/ARCHITEKTUR.md`:
 //! - [`model`]  – Strecke, Stufe, Endpunkt, Regel, relativer Pfad
 //! - [`config`] – Laden/Speichern/Validieren der TOML-Konfiguration
+//! - [`rules`]  – Regel-Engine (Ebenen, gitignore-Muster, Herkunft)
+//! - [`scan`]   – Erfassen lokaler Verzeichnisse
 //!
 //! Folgende Module kommen in späteren Schritten hinzu:
-//! `rules`, `endpoint`, `scan`, `diff`, `plan`, `exec`, `store`, `secrets`.
+//! `endpoint`, `diff`, `plan`, `exec`, `store`, `secrets`.
 
 pub mod config;
 pub mod error;
 pub mod model;
+pub mod rules;
+pub mod scan;
 
 pub use error::{Result, StellwerkError};

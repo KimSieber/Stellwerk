@@ -193,7 +193,7 @@ fn globale_einstellungen() {
     let g = GlobalConfig::default();
     assert_eq!(g.ausfuehrung.max_verbindungen, 8);
     assert!(g.regeln.standard.iter().any(|r| r.muster == ".DS_Store"));
-    assert!(g.regeln.standard.iter().any(|r| r.muster == "Icon\r"));
+    assert!(g.regeln.standard.iter().any(|r| r.muster == "Icon[\r]"));
 
     let tmp = tempfile::tempdir().unwrap();
     let store = ConfigStore::new(tmp.path());

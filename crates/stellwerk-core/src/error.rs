@@ -21,6 +21,13 @@ pub enum StellwerkError {
     #[error("Nicht gefunden: {0}")]
     NichtGefunden(String),
 
+    #[error("Kein Verzeichnis: {}", .0.display())]
+    KeinVerzeichnis(PathBuf),
+
+    /// Vom Nutzer abgebrochen.
+    #[error("Abgebrochen")]
+    Abbruch,
+
     #[error("Ein-/Ausgabefehler bei {pfad}: {quelle}")]
     Io {
         pfad: PathBuf,
@@ -30,6 +37,18 @@ pub enum StellwerkError {
 }
 
 impl StellwerkError {
+    /// Kategorie für Oberfläche und Protokoll.
+    pub fn kategorie(&self) -> &'static str {
+        match self {
+            Self::Konfiguration { .. } => "konfiguration",
+            Self::Validierung(_) => "validierung",
+            Self::NichtGefunden(_) => "nicht_gefunden",
+            Self::KeinVerzeichnis(_) => "kein_verzeichnis",
+            Self::Abbruch => "abbruch",
+            Self::Io { .. } => "io",
+        }
+    }
+
     pub(crate) fn io(pfad: impl Into<PathBuf>, quelle: std::io::Error) -> Self {
         Self::Io { pfad: pfad.into(), quelle }
     }

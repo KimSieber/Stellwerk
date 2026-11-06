@@ -22,6 +22,8 @@ pub enum RelPathError {
     Ausbruch(String),
     #[error("ungültiges Pfadsegment in: {0}")]
     UngueltigesSegment(String),
+    #[error("Name ist kein gültiges UTF-8: {0}")]
+    NichtUtf8(String),
 }
 
 impl RelPath {
@@ -30,12 +32,12 @@ impl RelPath {
         Self(String::new())
     }
 
-    /// Erzeugt einen relativen Pfad aus einer Zeichenkette.
-    /// `\` wird als Trenner akzeptiert (Windows) und nach `/` umgesetzt;
-    /// doppelte Trenner und `.`-Segmente werden entfernt.
+    /// Erzeugt einen relativen Pfad aus einer Zeichenkette mit `/` als Trenner
+    /// (z. B. aus der Konfiguration). Doppelte Trenner und `.`-Segmente werden
+    /// entfernt. Ein `\` ist ein gewöhnliches Zeichen – auf macOS und Linux darf
+    /// es in Dateinamen vorkommen.
     pub fn new(s: &str) -> Result<Self, RelPathError> {
         let original = s.to_string();
-        let s = s.replace('\\', "/");
         if s.starts_with('/') {
             return Err(RelPathError::Absolut(original));
         }
@@ -47,6 +49,22 @@ impl RelPath {
                 _ if seg.contains('\0') => return Err(RelPathError::UngueltigesSegment(original)),
                 _ => teile.push(seg.nfc().collect::<String>()),
             }
+        }
+        Ok(Self(teile.join("/")))
+    }
+
+    /// Erzeugt einen relativen Pfad aus einem Dateisystempfad relativ zur Wurzel
+    /// (z. B. aus einem Verzeichnisdurchlauf). Jeder Bestandteil ist genau ein
+    /// Segment; Namen müssen UTF-8 sein.
+    pub fn aus_komponenten(pfad: &std::path::Path) -> Result<Self, RelPathError> {
+        use std::path::Component;
+        let mut teile = Vec::new();
+        for c in pfad.components() {
+            let Component::Normal(name) = c else {
+                return Err(RelPathError::UngueltigesSegment(pfad.to_string_lossy().into_owned()));
+            };
+            let name = name.to_str().ok_or_else(|| RelPathError::NichtUtf8(pfad.to_string_lossy().into_owned()))?;
+            teile.push(name.nfc().collect::<String>());
         }
         Ok(Self(teile.join("/")))
     }
@@ -140,13 +158,13 @@ mod tests {
         assert!(matches!(RelPath::new("../etc"), Err(RelPathError::Ausbruch(_))));
         assert!(matches!(RelPath::new("a/../../b"), Err(RelPathError::Ausbruch(_))));
         assert!(matches!(RelPath::new("/etc/passwd"), Err(RelPathError::Absolut(_))));
-        assert!(matches!(RelPath::new("\\server"), Err(RelPathError::Absolut(_))));
+
     }
 
     #[test]
     fn bereinigt_trenner() {
         assert_eq!(RelPath::new("a//b/./c/").unwrap().as_str(), "a/b/c");
-        assert_eq!(RelPath::new("a\\b").unwrap().as_str(), "a/b");
+        assert_eq!(RelPath::new("a\\b").unwrap().as_str(), "a\\b", "Backslash ist kein Trenner");
         assert!(RelPath::new("").unwrap().ist_wurzel());
         assert!(RelPath::new("./").unwrap().ist_wurzel());
     }
@@ -170,6 +188,27 @@ mod tests {
         assert_eq!(RelPath::wurzel().tiefe(), 0);
         assert_eq!(RelPath::new("a").unwrap().tiefe(), 1);
         assert_eq!(RelPath::wurzel().name(), "");
+    }
+
+    #[test]
+    fn aus_komponenten() {
+        use std::path::Path;
+        let p = RelPath::aus_komponenten(Path::new("Bu\u{0308}ro/a\\b.txt")).unwrap();
+        assert_eq!(p.as_str(), "B\u{00FC}ro/a\\b.txt");
+        assert_eq!(p.tiefe(), 2, "Backslash trennt nicht");
+        assert!(RelPath::aus_komponenten(Path::new("")).unwrap().ist_wurzel());
+        assert!(matches!(RelPath::aus_komponenten(Path::new("/abs")), Err(RelPathError::UngueltigesSegment(_))));
+        assert!(matches!(RelPath::aus_komponenten(Path::new("a/../b")), Err(RelPathError::UngueltigesSegment(_))));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn aus_komponenten_lehnt_nicht_utf8_ab() {
+        use std::os::unix::ffi::OsStrExt;
+        let roh = std::ffi::OsStr::from_bytes(b"ordner/caf\xe9.txt"); // Latin-1, kein UTF-8
+        let e = RelPath::aus_komponenten(std::path::Path::new(roh)).unwrap_err();
+        assert!(matches!(e, RelPathError::NichtUtf8(_)));
+        assert!(e.to_string().contains("caf"), "{e}");
     }
 
     #[test]

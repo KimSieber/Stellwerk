@@ -5,9 +5,8 @@ use std::path::{Component, Path, PathBuf};
 use serde::Serialize;
 
 use super::GlobalConfig;
-use crate::model::{
-    Endpunkt, FtpsEndpunkt, Quelle, RegelEbene, RegelTyp, RelPath, Strecke, KONFIG_VERSION,
-};
+use crate::model::{Endpunkt, FtpsEndpunkt, Quelle, RegelEbene, Strecke, KONFIG_VERSION};
+use crate::rules::{ersatz, muster_fehler};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -27,10 +26,10 @@ pub struct Problem {
 }
 
 impl Problem {
-    fn fehler(ort: impl Into<String>, meldung: impl Into<String>) -> Self {
+    pub(crate) fn fehler(ort: impl Into<String>, meldung: impl Into<String>) -> Self {
         Self { schwere: Schwere::Fehler, ort: ort.into(), meldung: meldung.into() }
     }
-    fn warnung(ort: impl Into<String>, meldung: impl Into<String>) -> Self {
+    pub(crate) fn warnung(ort: impl Into<String>, meldung: impl Into<String>) -> Self {
         Self { schwere: Schwere::Warnung, ort: ort.into(), meldung: meldung.into() }
     }
     pub fn ist_fehler(&self) -> bool {
@@ -147,8 +146,13 @@ pub fn validiere_strecke(s: &Strecke, global: &GlobalConfig) -> Vec<Problem> {
         }
         if let crate::model::Rechte::Muster { regeln, .. } = &st.rechte {
             for (k, r) in regeln.iter().enumerate() {
-                if r.muster.trim().is_empty() {
-                    p.push(Problem::fehler(format!("{ort}.rechte.regeln[{k}].muster"), "Muster fehlt"));
+                let fehler = if r.muster.trim().is_empty() {
+                    Some("Muster fehlt".to_string())
+                } else {
+                    muster_fehler(&r.muster)
+                };
+                if let Some(m) = fehler {
+                    p.push(Problem::fehler(format!("{ort}.rechte.regeln[{k}].muster"), m));
                 }
             }
         }
@@ -182,23 +186,11 @@ fn pruefe_regel_ebene(e: &RegelEbene, ort: &str, obere: &HashSet<&str>, p: &mut 
         let o = format!("{ort}.eigene[{k}]");
         if r.muster.trim().is_empty() {
             p.push(Problem::fehler(format!("{o}.muster"), "Muster fehlt"));
+        } else if let Some(m) = muster_fehler(&r.muster) {
+            p.push(Problem::fehler(format!("{o}.muster"), m));
         }
-        match (r.typ, &r.quelle) {
-            (RegelTyp::Ersetzen, None) => {
-                p.push(Problem::fehler(format!("{o}.quelle"), "„Ersetzen durch“ braucht eine Quelldatei"))
-            }
-            (RegelTyp::Ersetzen, Some(q)) => match RelPath::new(q) {
-                Ok(rp) if rp.ist_wurzel() => {
-                    p.push(Problem::fehler(format!("{o}.quelle"), "Quelldatei fehlt"))
-                }
-                Ok(_) => {}
-                Err(e) => p.push(Problem::fehler(format!("{o}.quelle"), e.to_string())),
-            },
-            (_, Some(_)) => p.push(Problem::fehler(
-                format!("{o}.quelle"),
-                "„quelle“ ist nur bei Typ „ersetzen“ erlaubt",
-            )),
-            (_, None) => {}
+        if let Err(m) = ersatz(r.typ, r.quelle.as_deref()) {
+            p.push(Problem::fehler(format!("{o}.quelle"), m));
         }
     }
 }

@@ -20,19 +20,13 @@ pub struct BefehlsFehler {
 
 impl From<StellwerkError> for BefehlsFehler {
     fn from(e: StellwerkError) -> Self {
+        let kategorie = e.kategorie();
         let meldung = e.to_string();
-        match e {
-            StellwerkError::Validierung(probleme) => {
-                Self { kategorie: "validierung", meldung, probleme }
-            }
-            StellwerkError::Konfiguration { .. } => {
-                Self { kategorie: "konfiguration", meldung, probleme: vec![] }
-            }
-            StellwerkError::NichtGefunden(_) => {
-                Self { kategorie: "nicht_gefunden", meldung, probleme: vec![] }
-            }
-            StellwerkError::Io { .. } => Self { kategorie: "io", meldung, probleme: vec![] },
-        }
+        let probleme = match e {
+            StellwerkError::Validierung(p) => p,
+            _ => vec![],
+        };
+        Self { kategorie, meldung, probleme }
     }
 }
 

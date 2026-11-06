@@ -13,7 +13,7 @@ export interface Problem {
 }
 
 export interface BefehlsFehler {
-  kategorie: "validierung" | "konfiguration" | "nicht_gefunden" | "io";
+  kategorie: "validierung" | "konfiguration" | "nicht_gefunden" | "kein_verzeichnis" | "abbruch" | "io";
   meldung: string;
   probleme?: Problem[];
 }

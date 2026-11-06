@@ -36,7 +36,9 @@ impl Default for GlobaleRegeln {
         let ignorieren = [
             ".DS_Store",
             "._*",
-            "Icon\r",
+            // macOS-Ordnersymbol „Icon<CR>“; in gitignore-Syntax nur über eine
+            // Zeichenklasse ausdrückbar, da ein abschließendes \r abgeschnitten wird.
+            "Icon[\r]",
             "Thumbs.db",
             "desktop.ini",
             ".git/",
