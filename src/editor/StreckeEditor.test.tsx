@@ -28,6 +28,10 @@ function rust(extra: Antworten = {}) {
     strecke_loeschen: () => null,
     passwort_vorhanden: () => false,
     passwort_speichern: () => null,
+    globale_regeln: () => [
+      { muster: ".DS_Store", typ: "ignorieren" },
+      { muster: ".git/", typ: "ignorieren" },
+    ],
     ...extra,
   });
 }
@@ -249,6 +253,36 @@ describe("Passwörter", () => {
     await waitFor(() => expect(speichernKnopf()).toBeEnabled());
     await userEvent.click(speichernKnopf());
     expect(await screen.findByText("Schlüsselbund: Zugriff verweigert")).toBeInTheDocument();
+  });
+});
+
+describe("Übernommene Regeln", () => {
+  it("auf Strecke und Stufe abschalten – landet in standard_aus", async () => {
+    const a = rust();
+    editor("mailwerk-web");
+    await screen.findByRole("heading", { name: "Mailwerk Webseite" });
+    // Beispiel: Strecke schaltet .git/ ab, hat eigene Regel *.psd
+    expect(await screen.findByText("Standardregeln (global) – 1 von 2 wirksam")).toBeInTheDocument();
+    const stufen = screen.getAllByText(/^Übernommene Regeln \(global und Strecke\)/);
+    expect(stufen[0]).toHaveTextContent("2 von 2 wirksam"); // .DS_Store und *.psd
+
+    const dsStore = screen.getAllByRole("checkbox", { name: ".DS_Store" });
+    await userEvent.click(dsStore[0]); // Strecke
+    await userEvent.click(screen.getAllByRole("checkbox", { name: "*.psd" })[1]); // Stufe 2
+
+    await waitFor(() => {
+      const letzte = (aufrufeVon(a, "strecke_pruefen").at(-1)!.args as Args).strecke;
+      expect(letzte.regeln!.standard_aus).toEqual([".git/", ".DS_Store"]);
+      expect(letzte.stufen[1].regeln!.standard_aus).toEqual(["*.psd"]);
+    });
+    // Auf Strecke abgeschaltet → bei den Stufen nicht mehr aufgeführt
+    expect(screen.getAllByRole("checkbox", { name: ".DS_Store" })).toHaveLength(1);
+  });
+
+  it("solange die globalen Regeln laden, nur die Strecken-Regeln", async () => {
+    rust({ globale_regeln: () => new Promise(() => {}) });
+    editor("mailwerk-web");
+    expect(await screen.findByText("Standardregeln (global) – 0 von 0 wirksam")).toBeInTheDocument();
   });
 });
 

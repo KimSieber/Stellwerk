@@ -103,6 +103,7 @@ export interface Strecke {
 export const api = {
   konfigOrt: () => invoke<string>("konfig_ort"),
   streckenListe: () => invoke<StreckeUebersicht[]>("strecken_liste"),
+  globaleRegeln: () => invoke<Regel[]>("globale_regeln"),
   streckeLaden: (id: string) => invoke<Strecke>("strecke_laden", { id }),
   streckePruefen: (strecke: Strecke) => invoke<Problem[]>("strecke_pruefen", { strecke }),
   streckeAnlegen: (strecke: Strecke) => invoke<Problem[]>("strecke_anlegen", { strecke }),

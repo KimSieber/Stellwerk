@@ -17,6 +17,7 @@ pub fn befehle<R: Runtime>(builder: tauri::Builder<R>) -> tauri::Builder<R> {
     builder.invoke_handler(tauri::generate_handler![
         commands::konfig_ort,
         commands::strecken_liste,
+        commands::globale_regeln,
         commands::strecke_laden,
         commands::strecke_pruefen,
         commands::strecke_anlegen,

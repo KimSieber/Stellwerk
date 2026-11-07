@@ -2,8 +2,9 @@
 
 import type { Rechte, Stufe } from "../api";
 import { AuswahlFeld, QuelleFelder, TextFeld, ZielFelder } from "./Felder";
-import { kontoRef } from "./modell";
+import { kontoRef, type ObereRegel } from "./modell";
 import { RegelListe } from "./RegelListe";
+import { StandardRegeln } from "./StandardRegeln";
 
 export function StufeEditor(props: {
   stufe: Stufe;
@@ -15,6 +16,8 @@ export function StufeEditor(props: {
   /** Eingegebenes, noch nicht gespeichertes Passwort (nur bei FTPS-Ziel). */
   passwort: string;
   onPasswort: (p: string) => void;
+  /** Regeln von Global und Strecke, die hier abgeschaltet werden können. */
+  obereRegeln: ObereRegel[];
 }) {
   const { stufe, index } = props;
   const ort = `stufen[${index}]`;
@@ -113,6 +116,13 @@ export function StufeEditor(props: {
           </div>
         )}
       </fieldset>
+
+      <StandardRegeln
+        titel="Übernommene Regeln (global und Strecke)"
+        regeln={props.obereRegeln}
+        aus={stufe.regeln?.standard_aus ?? []}
+        onChange={(standard_aus) => setze({ regeln: { ...stufe.regeln, standard_aus } })}
+      />
 
       <RegelListe
         titel="Eigene Regeln dieser Stufe"

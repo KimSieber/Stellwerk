@@ -8,8 +8,19 @@ import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tansta
 import { api, fehlerText, type BefehlsFehler, type Problem, type Strecke } from "../api";
 import { useOrdnerAblage } from "../hooks/useOrdnerAblage";
 import { AblageKontext, ProblemeKontext, TextFeld, type AblageMeldung } from "./Felder";
-import { hatFehler, kennungAus, kontenAngleichen, neueStrecke, neueStufe, ortLesbar, pfadSetzen } from "./modell";
+import {
+  hatFehler,
+  kennungAus,
+  kontenAngleichen,
+  neueStrecke,
+  neueStufe,
+  ortLesbar,
+  pfadSetzen,
+  regelnFuerStrecke,
+  regelnFuerStufe,
+} from "./modell";
 import { RegelListe } from "./RegelListe";
+import { StandardRegeln } from "./StandardRegeln";
 import { StufeEditor } from "./StufeEditor";
 
 type Props = {
@@ -72,6 +83,7 @@ function Bearbeiten(props: Props & { start: Strecke; neu: boolean }) {
     placeholderData: keepPreviousData,
   });
   const liste = useQuery({ queryKey: ["strecken"], queryFn: api.streckenListe, enabled: props.neu });
+  const global = useQuery({ queryKey: ["globaleRegeln"], queryFn: api.globaleRegeln }).data ?? [];
 
   const vergeben = props.neu && s.id !== "" && (liste.data ?? []).some((e) => e.id === s.id);
   const probleme: Problem[] = [
@@ -175,6 +187,13 @@ function Bearbeiten(props: Props & { start: Strecke; neu: boolean }) {
             {!props.neu && <p className="hinweis">Die Kennung ist der Dateiname und bleibt fest.</p>}
           </fieldset>
 
+          <StandardRegeln
+            titel="Standardregeln (global)"
+            regeln={regelnFuerStrecke(global)}
+            aus={s.regeln?.standard_aus ?? []}
+            onChange={(standard_aus) => aendern({ ...s, regeln: { ...s.regeln, standard_aus } })}
+          />
+
           <RegelListe
             titel="Eigene Regeln der Strecke (für alle Stufen)"
             regeln={s.regeln?.eigene ?? []}
@@ -200,6 +219,7 @@ function Bearbeiten(props: Props & { start: Strecke; neu: boolean }) {
                 setPasswoerter(passwoerter.map((x, k) => (k === i ? p : x)));
                 setGeaendert(true);
               }}
+              obereRegeln={regelnFuerStufe(global, s)}
             />
           ))}
           <button

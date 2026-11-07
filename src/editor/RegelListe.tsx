@@ -1,15 +1,8 @@
 // Eigene Regeln einer Ebene (Strecke oder Stufe) bearbeiten.
 
-import type { Regel, RegelTyp } from "../api";
+import type { Regel } from "../api";
 import { AuswahlFeld, TextFeld } from "./Felder";
-import { neueRegel } from "./modell";
-
-const TYPEN: [RegelTyp, string][] = [
-  ["ignorieren", "Ignorieren"],
-  ["schuetzen", "Schützen"],
-  ["nur_anlegen", "Nur anlegen"],
-  ["ersetzen", "Ersetzen durch"],
-];
+import { neueRegel, REGEL_TYPEN } from "./modell";
 
 /** `ort` z. B. `regeln.eigene` oder `stufen[1].regeln.eigene`. */
 export function RegelListe(props: { titel: string; regeln: Regel[]; ort: string; onChange: (r: Regel[]) => void }) {
@@ -34,7 +27,7 @@ export function RegelListe(props: { titel: string; regeln: Regel[]; ort: string;
             label="Regel"
             ort={`${ort}[${i}].typ`}
             wert={r.typ}
-            optionen={TYPEN}
+            optionen={REGEL_TYPEN}
             // „quelle“ gehört nur zu „Ersetzen durch“
             onChange={(typ) => setze(i, { typ, quelle: typ === "ersetzen" ? (r.quelle ?? "") : undefined })}
           />

@@ -149,3 +149,10 @@ legend { font-weight: 600; padding: 0 6px; }
 .ueber p { margin: 0; }
 .ueber .schliessen { margin-top: 14px; }
 .probleme .ort { color: var(--text-leise); }
+
+/* --- Übernommene Regeln --------------------------------------------------- */
+.standardregeln { border: 1px solid var(--rand); border-radius: 10px; background: var(--flaeche); padding: 8px 16px; }
+.standardregeln summary { cursor: pointer; font-weight: 600; padding: 4px 0; }
+.standardregeln table { border-collapse: collapse; margin: 8px 0 4px; font-size: 13px; }
+.standardregeln th { text-align: left; font-weight: 500; color: var(--text-leise); font-size: 12px; padding: 2px 16px 4px 0; }
+.standardregeln td { padding: 3px 16px 3px 0; }

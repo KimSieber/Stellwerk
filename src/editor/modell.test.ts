@@ -6,8 +6,12 @@ import {
   freieStufenId,
   hatFehler,
   kennungAus,
+  ausUmschalten,
   kontenAngleichen,
+  musterAnzeige,
   ortLesbar,
+  regelnFuerStrecke,
+  regelnFuerStufe,
   pfadSetzen,
   kontoRef,
   neueRegel,
@@ -157,5 +161,53 @@ describe("ortLesbar", () => {
   it("ohne Strecke nur mit Nummer", () => {
     expect(ortLesbar("stufen[0].name")).toBe("Stufe 1 › Name");
     expect(ortLesbar("stufen[0].ziel.pfad")).toBe("Stufe 1 › Ziel › Pfad");
+  });
+});
+
+describe("Übernommene Regeln", () => {
+  const global = [
+    { muster: ".DS_Store", typ: "ignorieren" as const },
+    { muster: ".git/", typ: "ignorieren" as const },
+    { muster: "*.alt", typ: "ignorieren" as const, aktiv: false },
+  ];
+  const s: Strecke = {
+    id: "s",
+    name: "S",
+    version: 1,
+    regeln: {
+      standard_aus: [".git/"],
+      eigene: [
+        { muster: "logs/", typ: "schuetzen" },
+        { muster: "aus/", typ: "ignorieren", aktiv: false },
+        { muster: " ", typ: "ignorieren" },
+      ],
+    },
+    stufen: [],
+  };
+
+  it("Strecke: nur wirksame globale Regeln", () => {
+    expect(regelnFuerStrecke(global)).toEqual([
+      { muster: ".DS_Store", typ: "ignorieren", herkunft: "global" },
+      { muster: ".git/", typ: "ignorieren", herkunft: "global" },
+    ]);
+  });
+
+  it("Stufe: globale ohne die von der Strecke abgeschalteten, plus wirksame Strecken-Regeln", () => {
+    expect(regelnFuerStufe(global, s)).toEqual([
+      { muster: ".DS_Store", typ: "ignorieren", herkunft: "global" },
+      { muster: "logs/", typ: "schuetzen", herkunft: "strecke" },
+    ]);
+    expect(regelnFuerStufe(global, { ...s, regeln: undefined })).toHaveLength(2);
+  });
+
+  it("ausUmschalten ohne Doppelungen", () => {
+    expect(ausUmschalten([], "a", false)).toEqual(["a"]);
+    expect(ausUmschalten(["a"], "a", false)).toEqual(["a"]);
+    expect(ausUmschalten(["a", "b"], "a", true)).toEqual(["b"]);
+  });
+
+  it("musterAnzeige", () => {
+    expect(musterAnzeige("Icon[\r]")).toBe("Icon[\\r]");
+    expect(musterAnzeige("*.log")).toBe("*.log");
   });
 });

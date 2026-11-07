@@ -18,6 +18,7 @@ function rust() {
     strecke_pruefen: () => [],
     strecke_anlegen: () => [],
     passwort_vorhanden: () => false,
+    globale_regeln: () => [],
     "plugin:app|version": () => "0.1.0",
   });
 }

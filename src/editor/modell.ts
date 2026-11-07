@@ -1,6 +1,14 @@
 // Reine Hilfsfunktionen des Strecken-Editors (ohne Oberfläche, voll testbar).
 
-import type { Endpunkt, Problem, Quelle, Regel, Stufe, Strecke } from "../api";
+import type { Endpunkt, Problem, Quelle, Regel, RegelTyp, Stufe, Strecke } from "../api";
+
+/** Anzeigenamen der Regeltypen. */
+export const REGEL_TYPEN: [RegelTyp, string][] = [
+  ["ignorieren", "Ignorieren"],
+  ["schuetzen", "Schützen"],
+  ["nur_anlegen", "Nur anlegen"],
+  ["ersetzen", "Ersetzen durch"],
+];
 
 /** Kennung aus einem Namen: klein, Umlaute umschrieben, nur a-z, 0-9 und „-“. */
 export function kennungAus(name: string): string {
@@ -142,4 +150,35 @@ export function ortLesbar(ort: string, s?: Strecke): string {
   const endpunkt = m ? s?.stufen[Number(m[1])]?.[m[2] as "quelle" | "ziel"] : undefined;
   if (endpunkt) teile[2] = endpunkt.typ === "ftps" ? "Serverpfad" : "Ordner";
   return teile.join(" › ");
+}
+
+/** Regel einer übergeordneten Ebene, die auf der aktuellen Ebene abgeschaltet werden kann. */
+export type ObereRegel = { muster: string; typ: RegelTyp; herkunft: "global" | "strecke" };
+
+const wirksam = (r: Regel) => r.aktiv !== false && r.muster.trim() !== "";
+
+/** Was auf Ebene „Strecke“ abschaltbar ist: die wirksamen globalen Regeln. */
+export function regelnFuerStrecke(global: Regel[]): ObereRegel[] {
+  return global.filter(wirksam).map((r) => ({ muster: r.muster, typ: r.typ, herkunft: "global" }));
+}
+
+/** Was auf Ebene „Stufe“ abschaltbar ist: globale Regeln, die die Strecke nicht abschaltet,
+ *  und die wirksamen eigenen Regeln der Strecke. */
+export function regelnFuerStufe(global: Regel[], s: Strecke): ObereRegel[] {
+  const aus = new Set(s.regeln?.standard_aus ?? []);
+  return [
+    ...regelnFuerStrecke(global).filter((r) => !aus.has(r.muster)),
+    ...(s.regeln?.eigene ?? []).filter(wirksam).map((r) => ({ muster: r.muster, typ: r.typ, herkunft: "strecke" as const })),
+  ];
+}
+
+/** Schaltet eine übergeordnete Regel auf dieser Ebene an (aus Liste entfernen) oder aus. */
+export function ausUmschalten(aus: string[], muster: string, an: boolean): string[] {
+  const ohne = aus.filter((m) => m !== muster);
+  return an ? ohne : [...ohne, muster];
+}
+
+/** Muster lesbar machen – z. B. das Steuerzeichen im macOS-Muster „Icon[\r]“. */
+export function musterAnzeige(muster: string): string {
+  return muster.replace(/\r/g, "\\r");
 }

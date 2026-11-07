@@ -23,6 +23,7 @@ function aufbau(start: Stufe, onEntfernen = vi.fn(), onPasswort = vi.fn()) {
           onEntfernen={onEntfernen}
           passwort=""
           onPasswort={onPasswort}
+          obereRegeln={[{ muster: ".DS_Store", typ: "ignorieren", herkunft: "global" }]}
         />
       )}
     />,
@@ -109,6 +110,13 @@ describe("StufeEditor", () => {
     expect(pw).toHaveBeenCalledWith("x");
     expect(screen.getByText("Quelle (wird nur gelesen)")).toBeInTheDocument();
     expect(screen.getByText("Ziel (wird beschrieben)")).toBeInTheDocument();
+  });
+
+  it("übernommene Regeln für diese Stufe abschalten", async () => {
+    const zuletzt = aufbau({ ...server(), regeln: undefined });
+    expect(screen.getByText("Übernommene Regeln (global und Strecke) – 1 von 1 wirksam")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("checkbox", { name: ".DS_Store" }));
+    expect(zuletzt().regeln).toEqual({ standard_aus: [".DS_Store"] });
   });
 
   it("Entfernen", async () => {

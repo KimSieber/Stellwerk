@@ -5,7 +5,7 @@ use tauri::State;
 
 use stellwerk_core::config::{pruefe_ordner, validiere_strecke, GlobalConfig, Problem};
 use stellwerk_core::secrets::konten_der_strecke;
-use stellwerk_core::model::{Endpunkt, Quelle, Strecke};
+use stellwerk_core::model::{Endpunkt, Quelle, Regel, Strecke};
 use stellwerk_core::StellwerkError;
 
 use crate::state::AppState;
@@ -119,6 +119,12 @@ pub fn strecken_liste(state: State<'_, AppState>) -> Antwort<Vec<StreckeUebersic
             },
         })
         .collect())
+}
+
+/// Globale Standardregeln (Ebene „Global“), z. B. `.DS_Store`, `.git/`.
+#[tauri::command]
+pub fn globale_regeln(state: State<'_, AppState>) -> Antwort<Vec<Regel>> {
+    Ok(state.store.global_laden()?.regeln.standard)
 }
 
 #[tauri::command]

@@ -306,3 +306,14 @@ fn fehlende_ordner_werden_gemeldet_und_verhindern_das_speichern() {
     let liste = a.aufruf("strecken_liste", json!({})).unwrap();
     assert_eq!(liste[0]["probleme"][0]["meldung"], "Ordner existiert nicht");
 }
+
+#[test]
+fn globale_regeln_fuer_den_editor() {
+    let a = app();
+    let r = a.aufruf("globale_regeln", json!({})).unwrap();
+    assert_eq!(r[0], json!({ "muster": ".DS_Store", "typ": "ignorieren" }));
+    assert!(r.as_array().unwrap().iter().any(|x| x["muster"] == ".git/"));
+
+    std::fs::write(a.wurzel.join("config.toml"), "kaputt =").unwrap();
+    assert_eq!(a.aufruf("globale_regeln", json!({})).unwrap_err()["kategorie"], "konfiguration");
+}
