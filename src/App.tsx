@@ -6,9 +6,13 @@ import { APP_INFO } from "./appinfo";
 import { StreckenListe } from "./components/StreckenListe";
 import { Ueber } from "./components/Ueber";
 import { StreckeEditor } from "./editor/StreckeEditor";
+import { VergleichAnsicht } from "./vergleich/VergleichAnsicht";
 
 /** Welche Ansicht gerade offen ist. */
-type Ansicht = { art: "liste" } | { art: "editor"; id?: string };
+type Ansicht =
+  | { art: "liste" }
+  | { art: "editor"; id?: string }
+  | { art: "vergleich"; strecke: string; stufe: string; titel: string };
 
 export default function App() {
   const [ansicht, setAnsicht] = useState<Ansicht>({ art: "liste" });
@@ -34,6 +38,17 @@ export default function App() {
           <StreckenListe
             onNeu={() => setAnsicht({ art: "editor" })}
             onOeffnen={(id) => setAnsicht({ art: "editor", id })}
+            onVergleichen={(s, st) =>
+              setAnsicht({ art: "vergleich", strecke: s.id, stufe: st.id, titel: `${s.name} · ${st.name}` })
+            }
+          />
+        ) : ansicht.art === "vergleich" ? (
+          <VergleichAnsicht
+            key={`${ansicht.strecke}/${ansicht.stufe}`}
+            strecke={ansicht.strecke}
+            stufe={ansicht.stufe}
+            titel={ansicht.titel}
+            onZurueck={() => setAnsicht({ art: "liste" })}
           />
         ) : (
           <StreckeEditor

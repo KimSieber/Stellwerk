@@ -69,6 +69,8 @@ pub struct Zusammenfassung {
     pub geschuetzt: usize,
     pub ignoriert: usize,
     pub konflikt: usize,
+    /// Zeilen mit Häkchen (anlegen, überschreiben oder löschen).
+    pub ausgewaehlt: usize,
     /// Summe der Dateigrößen aller ausgewählten neuen/geänderten Dateien.
     pub bytes_uebertragen: u64,
     /// Davon „nur online“ – werden vor dem Übertragen heruntergeladen.
@@ -146,6 +148,19 @@ pub fn vergleiche(
     inhalt: &dyn InhaltPruefer,
     abbruch: &AtomicBool,
 ) -> Result<Vergleich> {
+    vergleiche_mit_fortschritt(quelle, ziel, regeln, opt, inhalt, abbruch, &mut |_| {})
+}
+
+/// Wie [`vergleiche`]; `fortschritt` erhält die Anzahl bereits eingeordneter Pfade.
+pub fn vergleiche_mit_fortschritt(
+    quelle: &ScanErgebnis,
+    ziel: &ScanErgebnis,
+    regeln: &RegelWerk,
+    opt: &DiffOptionen,
+    inhalt: &dyn InhaltPruefer,
+    abbruch: &AtomicBool,
+    fortschritt: &mut dyn FnMut(usize),
+) -> Result<Vergleich> {
     let q = Seite::aus(quelle);
     let z = Seite::aus(ziel);
     let pfade: BTreeSet<&RelPath> =
@@ -170,6 +185,7 @@ pub fn vergleiche(
             None => einordnen(pfad, &q, &z, regeln, opt, inhalt),
         };
         eintraege.push(e);
+        fortschritt(eintraege.len());
     }
 
     gross_klein_zwischen_seiten(&mut eintraege);
@@ -343,7 +359,8 @@ fn vorfahren(p: &RelPath) -> impl Iterator<Item = RelPath> {
     std::iter::successors(p.parent(), RelPath::parent).filter(|v| !v.ist_wurzel())
 }
 
-fn zusammenfassen(eintraege: &[DiffEintrag]) -> Zusammenfassung {
+/// Zählt Status und ausgewählte Bytes – auch nach jeder Änderung der Auswahl.
+pub fn zusammenfassen(eintraege: &[DiffEintrag]) -> Zusammenfassung {
     let mut z = Zusammenfassung::default();
     for e in eintraege {
         *match e.status {
@@ -355,6 +372,7 @@ fn zusammenfassen(eintraege: &[DiffEintrag]) -> Zusammenfassung {
             DiffStatus::Ignoriert => &mut z.ignoriert,
             DiffStatus::Konflikt => &mut z.konflikt,
         } += 1;
+        z.ausgewaehlt += usize::from(e.ausgewaehlt);
         let quelle = e.quelle.as_ref().filter(|_| e.ausgewaehlt && e.status != DiffStatus::Loeschen);
         if let Some(q) = quelle.filter(|q| q.art == EintragArt::Datei) {
             z.bytes_uebertragen += q.groesse;

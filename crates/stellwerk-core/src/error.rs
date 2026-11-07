@@ -31,6 +31,10 @@ pub enum StellwerkError {
     #[error("Schlüsselbund: {0}")]
     Schluesselbund(String),
 
+    /// In dieser Version noch nicht möglich (z. B. Vergleich mit FTPS-Ziel).
+    #[error("Noch nicht unterstützt: {0}")]
+    NichtUnterstuetzt(String),
+
     /// Vom Nutzer abgebrochen.
     #[error("Abgebrochen")]
     Abbruch,
@@ -53,6 +57,7 @@ impl StellwerkError {
             Self::Vorhanden(_) => "vorhanden",
             Self::KeinVerzeichnis(_) => "kein_verzeichnis",
             Self::Schluesselbund(_) => "schluesselbund",
+            Self::NichtUnterstuetzt(_) => "nicht_unterstuetzt",
             Self::Abbruch => "abbruch",
             Self::Io { .. } => "io",
         }

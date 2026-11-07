@@ -1,11 +1,16 @@
 import { useQuery } from "@tanstack/react-query";
 
-import { api, fehlerText, type Problem, type StreckeUebersicht } from "../api";
+import { api, fehlerText, type Problem, type StreckeUebersicht, type StufeKurz } from "../api";
 
 /** Startseite: Strecken als Karten mit ihren Stufen (ARCHITEKTUR Kap. 10, Ansicht 1). */
-type Props = { onNeu: () => void; onOeffnen: (id: string) => void };
+type Props = {
+  onNeu: () => void;
+  onOeffnen: (id: string) => void;
+  /** Vergleichsansicht einer Stufe öffnen (vergleicht nur, überträgt nie). */
+  onVergleichen: (strecke: StreckeUebersicht, stufe: StufeKurz) => void;
+};
 
-export function StreckenListe({ onNeu, onOeffnen }: Props) {
+export function StreckenListe({ onNeu, onOeffnen, onVergleichen }: Props) {
   const liste = useQuery({ queryKey: ["strecken"], queryFn: api.streckenListe });
   const ort = useQuery({ queryKey: ["konfig_ort"], queryFn: api.konfigOrt });
 
@@ -41,7 +46,12 @@ export function StreckenListe({ onNeu, onOeffnen }: Props) {
       ) : (
         <div className="karten">
           {liste.data.map((s) => (
-            <StreckeKarte key={s.id} strecke={s} onOeffnen={() => onOeffnen(s.id)} />
+            <StreckeKarte
+              key={s.id}
+              strecke={s}
+              onOeffnen={() => onOeffnen(s.id)}
+              onVergleichen={(st) => onVergleichen(s, st)}
+            />
           ))}
         </div>
       )}
@@ -49,7 +59,13 @@ export function StreckenListe({ onNeu, onOeffnen }: Props) {
   );
 }
 
-function StreckeKarte({ strecke, onOeffnen }: { strecke: StreckeUebersicht; onOeffnen: () => void }) {
+type KarteProps = {
+  strecke: StreckeUebersicht;
+  onOeffnen: () => void;
+  onVergleichen: (stufe: StufeKurz) => void;
+};
+
+function StreckeKarte({ strecke, onOeffnen, onVergleichen }: KarteProps) {
   if (strecke.fehler) {
     return (
       <article className="karte defekt">
@@ -67,12 +83,13 @@ function StreckeKarte({ strecke, onOeffnen }: { strecke: StreckeUebersicht; onOe
         {strecke.stufen.map((st, i) => (
           <li key={st.id}>
             <span className="stufe-nr">{i + 1}</span>
-            <div>
+            <div className="stufe-text">
               <div className="stufe-name">{st.name}</div>
               <div className="stufe-weg" title={`${st.quelle} → ${st.ziel}`}>
                 {st.quelle} → {st.ziel}
               </div>
             </div>
+            <VergleichKnopf stufe={st} onVergleichen={() => onVergleichen(st)} />
           </li>
         ))}
       </ol>
@@ -94,5 +111,21 @@ function Probleme({ probleme }: { probleme: Problem[] }) {
         </li>
       ))}
     </ul>
+  );
+}
+
+/** FTPS-Ziele sind erst mit dem Manifest vergleichbar (v0.3 ff.). */
+function VergleichKnopf({ stufe, onVergleichen }: { stufe: StufeKurz; onVergleichen: () => void }) {
+  const ftps = stufe.ziel.startsWith("ftps://");
+  return (
+    <button
+      className="stufe-knopf"
+      onClick={onVergleichen}
+      disabled={ftps}
+      title={ftps ? "FTPS-Ziele können in dieser Version noch nicht verglichen werden" : "Quelle und Ziel vergleichen – überträgt nichts"}
+      aria-label={`${stufe.name} vergleichen`}
+    >
+      Vergleichen
+    </button>
   );
 }

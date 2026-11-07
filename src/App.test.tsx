@@ -7,7 +7,13 @@ import App from "./App";
 import { beispielStrecke, mitQuery, rustAttrappe } from "./test/hilfen";
 
 const liste = [
-  { id: "mailwerk-web", name: "Mailwerk Webseite", stufen: [], probleme: [], fehler: null },
+  {
+    id: "mailwerk-web",
+    name: "Mailwerk Webseite",
+    stufen: [{ id: "spiegel", name: "Entwicklung → Spiegel", quelle: "/q", ziel: "/z" }],
+    probleme: [],
+    fehler: null,
+  },
 ];
 
 function rust() {
@@ -20,6 +26,8 @@ function rust() {
     passwort_vorhanden: () => false,
     globale_regeln: () => [],
     "plugin:app|version": () => "0.1.0",
+    vergleich_starten: () => new Promise(() => {}),
+    vergleich_abbrechen: () => true,
   });
 }
 
@@ -38,6 +46,16 @@ describe("App", () => {
     await userEvent.click(await screen.findByRole("button", { name: "Bearbeiten" }));
     expect(await screen.findByLabelText("Kennung")).toHaveValue("mailwerk-web");
     await userEvent.click(screen.getByRole("button", { name: "← Strecken" }));
+    expect(await screen.findByRole("heading", { level: 2, name: "Strecken" })).toBeInTheDocument();
+  });
+
+  it("Startseite → Vergleichen → zurück", async () => {
+    const aufrufe = rust();
+    mitQuery(<App />);
+    await userEvent.click(await screen.findByRole("button", { name: "Entwicklung → Spiegel vergleichen" }));
+    expect(screen.getByRole("heading", { level: 2, name: "Mailwerk Webseite · Entwicklung → Spiegel" })).toBeInTheDocument();
+    expect(aufrufe.find((a) => a.cmd === "vergleich_starten")?.args).toMatchObject({ strecke: "mailwerk-web", stufe: "spiegel" });
+    await userEvent.click(screen.getByRole("button", { name: "← Zurück" }));
     expect(await screen.findByRole("heading", { level: 2, name: "Strecken" })).toBeInTheDocument();
   });
 

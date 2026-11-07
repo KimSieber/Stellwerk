@@ -6,11 +6,13 @@
 //! - [`rules`]  – Regel-Engine (Ebenen, gitignore-Muster, Herkunft)
 //! - [`scan`]   – Erfassen lokaler Verzeichnisse
 //! - [`diff`]   – Vergleich Quelle ↔ Ziel (Vorschau)
+//! - [`ansicht`] – Vergleich einer Stufe starten, Zeilen für die Vergleichsansicht, Auswahl
 //! - [`secrets`] – Passwörter im Schlüsselbund
 //!
 //! Folgende Module kommen in späteren Schritten hinzu:
 //! `endpoint`, `plan`, `exec`, `store`.
 
+pub mod ansicht;
 pub mod config;
 pub mod diff;
 pub mod error;

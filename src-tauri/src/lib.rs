@@ -27,6 +27,14 @@ pub fn befehle<R: Runtime>(builder: tauri::Builder<R>) -> tauri::Builder<R> {
         commands::passwort_speichern,
         commands::passwort_vorhanden,
         commands::passwort_entfernen,
+        commands::vergleich_starten,
+        commands::vergleich_abbrechen,
+        commands::diff_seite,
+        commands::auswahl_setzen,
+        commands::vergleich_schliessen,
+        commands::regel_setzen,
+        commands::regel_entfernen,
+        commands::ersatz_vorschlaege,
     ])
 }
 

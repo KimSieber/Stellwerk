@@ -8,6 +8,7 @@
   --geaendert: #e0b324;
   --loeschen: #e0503c;
   --geschuetzt: #9aa3ad;
+  --konflikt: #e07b24;
 
   --hg: #f4f6f9;
   --flaeche: #ffffff;
@@ -109,7 +110,7 @@ legend { font-weight: 600; padding: 0 6px; }
 .feld { display: grid; gap: 4px; align-content: start; }
 .feld label, .feld-name { font-size: 12px; color: var(--text-leise); }
 .passwort-hinterlegt { display: flex; gap: 10px; align-items: center; color: var(--signal); }
-.feld input, .feld select {
+.feld input, .feld select, .dialog.ersatz input {
   font: inherit; padding: 5px 8px; border-radius: 6px; border: 1px solid var(--rand);
   background: var(--hg); color: var(--text); min-width: 0;
 }
@@ -156,3 +157,106 @@ legend { font-weight: 600; padding: 0 6px; }
 .standardregeln table { border-collapse: collapse; margin: 8px 0 4px; font-size: 13px; }
 .standardregeln th { text-align: left; font-weight: 500; color: var(--text-leise); font-size: 12px; padding: 2px 16px 4px 0; }
 .standardregeln td { padding: 3px 16px 3px 0; }
+
+/* --- Vergleich von der Startseite öffnen ---------------------------------- */
+.stufe-text { flex: 1; min-width: 0; }
+.stufe-text .stufe-weg { max-width: none; }
+.stufen { grid-template-columns: minmax(0, 1fr); }
+.stufe-knopf { flex: none; font-size: 12px; padding: 3px 10px; }
+
+/* --- Vergleichsansicht ---------------------------------------------------- */
+.vergleich { display: flex; flex-direction: column; gap: 10px; height: calc(100vh - 92px); }
+.vergleich > .leiste h2 { flex: 1; margin: 0 12px; }
+.vergleich .fortschritt { margin: 0; }
+.vergleich-wege fieldset { padding: 6px 12px 8px; min-width: 0; }
+.vergleich-wege code { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.summen { display: flex; flex-wrap: wrap; gap: 6px 14px; font-size: 13px; }
+.summe { padding-left: 8px; border-left: 4px solid var(--rand); }
+.summe.status-neu { border-color: var(--neu); }
+.summe.status-geaendert { border-color: var(--geaendert); }
+.summe.status-loeschen { border-color: var(--loeschen); }
+.summe.status-konflikt { border-color: var(--konflikt); }
+.summe.status-geschuetzt, .summe.status-ignoriert { border-color: var(--geschuetzt); }
+.summe.auswahl { border-color: var(--blau); margin-left: auto; }
+.leiste.filter { margin-bottom: 0; }
+.leiste.filter button.aktiv { background: var(--blau); border-color: var(--blau); color: #fff; }
+.lesefehler { font-size: 12px; }
+.lesefehler summary { cursor: pointer; color: var(--loeschen); }
+
+/* Drei Kästen – Quelle | Aktion | Ziel – gebaut aus den Zellen jeder Zeile,
+   damit sie in einem gemeinsamen Scrollbereich exakt zeilengleich bleiben. */
+.vergleich-rahmen { flex: 1; min-height: 200px; overflow: auto; }
+.vergleich-zeile {
+  display: grid; grid-template-columns: minmax(0, 1fr) 128px minmax(0, 1fr); column-gap: 8px;
+  align-items: stretch; width: 100%; height: 28px; font-size: 13px;
+  --tint: transparent; --streifen: transparent;
+}
+.zelle {
+  display: flex; align-items: center; min-width: 0;
+  background: linear-gradient(var(--tint), var(--tint)), var(--flaeche);
+  border-left: 1px solid var(--rand); border-right: 1px solid var(--rand);
+}
+.zelle.mitte { justify-content: flex-start; gap: 6px; padding: 0 8px; }
+/* Kopf wie eine Legende auf dem Kastenrand (vgl. fieldset/legend oben) */
+.kopfzeile { position: sticky; top: 0; z-index: 1; height: 32px; background: var(--hg); }
+.zelle.kopf { position: relative; background: none; border: none; padding: 0 10px; align-items: flex-start; }
+.zelle.kopf::before {
+  content: ""; position: absolute; inset: 15px 0 0 0;
+  border: 1px solid var(--rand); border-bottom: none; border-radius: 10px 10px 0 0; background: var(--flaeche);
+}
+.kopf-text {
+  position: relative; padding: 0 6px; margin-top: 6px; line-height: 18px; font-weight: 600;
+  background: linear-gradient(var(--hg) 50%, var(--flaeche) 50%);
+}
+.fusszeile { height: 10px; }
+.zelle.fuss { border-bottom: 1px solid var(--rand); border-radius: 0 0 10px 10px; }
+.vergleich-zeile.laedt .zelle { opacity: .5; }
+.seite { gap: 4px; padding-right: 10px; }
+.seite:first-child { box-shadow: inset 3px 0 0 var(--streifen); }
+.seite .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.seite .groesse, .seite .zeit { color: var(--text-leise); font-size: 12px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.seite .zeit { width: 118px; text-align: right; }
+.klappe {
+  width: 16px; height: 16px; flex: none; display: grid; place-items: center;
+  border: none; background: none; padding: 0; color: var(--text-leise); cursor: pointer;
+}
+.klappe svg { transition: transform .12s; }
+.klappe[aria-expanded="true"] svg { transform: rotate(90deg); }
+.symbol { flex: none; color: var(--text-leise); margin-right: 2px; }
+.status-marke { font-size: 11px; padding: 1px 6px; border-radius: 8px; background: var(--rand); }
+.warnzeichen { color: var(--konflikt); cursor: help; }
+
+.vergleich-zeile.status-neu { --tint: rgba(47, 191, 113, .08); --streifen: var(--neu); }
+.vergleich-zeile.status-neu .status-marke { background: var(--neu); color: #fff; }
+.vergleich-zeile.status-geaendert { --tint: rgba(224, 179, 36, .10); --streifen: var(--geaendert); }
+.vergleich-zeile.status-geaendert .status-marke { background: var(--geaendert); color: #1b2430; }
+.vergleich-zeile.status-loeschen { --tint: rgba(224, 80, 60, .08); --streifen: var(--loeschen); }
+.vergleich-zeile.status-loeschen .status-marke { background: var(--loeschen); color: #fff; }
+.vergleich-zeile.status-konflikt { --streifen: var(--konflikt); }
+.vergleich-zeile.status-konflikt .status-marke { background: var(--konflikt); color: #fff; }
+.vergleich-zeile.status-geschuetzt, .vergleich-zeile.status-ignoriert { color: var(--geschuetzt); --streifen: var(--geschuetzt); }
+
+/* --- Kontextmenü „Regel setzen“ ------------------------------------------- */
+.menue-hintergrund { position: fixed; inset: 0; z-index: 20; }
+.menue {
+  position: fixed; width: 260px; padding: 6px; display: grid;
+  background: var(--flaeche); border: 1px solid var(--rand); border-radius: 10px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, .28); font-size: 13px;
+}
+.menue-kopf { padding: 6px 10px 8px; color: var(--text-leise); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; border-bottom: 1px solid var(--rand); margin-bottom: 4px; }
+.menue-kopf b { color: var(--text); font-weight: 600; }
+.menue-gruppe { padding: 6px 10px 2px; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; color: var(--text-leise); }
+.menue button {
+  display: flex; align-items: center; width: 100%; text-align: left;
+  border: none; background: none; border-radius: 6px; padding: 5px 10px; font-size: 13px;
+}
+.menue button:hover:not(:disabled) { background: var(--blau); color: #fff; }
+.menue button:disabled { opacity: 1; color: var(--text-leise); cursor: default; }
+.menue .haken { width: 18px; flex: none; }
+.menue hr { width: 100%; border: none; border-top: 1px solid var(--rand); margin: 4px 0; }
+.gefahr-text { color: var(--loeschen); }
+.dialog.ersatz { width: 460px; display: grid; gap: 12px; }
+.dialog.ersatz h2 { margin: 0; font-size: 18px; }
+.dialog.ersatz p { margin: 0; }
+.dialog.ersatz label { display: grid; gap: 4px; font-size: 12px; color: var(--text-leise); }
+.dialog.ersatz .knoepfe { justify-content: flex-end; }

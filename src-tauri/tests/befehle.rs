@@ -317,3 +317,277 @@ fn globale_regeln_fuer_den_editor() {
     std::fs::write(a.wurzel.join("config.toml"), "kaputt =").unwrap();
     assert_eq!(a.aufruf("globale_regeln", json!({})).unwrap_err()["kategorie"], "konfiguration");
 }
+
+// --- Vergleich (v0.2) -----------------------------------------------------------
+
+/// Kanal-Argument, wie es `@tauri-apps/api` für einen `Channel` sendet.
+const KANAL: &str = "__CHANNEL__:1";
+
+/// Legt die Beispielstrecke an und füllt Quelle und Spiegel.
+fn mit_vergleichsdaten(a: &Testapp) {
+    a.aufruf("strecke_anlegen", json!({ "strecke": strecke_json(&a.wurzel) })).unwrap();
+    let q = a.wurzel.join("daten/quelle");
+    let z = a.wurzel.join("daten/spiegel");
+    std::fs::create_dir_all(q.join("css")).unwrap();
+    std::fs::write(q.join("index.php"), "neu").unwrap();
+    std::fs::write(q.join("css/site.css"), "c").unwrap();
+    std::fs::write(z.join("alt.txt"), "weg").unwrap();
+}
+
+fn starten(a: &Testapp) -> Value {
+    a.aufruf("vergleich_starten", json!({ "strecke": "mailwerk-web", "stufe": "spiegel", "fortschritt": KANAL }))
+        .unwrap()
+}
+
+#[test]
+fn vergleich_starten_liefert_kennung_und_zusammenfassung() {
+    let a = app();
+    mit_vergleichsdaten(&a);
+    let v = starten(&a);
+    assert_eq!(v["vergleich_id"], "mailwerk-web/spiegel#1");
+    assert_eq!(v["quelle"], json!(a.wurzel.join("daten/quelle").display().to_string()));
+    assert_eq!(v["ziel"], json!(a.wurzel.join("daten/spiegel").display().to_string()));
+    assert_eq!(v["zeilen"], 4);
+    assert_eq!(v["zusammenfassung"]["neu"], 3);
+    assert_eq!(v["zusammenfassung"]["loeschen"], 1);
+    assert_eq!(v["zusammenfassung"]["ausgewaehlt"], 4);
+    assert_eq!(v["lesefehler"], json!([]));
+    let abbrechen = json!({ "strecke": "mailwerk-web", "stufe": "spiegel" });
+    assert_eq!(a.aufruf("vergleich_abbrechen", abbrechen).unwrap(), json!(false), "nach dem Ende abgemeldet");
+}
+
+#[test]
+fn vergleich_fehler_kommen_mit_kategorie() {
+    let a = app();
+    mit_vergleichsdaten(&a);
+    let e = a
+        .aufruf("vergleich_starten", json!({ "strecke": "mailwerk-web", "stufe": "server", "fortschritt": KANAL }))
+        .unwrap_err();
+    assert_eq!(e["kategorie"], "nicht_unterstuetzt");
+    let e = a
+        .aufruf("vergleich_starten", json!({ "strecke": "fehlt", "stufe": "x", "fortschritt": KANAL }))
+        .unwrap_err();
+    assert_eq!(e["kategorie"], "nicht_gefunden");
+}
+
+#[test]
+fn defekte_globale_konfiguration_verhindert_den_vergleich() {
+    let a = app();
+    mit_vergleichsdaten(&a);
+    std::fs::write(a.wurzel.join("config.toml"), "kaputt =").unwrap();
+    let e = a
+        .aufruf("vergleich_starten", json!({ "strecke": "mailwerk-web", "stufe": "spiegel", "fortschritt": KANAL }))
+        .unwrap_err();
+    assert_eq!(e["kategorie"], "konfiguration");
+}
+
+#[test]
+fn diff_seite_mit_filter_und_zugeklappten_ordnern() {
+    let a = app();
+    mit_vergleichsdaten(&a);
+    let id = starten(&a)["vergleich_id"].clone();
+    let seite = a
+        .aufruf("diff_seite", json!({ "vergleichId": id, "offset": 0, "limit": 10, "filter": "alle", "zugeklappt": [] }))
+        .unwrap();
+    assert_eq!(seite["sichtbar"], 4);
+    let pfade: Vec<&str> = seite["zeilen"].as_array().unwrap().iter().map(|z| z["pfad"].as_str().unwrap()).collect();
+    assert_eq!(pfade, ["css", "css/site.css", "alt.txt", "index.php"]);
+    assert_eq!(seite["zeilen"][0]["ordner"], true);
+    assert_eq!(seite["zeilen"][1]["tiefe"], 1);
+
+    let zu = a
+        .aufruf(
+            "diff_seite",
+            json!({ "vergleichId": id, "offset": 1, "limit": 1, "filter": "aenderungen", "zugeklappt": ["css"] }),
+        )
+        .unwrap();
+    assert_eq!(zu["sichtbar"], 3);
+    assert_eq!(zu["zeilen"][0]["pfad"], "alt.txt");
+}
+
+#[test]
+fn auswahl_setzen_liefert_neue_zusammenfassung() {
+    let a = app();
+    mit_vergleichsdaten(&a);
+    let id = starten(&a)["vergleich_id"].clone();
+    let z = a.aufruf("auswahl_setzen", json!({ "vergleichId": id, "pfade": ["css"], "an": false })).unwrap();
+    assert_eq!(z["ausgewaehlt"], 2);
+    let e = a.aufruf("auswahl_setzen", json!({ "vergleichId": id, "pfade": ["fehlt"], "an": true })).unwrap_err();
+    assert_eq!(e["kategorie"], "nicht_gefunden");
+    let e = a.aufruf("auswahl_setzen", json!({ "vergleichId": id, "pfade": ["../raus"], "an": true })).unwrap_err();
+    assert!(e.to_string().contains("pfade"), "ungültiger Pfad wird beim Einlesen abgewiesen: {e}");
+}
+
+#[test]
+fn unbekannter_oder_geschlossener_vergleich() {
+    let a = app();
+    mit_vergleichsdaten(&a);
+    let id = starten(&a)["vergleich_id"].clone();
+    assert_eq!(a.aufruf("vergleich_schliessen", json!({ "vergleichId": id })).unwrap(), Value::Null);
+    let e = a
+        .aufruf("diff_seite", json!({ "vergleichId": id, "offset": 0, "limit": 1, "filter": "alle", "zugeklappt": [] }))
+        .unwrap_err();
+    assert_eq!(e["kategorie"], "nicht_gefunden");
+    assert!(e["meldung"].as_str().unwrap().contains("bitte neu vergleichen"));
+    // Schließen eines unbekannten Vergleichs ist kein Fehler
+    assert!(a.aufruf("vergleich_schliessen", json!({ "vergleichId": "x" })).is_ok());
+}
+
+#[test]
+fn neuer_vergleich_ersetzt_den_alten_derselben_stufe() {
+    let a = app();
+    mit_vergleichsdaten(&a);
+    let erste = starten(&a)["vergleich_id"].clone();
+    let zweite = starten(&a)["vergleich_id"].clone();
+    assert_eq!(zweite, "mailwerk-web/spiegel#2");
+    let sitzungen = &a.fenster.state::<AppState>().vergleiche.sitzungen;
+    let ids: Vec<String> = sitzungen.lock().unwrap().keys().cloned().collect();
+    assert_eq!(ids, [zweite.as_str().unwrap()], "{erste} ist freigegeben");
+}
+
+#[test]
+fn abbrechen_trifft_nur_den_laufenden_vergleich_der_stufe() {
+    let a = app();
+    let v = &a.fenster.state::<AppState>().vergleiche;
+    let abbrechen = |stufe: &str| a.aufruf("vergleich_abbrechen", json!({ "strecke": "s", "stufe": stufe })).unwrap();
+    assert_eq!(abbrechen("eins"), json!(false), "nichts läuft");
+
+    let schalter = v.anmelden("s/eins");
+    assert_eq!(abbrechen("zwei"), json!(false));
+    assert!(!schalter.load(std::sync::atomic::Ordering::Relaxed));
+    assert_eq!(abbrechen("eins"), json!(true));
+    assert!(schalter.load(std::sync::atomic::Ordering::Relaxed));
+
+    v.abmelden("s/eins", &schalter);
+    assert_eq!(abbrechen("eins"), json!(false), "abgemeldet");
+}
+
+#[test]
+fn neuer_vergleich_bricht_den_alten_ab_und_bleibt_angemeldet() {
+    let a = app();
+    let v = &a.fenster.state::<AppState>().vergleiche;
+    let alt = v.anmelden("s/eins");
+    let neu = v.anmelden("s/eins");
+    assert!(alt.load(std::sync::atomic::Ordering::Relaxed), "alter Vergleich wird abgebrochen");
+    v.abmelden("s/eins", &alt); // der alte endet später – darf den neuen nicht abmelden
+    assert_eq!(a.aufruf("vergleich_abbrechen", json!({ "strecke": "s", "stufe": "eins" })).unwrap(), json!(true));
+    assert!(neu.load(std::sync::atomic::Ordering::Relaxed));
+}
+
+#[test]
+fn vergleich_starten_ohne_kanal_wird_abgewiesen() {
+    let a = app();
+    let e = a.aufruf("vergleich_starten", json!({ "strecke": "s", "stufe": "x" })).unwrap_err();
+    assert!(e.to_string().contains("fortschritt"), "{e}");
+}
+
+// --- Kontextmenü „Regel setzen“ ----------------------------------------------------
+
+fn regeln_der_stufe(a: &Testapp) -> Value {
+    a.aufruf("strecke_laden", json!({ "id": "mailwerk-web" })).unwrap()["stufen"][0]["regeln"]["eigene"].clone()
+}
+
+#[test]
+fn regel_setzen_speichert_und_wirkt_beim_naechsten_vergleich() {
+    let a = app();
+    mit_vergleichsdaten(&a);
+    let ort = json!({ "ebene": "stufe", "stufe": "spiegel" });
+    let warnungen = a
+        .aufruf(
+            "regel_setzen",
+            json!({ "strecke": "mailwerk-web", "ort": ort, "pfad": "alt.txt", "ordner": false, "typ": "schuetzen", "ersatz": null }),
+        )
+        .unwrap();
+    assert!(warnungen.is_array());
+    assert_eq!(regeln_der_stufe(&a), json!([{ "muster": "/alt.txt", "typ": "schuetzen" }]));
+
+    let id = starten(&a)["vergleich_id"].clone();
+    let seite = a
+        .aufruf("diff_seite", json!({ "vergleichId": id, "offset": 0, "limit": 10, "filter": "alle", "zugeklappt": [] }))
+        .unwrap();
+    let alt = seite["zeilen"].as_array().unwrap().iter().find(|z| z["pfad"] == "alt.txt").unwrap().clone();
+    assert_eq!(alt["status"], "geschuetzt");
+    assert_eq!(alt["regel_entfernbar"], true);
+
+    a.aufruf("regel_entfernen", json!({ "strecke": "mailwerk-web", "ort": ort, "pfad": "alt.txt", "ordner": false }))
+        .unwrap();
+    assert_eq!(regeln_der_stufe(&a), Value::Null, "leere Liste wird nicht gespeichert");
+}
+
+#[test]
+fn regel_fuer_die_ganze_strecke_mit_ersatzdatei() {
+    let a = app();
+    mit_vergleichsdaten(&a);
+    a.aufruf(
+        "regel_setzen",
+        json!({ "strecke": "mailwerk-web", "ort": { "ebene": "strecke" }, "pfad": "index.php", "ordner": false,
+                "typ": "ersetzen", "ersatz": "index.server.php" }),
+    )
+    .unwrap();
+    let s = a.aufruf("strecke_laden", json!({ "id": "mailwerk-web" })).unwrap();
+    assert_eq!(
+        s["regeln"]["eigene"][1],
+        json!({ "muster": "/index.php", "typ": "ersetzen", "quelle": "index.server.php" })
+    );
+}
+
+#[test]
+fn regel_setzen_und_entfernen_fehler() {
+    let a = app();
+    mit_vergleichsdaten(&a);
+    let ort = json!({ "ebene": "stufe", "stufe": "spiegel" });
+    // unpassende Angabe: Ersetzen ohne Ersatzdatei
+    let e = a
+        .aufruf(
+            "regel_setzen",
+            json!({ "strecke": "mailwerk-web", "ort": ort, "pfad": "a", "ordner": false, "typ": "ersetzen", "ersatz": null }),
+        )
+        .unwrap_err();
+    assert_eq!(e["kategorie"], "validierung");
+    // nichts zu entfernen
+    let e = a
+        .aufruf("regel_entfernen", json!({ "strecke": "mailwerk-web", "ort": ort, "pfad": "a", "ordner": false }))
+        .unwrap_err();
+    assert_eq!(e["kategorie"], "nicht_gefunden");
+    // unbekannte Strecke
+    let e = a
+        .aufruf("regel_entfernen", json!({ "strecke": "fehlt", "ort": ort, "pfad": "a", "ordner": false }))
+        .unwrap_err();
+    assert_eq!(e["kategorie"], "nicht_gefunden");
+    let e = a
+        .aufruf(
+            "regel_setzen",
+            json!({ "strecke": "fehlt", "ort": ort, "pfad": "a", "ordner": false, "typ": "schuetzen", "ersatz": null }),
+        )
+        .unwrap_err();
+    assert_eq!(e["kategorie"], "nicht_gefunden");
+}
+
+#[test]
+fn regel_wird_nicht_gespeichert_wenn_die_strecke_fehler_hat() {
+    let a = app();
+    mit_vergleichsdaten(&a);
+    let ort = json!({ "ebene": "stufe", "stufe": "spiegel" });
+    a.aufruf("regel_setzen", json!({ "strecke": "mailwerk-web", "ort": ort, "pfad": "x", "ordner": false, "typ": "schuetzen", "ersatz": null }))
+        .unwrap();
+    std::fs::remove_dir_all(a.wurzel.join("daten/spiegel")).unwrap(); // Zielordner fehlt → Fehler der Strecke
+    for (befehl, args) in [
+        ("regel_setzen", json!({ "strecke": "mailwerk-web", "ort": ort, "pfad": "y", "ordner": false, "typ": "schuetzen", "ersatz": null })),
+        ("regel_entfernen", json!({ "strecke": "mailwerk-web", "ort": ort, "pfad": "x", "ordner": false })),
+    ] {
+        let e = a.aufruf(befehl, args).unwrap_err();
+        assert_eq!(e["kategorie"], "validierung", "{befehl}");
+    }
+    assert_eq!(regeln_der_stufe(&a), json!([{ "muster": "/x", "typ": "schuetzen" }]), "unverändert");
+}
+
+#[test]
+fn ersatz_vorschlaege_aus_dem_selben_ordner() {
+    let a = app();
+    mit_vergleichsdaten(&a);
+    let id = starten(&a)["vergleich_id"].clone();
+    let v = a.aufruf("ersatz_vorschlaege", json!({ "vergleichId": id, "pfad": "css/neu.css" })).unwrap();
+    assert_eq!(v, json!(["css/site.css"]));
+    let e = a.aufruf("ersatz_vorschlaege", json!({ "vergleichId": "x", "pfad": "a" })).unwrap_err();
+    assert_eq!(e["kategorie"], "nicht_gefunden");
+}

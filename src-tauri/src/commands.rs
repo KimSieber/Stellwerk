@@ -1,11 +1,19 @@
 //! Befehle für das Frontend (ARCHITEKTUR Kap. 9). Hier wird nur übersetzt, nicht gerechnet.
 
+use std::collections::HashSet;
+use std::time::{Duration, Instant};
+
 use serde::Serialize;
+use tauri::ipc::Channel;
 use tauri::State;
 
-use stellwerk_core::config::{pruefe_ordner, validiere_strecke, GlobalConfig, Problem};
+use stellwerk_core::ansicht::{stufe_vergleichen, Drossel, Filter, Fortschritt, Lesefehler, Seite, VergleichsSitzung};
+use stellwerk_core::diff::Zusammenfassung;
+use stellwerk_core::model::RelPath;
+
+use stellwerk_core::config::{pruefe_ordner, regel_entfernen as entfernen, regel_setzen as setzen, validiere_strecke, GlobalConfig, Problem, RegelOrt};
 use stellwerk_core::secrets::konten_der_strecke;
-use stellwerk_core::model::{Endpunkt, Quelle, Regel, Strecke};
+use stellwerk_core::model::{Endpunkt, Quelle, Regel, RegelTyp, Strecke};
 use stellwerk_core::StellwerkError;
 
 use crate::state::AppState;
@@ -186,4 +194,147 @@ pub fn passwort_vorhanden(state: State<'_, AppState>, konto: String) -> Antwort<
 #[tauri::command]
 pub fn passwort_entfernen(state: State<'_, AppState>, konto: String) -> Antwort<()> {
     Ok(state.tresor.entfernen(&konto)?)
+}
+
+// --- Vergleich (v0.2) ---------------------------------------------------------
+
+/// Antwort auf `vergleich_starten`; die Zeilen holt die Oberfläche mit `diff_seite`.
+#[derive(Debug, Serialize)]
+pub struct VergleichStart {
+    pub vergleich_id: String,
+    /// Aufgelöste Ordner (bei „Ziel einer Vorstufe“ deren Zielordner).
+    pub quelle: String,
+    pub ziel: String,
+    pub zusammenfassung: Zusammenfassung,
+    /// Anzahl aller Zeilen ohne Filter.
+    pub zeilen: usize,
+    pub lesefehler: Vec<Lesefehler>,
+}
+
+/// Scannt Quelle und Ziel einer Stufe und vergleicht sie. Verändert nichts (E4).
+/// Fortschritt kommt gedrosselt über `fortschritt`. Läuft außerhalb des
+/// Hauptthreads (async), damit `vergleich_abbrechen` jederzeit ankommt.
+#[tauri::command]
+pub async fn vergleich_starten(
+    state: State<'_, AppState>,
+    strecke: String,
+    stufe: String,
+    fortschritt: Channel<Fortschritt>,
+) -> Antwort<VergleichStart> {
+    let s = state.store.strecke_laden(&strecke)?;
+    let global = state.store.global_laden()?;
+    let schluessel = format!("{strecke}/{stufe}");
+    let abbruch = state.vergleiche.anmelden(&schluessel);
+    let mut drossel = Drossel::neu(Duration::from_millis(100));
+    let ergebnis = stufe_vergleichen(&s, &stufe, &global, &abbruch, &mut |f| {
+        if drossel.durchlassen(&f, Instant::now()) {
+            // Ein geschlossenes Fenster ist kein Grund, den Vergleich abzubrechen
+            let _ = fortschritt.send(f);
+        }
+    });
+    state.vergleiche.abmelden(&schluessel, &abbruch);
+    let v = ergebnis?;
+
+    let sitzung = VergleichsSitzung::neu(v.vergleich);
+    let zusammenfassung = sitzung.zusammenfassung().clone();
+    let zeilen = sitzung.anzahl();
+    Ok(VergleichStart {
+        vergleich_id: state.vergleiche.ablegen(&schluessel, sitzung),
+        quelle: v.quelle.display().to_string(),
+        ziel: v.ziel.display().to_string(),
+        zusammenfassung,
+        zeilen,
+        lesefehler: v.lesefehler,
+    })
+}
+
+/// Bricht den laufenden Vergleich einer Stufe ab; `false`, wenn keiner läuft.
+#[tauri::command]
+pub fn vergleich_abbrechen(state: State<'_, AppState>, strecke: String, stufe: String) -> bool {
+    state.vergleiche.abbrechen(&format!("{strecke}/{stufe}"))
+}
+
+/// Führt `f` mit der Sitzung `id` aus; unbekannt → „nicht gefunden“.
+fn mit_sitzung<T>(
+    state: &AppState,
+    id: &str,
+    f: impl FnOnce(&mut VergleichsSitzung) -> Result<T, StellwerkError>,
+) -> Antwort<T> {
+    let mut sitzungen = state.vergleiche.sitzungen.lock().unwrap();
+    let sitzung = sitzungen
+        .get_mut(id)
+        .ok_or_else(|| StellwerkError::NichtGefunden(format!("Vergleich „{id}“ – bitte neu vergleichen")))?;
+    Ok(f(sitzung)?)
+}
+
+/// Sichtbare Zeilen ab `offset` (Filter und zugeklappte Ordner wertet Rust aus).
+#[tauri::command]
+pub fn diff_seite(
+    state: State<'_, AppState>,
+    vergleich_id: String,
+    offset: usize,
+    limit: usize,
+    filter: Filter,
+    zugeklappt: Vec<RelPath>,
+) -> Antwort<Seite> {
+    let zu: HashSet<RelPath> = zugeklappt.into_iter().collect();
+    mit_sitzung(&state, &vergleich_id, |s| Ok(s.seite(offset, limit, filter, &zu)))
+}
+
+/// Häkchen setzen/entfernen; ein Ordner wirkt auf seinen Inhalt. Liefert die neue Zusammenfassung.
+#[tauri::command]
+pub fn auswahl_setzen(
+    state: State<'_, AppState>,
+    vergleich_id: String,
+    pfade: Vec<RelPath>,
+    an: bool,
+) -> Antwort<Zusammenfassung> {
+    mit_sitzung(&state, &vergleich_id, |s| s.auswahl_setzen(&pfade, an).cloned())
+}
+
+/// Gibt den Speicher eines Vergleichs frei (beim Verlassen der Ansicht).
+#[tauri::command]
+pub fn vergleich_schliessen(state: State<'_, AppState>, vergleich_id: String) {
+    state.vergleiche.sitzungen.lock().unwrap().remove(&vergleich_id);
+}
+
+// --- Kontextmenü „Regel setzen“ (v0.2) ------------------------------------------
+
+/// Setzt eine Regel für genau `pfad` auf der Ebene `ort`, prüft und speichert die
+/// Strecke wie der Editor. Liefert verbleibende Warnungen. Danach neu vergleichen.
+#[tauri::command]
+pub fn regel_setzen(
+    state: State<'_, AppState>,
+    strecke: String,
+    ort: RegelOrt,
+    pfad: RelPath,
+    ordner: bool,
+    typ: RegelTyp,
+    ersatz: Option<RelPath>,
+) -> Antwort<Vec<Problem>> {
+    let mut s = state.store.strecke_laden(&strecke)?;
+    setzen(&mut s, &ort, &pfad, ordner, typ, ersatz.as_ref())?;
+    speicherbar(&state, &s)?;
+    Ok(state.store.strecke_speichern(&s)?)
+}
+
+/// Entfernt die Regel für genau `pfad` auf der Ebene `ort` und speichert.
+#[tauri::command]
+pub fn regel_entfernen(
+    state: State<'_, AppState>,
+    strecke: String,
+    ort: RegelOrt,
+    pfad: RelPath,
+    ordner: bool,
+) -> Antwort<Vec<Problem>> {
+    let mut s = state.store.strecke_laden(&strecke)?;
+    entfernen(&mut s, &ort, &pfad, ordner)?;
+    speicherbar(&state, &s)?;
+    Ok(state.store.strecke_speichern(&s)?)
+}
+
+/// Dateien der Quelle im selben Ordner wie `pfad` – Vorschläge für „Ersetzen durch …“.
+#[tauri::command]
+pub fn ersatz_vorschlaege(state: State<'_, AppState>, vergleich_id: String, pfad: RelPath) -> Antwort<Vec<RelPath>> {
+    mit_sitzung(&state, &vergleich_id, |s| Ok(s.quelldateien_neben(&pfad)))
 }

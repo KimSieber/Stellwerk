@@ -1,10 +1,12 @@
 //! Konfiguration: globale Einstellungen und Strecken als TOML (ARCHITEKTUR Kap. 4.1).
 
 mod global;
+mod regel_setzen;
 mod store;
 mod validate;
 
 pub use global::{Ausfuehrung, GlobalConfig, GlobaleRegeln};
+pub use regel_setzen::{pfad_muster, regel_entfernen, regel_setzen, RegelOrt};
 pub use store::{ConfigStore, StreckeEintrag, APP_ID};
 pub use validate::{effektive_quelle, pruefe_ordner, validiere_strecke, Problem, Schwere};
 
