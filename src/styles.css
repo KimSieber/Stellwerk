@@ -123,6 +123,18 @@ legend { font-weight: 600; padding: 0 6px; }
 .pfad.ablage-aktiv { border: 2px dashed var(--signal); background: rgba(47, 191, 113, .12); }
 .pfad input { flex: 1; }
 .ftps { display: grid; gap: 8px; }
+/* Verbindung testen (v0.4) */
+.verbindungstest { display: grid; gap: 8px; }
+.zertifikat-bestaetigt { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.zertifikat-bestaetigt code, .test-ergebnis code { word-break: break-all; }
+.test-ergebnis { display: grid; gap: 4px; padding: 10px 12px; border-radius: 8px; border-left: 3px solid; background: var(--hg); margin: 0; }
+.test-ergebnis.ok { border-color: var(--signal); }
+.test-ergebnis.ok > strong { color: var(--signal); }
+.test-ergebnis.fehler { border-color: var(--loeschen); }
+.test-ergebnis.fehler > strong, p.test-ergebnis.fehler { color: var(--loeschen); }
+.test-ergebnis dl { display: grid; grid-template-columns: max-content 1fr; gap: 2px 12px; margin: 4px 0 0; font-size: 12px; }
+.test-ergebnis dt { color: var(--text-leise); }
+.test-ergebnis dd { margin: 0; }
 
 .stufe { border: 1px solid var(--rand); border-radius: 12px; padding: 14px 16px; display: grid; gap: 12px; background: var(--flaeche); }
 .stufe-kopf { display: flex; align-items: center; gap: 10px; }

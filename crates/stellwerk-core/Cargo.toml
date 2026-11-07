@@ -18,6 +18,11 @@ blake3.workspace = true
 serde_json.workspace = true
 rusqlite.workspace = true
 filetime.workspace = true
+suppaftp.workspace = true
+rustls.workspace = true
+rustls-platform-verifier.workspace = true
+sha2.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
+stellwerk-testserver = { path = "../stellwerk-testserver" }

@@ -111,6 +111,11 @@ pub struct FtpsEndpunkt {
     #[serde(default)]
     pub tls: Tls,
     pub konto_ref: String,
+    /// Bewusst bestätigtes Serverzertifikat (SHA-256, `AB:CD:…`), wenn die
+    /// Prüfung des Betriebssystems es nicht anerkennt – z. B. selbstsigniert beim
+    /// Hoster (ARCHITEKTUR Kap. 11). Ohne Eintrag gilt nur die Systemprüfung.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub zertifikat: Option<String>,
 }
 
 fn ftp_port() -> u16 {
@@ -268,6 +273,7 @@ mod tests {
             benutzer: "b".into(),
             tls: Tls::Explizit,
             konto_ref: "k".into(),
+            zertifikat: None,
         };
         assert_eq!(Quelle::from(Endpunkt::Ftps(f.clone())), Quelle::Ftps(f));
     }

@@ -47,6 +47,19 @@ pub enum StellwerkError {
     #[error("Datenbank: {0}")]
     Datenbank(String),
 
+    /// Server nicht erreichbar, TLS nicht möglich oder Verbindung abgebrochen.
+    #[error("Verbindung: {0}")]
+    Verbindung(String),
+
+    /// Benutzer oder Passwort vom Server abgelehnt.
+    #[error("Anmeldung: {0}")]
+    Anmeldung(String),
+
+    /// Das Serverzertifikat wird nicht anerkannt. `fingerprint` (SHA-256) kann
+    /// nach Prüfung bewusst bestätigt werden (ARCHITEKTUR Kap. 11).
+    #[error("Zertifikat nicht anerkannt: {meldung} (SHA-256 {fingerprint})")]
+    Zertifikat { meldung: String, fingerprint: String },
+
     #[error("Ein-/Ausgabefehler bei {pfad}: {quelle}")]
     Io {
         pfad: PathBuf,
@@ -69,6 +82,9 @@ impl StellwerkError {
             Self::Abbruch => "abbruch",
             Self::NichtBestaetigt(_) => "nicht_bestaetigt",
             Self::Datenbank(_) => "datenbank",
+            Self::Verbindung(_) => "verbindung",
+            Self::Anmeldung(_) => "anmeldung",
+            Self::Zertifikat { .. } => "zertifikat",
             Self::Io { .. } => "io",
         }
     }

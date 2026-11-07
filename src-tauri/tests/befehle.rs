@@ -864,3 +864,55 @@ fn beschaedigte_laufdaten_werden_gemeldet() {
     let e = a.aufruf("laeufe", json!({ "strecke": "mailwerk-web", "stufe": "spiegel", "limit": 10 })).unwrap_err();
     assert_eq!(e["kategorie"], "datenbank");
 }
+
+// --- Verbindung testen (FTPS, v0.4) ------------------------------------------
+
+fn ftps_ziel(port: u16, zertifikat: Option<&str>) -> Value {
+    json!({ "typ": "ftps", "host": "127.0.0.1", "port": port, "pfad": "/", "benutzer": stellwerk_testserver::BENUTZER,
+            "tls": "explizit", "konto_ref": "stellwerk:test:server", "zertifikat": zertifikat })
+}
+
+#[test]
+fn verbindung_testen_meldet_zertifikat_mit_fingerprint_und_gelingt_nach_bestaetigung() {
+    let a = app();
+    let s = stellwerk_testserver::starten(Default::default());
+    let pw = stellwerk_testserver::PASSWORT;
+
+    // Selbstsigniert: Fehler mit Fingerprint zum Bestätigen
+    let e = a.aufruf("verbindung_testen", json!({ "ziel": ftps_ziel(s.port, None), "passwort": pw })).unwrap_err();
+    assert_eq!(e["kategorie"], "zertifikat");
+    assert_eq!(e["fingerprint"], json!(s.fingerprint));
+
+    // Bestätigt, Passwort eingegeben (noch nicht gespeichert)
+    let ok = a
+        .aufruf("verbindung_testen", json!({ "ziel": ftps_ziel(s.port, Some(&s.fingerprint)), "passwort": pw }))
+        .unwrap();
+    assert_eq!(ok["verzeichnis"], "/");
+    assert_eq!(ok["faehigkeiten"]["mlsd"], true);
+    assert_eq!(ok["faehigkeiten"]["chmod"], Value::Null);
+    assert_eq!(ok["zertifikat"]["vom_system"], false);
+    assert!(!ok.to_string().contains(pw), "Passwort nie in der Antwort");
+
+    // Ohne Eingabe: aus dem Schlüsselbund; leere Eingabe zählt als keine
+    let ziel = ftps_ziel(s.port, Some(&s.fingerprint));
+    let e = a.aufruf("verbindung_testen", json!({ "ziel": ziel, "passwort": "" })).unwrap_err();
+    assert_eq!(e["kategorie"], "nicht_gefunden");
+    a.aufruf("passwort_speichern", json!({ "konto": "stellwerk:test:server", "passwort": pw })).unwrap();
+    assert!(a.aufruf("verbindung_testen", json!({ "ziel": ziel })).is_ok());
+
+    // Falsches Passwort im Schlüsselbund
+    a.aufruf("passwort_speichern", json!({ "konto": "stellwerk:test:server", "passwort": "falsch" })).unwrap();
+    let e = a.aufruf("verbindung_testen", json!({ "ziel": ziel })).unwrap_err();
+    assert_eq!(e["kategorie"], "anmeldung");
+    assert!(e.get("fingerprint").is_none());
+
+    // Lokales Ziel: kein Verbindungstest
+    let e = a.aufruf("verbindung_testen", json!({ "ziel": { "typ": "lokal", "pfad": "/tmp" } })).unwrap_err();
+    assert_eq!(e["kategorie"], "nicht_unterstuetzt");
+
+    // Unvollständige Angaben werden schon beim Einlesen abgewiesen
+    let e = a.aufruf("verbindung_testen", json!({ "ziel": { "typ": "ftps", "host": "h" } })).unwrap_err();
+    assert!(e.to_string().contains("ziel"), "{e}");
+    let e = a.aufruf("verbindung_testen", json!({ "ziel": ziel, "passwort": 42 })).unwrap_err();
+    assert!(e.to_string().contains("passwort"), "{e}");
+}

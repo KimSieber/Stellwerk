@@ -1,0 +1,18 @@
+[package]
+name = "stellwerk-testserver"
+description = "FTPS-Server für die automatischen Tests von Stellwerk (nicht Teil der App)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish = false
+
+[dependencies]
+async-trait = "0.1"
+libunftp = { version = "0.24", default-features = false, features = ["ring"] }
+unftp-sbe-fs = "0.4"
+unftp-core = "0.1"
+tokio = { version = "1", features = ["rt-multi-thread", "net", "time"] }
+rcgen = "0.14"
+sha2.workspace = true
+tempfile.workspace = true

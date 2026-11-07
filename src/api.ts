@@ -24,9 +24,14 @@ export interface BefehlsFehler {
     | "abbruch"
     | "nicht_bestaetigt"
     | "datenbank"
+    | "verbindung"
+    | "anmeldung"
+    | "zertifikat"
     | "io";
   meldung: string;
   probleme?: Problem[];
+  /** Bei „zertifikat“: SHA-256 des nicht anerkannten Serverzertifikats. */
+  fingerprint?: string;
 }
 
 export interface StufeKurz {
@@ -67,6 +72,17 @@ export interface FtpsEndpunkt {
   benutzer: string;
   tls: "explizit";
   konto_ref: string;
+  /** Bewusst bestätigtes Serverzertifikat (SHA-256), wenn das System es nicht anerkennt. */
+  zertifikat?: string;
+}
+
+/** Ergebnis von „Verbindung testen“ (stellwerk_core::endpoint::ftps::Verbindungstest). */
+export interface Verbindungstest {
+  begruessung: string | null;
+  verzeichnis: string;
+  eintraege: number;
+  faehigkeiten: { mlsd: boolean; mfmt: boolean; chmod: boolean | null; fortsetzen: boolean; utf8: boolean };
+  zertifikat: { fingerprint: string; vom_system: boolean };
 }
 
 export type Endpunkt = { typ: "lokal"; pfad: string } | ({ typ: "ftps" } & FtpsEndpunkt);
@@ -292,6 +308,9 @@ export const api = {
   /** Passwort in den Schlüsselbund – es kommt nie zurück. */
   passwortSpeichern: (konto: string, passwort: string) => invoke<void>("passwort_speichern", { konto, passwort }),
   passwortVorhanden: (konto: string) => invoke<boolean>("passwort_vorhanden", { konto }),
+  /** Liest nur. Ohne eingegebenes Passwort gilt das aus dem Schlüsselbund. */
+  verbindungTesten: (ziel: Endpunkt, passwort: string) =>
+    invoke<Verbindungstest>("verbindung_testen", { ziel, passwort: passwort || null }),
   /** Scannt und vergleicht eine Stufe; verändert nichts. Fortschritt kommt gedrosselt. */
   vergleichStarten: (strecke: string, stufe: string, beiFortschritt: (f: Fortschritt) => void) =>
     invoke<VergleichStart>("vergleich_starten", { strecke, stufe, fortschritt: new Channel(beiFortschritt) }),

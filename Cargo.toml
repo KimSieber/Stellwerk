@@ -21,4 +21,9 @@ walkdir = "2"
 blake3 = "1"
 filetime = "0.2"
 rusqlite = { version = "0.41", features = ["bundled"] }
+# FTPS: synchron mit rustls (ring), Zertifikate über die Prüfung des Betriebssystems
+suppaftp = { version = "12", default-features = false, features = ["rustls-ring"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
+rustls-platform-verifier = "0.7"
+sha2 = "0.10"
 stellwerk-core = { path = "crates/stellwerk-core" }

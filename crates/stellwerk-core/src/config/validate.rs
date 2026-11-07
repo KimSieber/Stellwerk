@@ -252,6 +252,9 @@ fn pruefe_ftps(f: &FtpsEndpunkt, ort: &str, p: &mut Vec<Problem>) {
     if f.konto_ref.trim().is_empty() {
         p.push(Problem::fehler(format!("{ort}.konto_ref"), "Schlüsselbund-Verweis fehlt"));
     }
+    if f.zertifikat.as_deref().is_some_and(|z| crate::endpoint::ftps::fingerprint_bytes(z).is_none()) {
+        p.push(Problem::fehler(format!("{ort}.zertifikat"), "Zertifikat-Fingerprint ist kein SHA-256-Wert (64 Hex-Zeichen)"));
+    }
 }
 
 fn ist_gueltige_id(id: &str) -> bool {

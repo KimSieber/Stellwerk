@@ -17,6 +17,7 @@ fn ftps(host: &str, port: u16, pfad: &str, benutzer: &str, konto: &str) -> FtpsE
         benutzer: benutzer.into(),
         tls: Tls::Explizit,
         konto_ref: konto.into(),
+        zertifikat: None,
     }
 }
 
@@ -104,6 +105,21 @@ fn ftps_ziel_jedes_feld() {
         let mut s = beispiel();
         s.stufen[1].ziel = Endpunkt::Ftps(f.clone());
         assert_eq!(fehler_orte(&s), vec![ort], "{f:?}");
+    }
+}
+
+#[test]
+fn ftps_zertifikat_muss_ein_sha256_fingerprint_sein() {
+    let hex64 = "ab".repeat(32);
+    let mit_doppelpunkten = vec!["AB"; 32].join(":");
+    for (z, ok) in [(hex64.as_str(), true), (mit_doppelpunkten.as_str(), true), ("AB:CD", false), (&"zz".repeat(32)[..], false)] {
+        let mut s = beispiel();
+        s.stufen[1].ziel = Endpunkt::Ftps(FtpsEndpunkt { zertifikat: Some(z.into()), ..gueltiges_ftps() });
+        let orte = fehler_orte(&s);
+        assert_eq!(orte.is_empty(), ok, "{z}: {orte:?}");
+        if !ok {
+            assert_eq!(orte, vec!["stufen[1].ziel.zertifikat"]);
+        }
     }
 }
 

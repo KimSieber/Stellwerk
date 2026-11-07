@@ -14,6 +14,7 @@ use filetime::{set_file_mtime, FileTime};
 use stellwerk_core::ansicht::{stufe_vergleichen, VergleichsSitzung};
 use stellwerk_core::config::{strecke_aus_toml, GlobalConfig};
 use stellwerk_core::diff::Zusammenfassung;
+use stellwerk_core::endpoint::{Lokal, ZielEndpunkt, ZielVerbindung};
 use stellwerk_core::exec::{
     direkt_ausfuehren, standard_worker, ExecFortschritt, LaufErgebnis, Optionen, MAX_WORKER,
 };
@@ -120,8 +121,8 @@ fn laufen_mit(
     let mut fortschritt = Vec::new();
     let erg = direkt_ausfuehren(
         plan,
-        &a.q,
-        &a.z,
+        &Lokal::new(&a.q),
+        &Lokal::new(&a.z),
         LAUF,
         o,
         abbruch,
@@ -532,4 +533,55 @@ fn worker_standard_und_ergebnis_als_json() {
     assert_eq!(j["erledigt"], 0);
     let f = serde_json::to_value(l.fortschritt[0]).unwrap();
     assert_eq!(f["gesamt"], 1);
+}
+
+// --- Verbindungen je Worker (Endpunkte, v0.4) -------------------------------
+
+/// Ziel, das Verbindungen zählt und die ersten `scheitern` Versuche ablehnt.
+struct ZaehlendesZiel {
+    innen: Lokal,
+    versuche: std::sync::atomic::AtomicUsize,
+    scheitern: usize,
+}
+
+impl ZielEndpunkt for ZaehlendesZiel {
+    fn verbinden(&self) -> stellwerk_core::Result<Box<dyn ZielVerbindung + '_>> {
+        if self.versuche.fetch_add(1, Ordering::SeqCst) < self.scheitern {
+            return Err(StellwerkError::NichtGefunden("Server nicht erreichbar".into()));
+        }
+        self.innen.verbinden()
+    }
+}
+
+fn mit_ziel(a: &Aufbau, plan: &Plan, worker: usize, ziel: &ZaehlendesZiel) -> LaufErgebnis {
+    direkt_ausfuehren(plan, &Lokal::new(&a.q), ziel, LAUF, &opt(worker), &AtomicBool::new(false), &mut |_, _, _| Ok(()), &mut |_| {})
+}
+
+#[test]
+fn jeder_worker_oeffnet_hoechstens_eine_verbindung() {
+    for worker in [1, 3, MAX_WORKER] {
+        let a = aufbau();
+        webseite(&a);
+        let plan = a.plan();
+        let ziel = ZaehlendesZiel { innen: Lokal::new(&a.z), versuche: Default::default(), scheitern: 0 };
+        let erg = mit_ziel(&a, &plan, worker, &ziel);
+        assert!(erg.vollstaendig(), "{erg:?}");
+        let n = ziel.versuche.load(Ordering::SeqCst);
+        assert!((1..=worker).contains(&n), "Worker {worker}: {n} Verbindungen");
+        a.alles_gleich("");
+    }
+}
+
+#[test]
+fn verbindungsfehler_trifft_nur_den_auftrag_der_naechste_versucht_es_neu() {
+    let a = aufbau();
+    datei(&a.q, "a.txt", "a");
+    datei(&a.q, "b.txt", "b");
+    let plan = a.plan();
+    let ziel = ZaehlendesZiel { innen: Lokal::new(&a.z), versuche: Default::default(), scheitern: 1 };
+    let erg = mit_ziel(&a, &plan, 1, &ziel);
+    assert_eq!(erg.erledigt, 1);
+    assert_eq!(erg.fehler.len(), 1);
+    assert!(erg.fehler[0].meldung.contains("Server nicht erreichbar"), "{erg:?}");
+    assert_eq!(ziel.versuche.load(Ordering::SeqCst), 2, "eine erfolgreiche Verbindung wird weiterverwendet");
 }

@@ -13,7 +13,7 @@
     "test:rust": "cargo test --workspace",
     "test:watch": "vitest",
     "abdeckung": "vitest run --coverage",
-    "abdeckung:rust": "cargo llvm-cov --workspace --ignore-filename-regex \"src-tauri/src/(main|start|schluesselbund)\\.rs$\" --fail-under-functions 100 --fail-under-lines 100",
+    "abdeckung:rust": "cargo llvm-cov --workspace --ignore-filename-regex \"(src-tauri/src/(main|start|schluesselbund)\\.rs|crates/stellwerk-testserver/.*)$\" --fail-under-functions 100 --fail-under-lines 100",
     "pruefen": "npm run build && npm run abdeckung && npm run abdeckung:rust"
   },
   "dependencies": {

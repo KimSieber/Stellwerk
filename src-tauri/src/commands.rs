@@ -6,6 +6,8 @@ use std::sync::atomic::AtomicBool;
 use std::time::{Duration, Instant};
 
 use serde_json::json;
+use stellwerk_core::endpoint::ftps::Verbindungstest;
+use stellwerk_core::endpoint::{Ftps, Lokal};
 use stellwerk_core::exec::{direkt_ausfuehren, standard_worker, ExecFortschritt, LaufErgebnis, Optionen};
 use stellwerk_core::plan::{plan_erstellen as plan_erstellen_aus, Plan, PlanWarnung, PlanZusammenfassung};
 use stellwerk_core::store::{jetzt_ms, JournalStatus, JournalZeile, Lauf, LaufPhase, ProtokollEbene, Protokollieren};
@@ -32,17 +34,21 @@ pub struct BefehlsFehler {
     pub meldung: String,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub probleme: Vec<Problem>,
+    /// Bei nicht anerkanntem Serverzertifikat: SHA-256 zum bewussten Bestätigen.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fingerprint: Option<String>,
 }
 
 impl From<StellwerkError> for BefehlsFehler {
     fn from(e: StellwerkError) -> Self {
         let kategorie = e.kategorie();
         let meldung = e.to_string();
-        let probleme = match e {
-            StellwerkError::Validierung(p) => p,
-            _ => vec![],
+        let (probleme, fingerprint) = match e {
+            StellwerkError::Validierung(p) => (p, None),
+            StellwerkError::Zertifikat { fingerprint, .. } => (vec![], Some(fingerprint)),
+            _ => (vec![], None),
         };
-        Self { kategorie, meldung, probleme }
+        Self { kategorie, meldung, probleme, fingerprint }
     }
 }
 
@@ -196,6 +202,26 @@ pub fn passwort_speichern(state: State<'_, AppState>, konto: String, passwort: S
 #[tauri::command]
 pub fn passwort_vorhanden(state: State<'_, AppState>, konto: String) -> Antwort<bool> {
     Ok(state.tresor.vorhanden(&konto)?)
+}
+
+/// „Verbindung testen“ im Editor (FTPS-Ziel): TLS, Zertifikat, Anmeldung, Serverpfad,
+/// Datenkanal und Fähigkeiten. Liest nur – auf dem Server wird nichts verändert, daher
+/// kein Protokolleintrag (E8). Passwort: das eingegebene (noch nicht gespeicherte),
+/// sonst das aus dem Schlüsselbund. Es erscheint in keiner Antwort.
+#[tauri::command]
+pub async fn verbindung_testen(state: State<'_, AppState>, ziel: Endpunkt, passwort: Option<String>) -> Antwort<Verbindungstest> {
+    let Endpunkt::Ftps(ziel) = ziel else {
+        return Err(StellwerkError::NichtUnterstuetzt("Verbindungstest gibt es nur für FTPS-Ziele".into()).into());
+    };
+    let passwort = match passwort.filter(|p| !p.is_empty()) {
+        Some(p) => p,
+        None => state.tresor.lesen(&ziel.konto_ref)?.ok_or_else(|| {
+            StellwerkError::NichtGefunden("Passwort – bitte eingeben (im Schlüsselbund ist keines hinterlegt)".into())
+        })?,
+    };
+    let ftps = Ftps::new(&ziel, &passwort)?;
+    let test = tauri::async_runtime::spawn_blocking(move || ftps.verbindung_testen()).await.expect("Verbindungstest beendet");
+    Ok(test?)
 }
 
 #[tauri::command]
@@ -486,8 +512,8 @@ fn uebertragen(
     let opt = Optionen { worker, bei_fehler_stoppen, fortschritt_abstand: Duration::from_millis(100) };
     let ergebnis = direkt_ausfuehren(
         plan,
-        quelle,
-        ziel,
+        &Lokal::new(quelle),
+        &Lokal::new(ziel),
         &lauf_id,
         &opt,
         abbruch,

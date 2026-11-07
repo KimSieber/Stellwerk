@@ -6,6 +6,7 @@ import { useQuery } from "@tanstack/react-query";
 import { api, type Endpunkt, type Problem, type Quelle, type Stufe } from "../api";
 import { system } from "../system";
 import { endpunktVom, problemeAn, quelleVom } from "./modell";
+import { Verbindungstest } from "./Verbindungstest";
 
 /** Meldung zu einer Ablage (z. B. „ist kein Ordner“), angezeigt direkt am Feld. */
 export type AblageMeldung = { ort: string; text: string; fehler: boolean };
@@ -162,6 +163,9 @@ export function EndpunktFelder(props: {
       />
       {props.passwort && <PasswortFeld konto={wert.konto_ref} ort={`${ort}.passwort`} {...props.passwort} />}
       <p className="hinweis">Verbindung immer verschlüsselt (FTP mit explizitem TLS).</p>
+      {props.passwort && (
+        <Verbindungstest ziel={wert} passwort={props.passwort.wert} onZertifikat={(zertifikat) => setze({ zertifikat })} />
+      )}
     </div>
   );
 }
