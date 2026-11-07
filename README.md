@@ -7,7 +7,7 @@
 
 ---
 
-> **Status:** Grundgerüst (Schritt 1) – Modell, Konfiguration und Startseite; noch keine Übertragung.
+> **Status:** v0.1 – Strecken erfassen und prüfen (Editor, Schlüsselbund, Regeln); Vergleich im Kern. Noch keine Übertragung.
 
 ## Worum geht es?
 
@@ -49,6 +49,7 @@ Konfiguration: `~/Library/Application Support/de.sieber-bw.stellwerk/` (`config.
 
 - [Konzept & Entscheidungen](docs/KONZEPT.md)
 - [Architektur](docs/ARCHITEKTUR.md)
+- [v0.1 Entwicklungsdoku](docs/v0.1%20Entwicklungsdoku.md)
 - Interne Notizen: `docs/intern/`
 
 ## Lizenz
