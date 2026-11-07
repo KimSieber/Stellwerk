@@ -85,3 +85,61 @@ export function problemeAn(probleme: Problem[], ort: string): Problem[] {
 export function hatFehler(probleme: Problem[]): boolean {
   return probleme.some((p) => p.schwere === "fehler");
 }
+
+/** Setzt den Ordner am Ort `stufen[i].quelle.pfad` bzw. `stufen[i].ziel.pfad`
+ *  (Ziel einer Ablage per Drag-and-drop). Andere Orte oder Nicht-Ordner: unverändert. */
+export function pfadSetzen(s: Strecke, ort: string, pfad: string): Strecke {
+  const m = /^stufen\[(\d+)\]\.(quelle|ziel)\.pfad$/.exec(ort);
+  const i = m ? Number(m[1]) : -1;
+  const seite = m?.[2] as "quelle" | "ziel" | undefined;
+  const st = s.stufen[i];
+  if (!st || !seite || st[seite].typ !== "lokal") return s;
+  return { ...s, stufen: s.stufen.map((x, k) => (k === i ? { ...x, [seite]: { typ: "lokal", pfad } } : x)) };
+}
+
+const ORT_NAMEN: Record<string, string> = {
+  name: "Name",
+  id: "Kennung",
+  version: "Formatversion",
+  stufen: "Stufe",
+  regeln: "Regeln",
+  eigene: "Regel",
+  standard_aus: "Abschaltung",
+  quelle: "Quelle",
+  ziel: "Ziel",
+  pfad: "Pfad",
+  host: "Server",
+  port: "Port",
+  benutzer: "Benutzer",
+  konto_ref: "Passwort",
+  passwort: "Passwort",
+  typ: "Art",
+  stufe: "Vorstufe",
+  muster: "Muster",
+  rechte: "Dateirechte",
+  ordner: "Ordner",
+  dateien: "Dateien",
+  modus: "Modus",
+  nur_online: "„nur online“",
+  global: "Global",
+};
+
+/** Ort einer Meldung für Menschen: `stufen[1].ziel.pfad` → `Stufe 2 „Server“ › Ziel › Pfad`. */
+export function ortLesbar(ort: string, s?: Strecke): string {
+  const teile = ort.split(".").map((teil) => {
+    const m = /^(\w+)\[(\d+)\]$/.exec(teil);
+    const name = m ? m[1] : teil;
+    const text = ORT_NAMEN[name] ?? name;
+    if (!m) return text;
+    const nr = Number(m[2]);
+    const stufenName = name === "stufen" ? s?.stufen[nr]?.name : undefined;
+    return stufenName ? `${text} ${nr + 1} „${stufenName}“` : `${text} ${nr + 1}`;
+  });
+  // Regeln auf oberster Ebene gehören zur Strecke
+  if (ort.startsWith("regeln.")) teile[0] = "Regeln der Strecke";
+  // „Pfad“ heißt am Feld „Ordner“ (lokal) bzw. „Serverpfad“ (FTPS)
+  const m = /^stufen\[(\d+)\]\.(quelle|ziel)\.pfad$/.exec(ort);
+  const endpunkt = m ? s?.stufen[Number(m[1])]?.[m[2] as "quelle" | "ziel"] : undefined;
+  if (endpunkt) teile[2] = endpunkt.typ === "ftps" ? "Serverpfad" : "Ordner";
+  return teile.join(" › ");
+}

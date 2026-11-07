@@ -1,9 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
-import { screen, waitFor } from "@testing-library/react";
+import { act, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 import type { Problem, Strecke } from "../api";
 import { aufrufeVon, beispielStrecke, mitQuery, rustAttrappe, type Antworten } from "../test/hilfen";
+import { ablageSenden } from "../test/ablage";
 import { StreckeEditor } from "./StreckeEditor";
 
 type Args = { strecke: Strecke };
@@ -58,6 +59,7 @@ describe("Neue Strecke", () => {
     rust();
     editor();
     expect(await screen.findByText("1 Fehler, 0 Warnungen")).toBeInTheDocument();
+    expect(screen.getByText("Name:")).toBeInTheDocument(); // lesbarer Ort in der Übersicht
     expect(screen.getAllByText("Name fehlt")).toHaveLength(2); // am Feld und in der Übersicht
     expect(speichernKnopf()).toBeDisabled();
 
@@ -93,6 +95,23 @@ describe("Neue Strecke", () => {
     await userEvent.type(screen.getByLabelText("Name"), "Test");
     await waitFor(() => expect(speichernKnopf()).toBeEnabled());
     expect(screen.queryByText("Kennung ist bereits vergeben")).toBeNull();
+  });
+
+  it("Meldungen stehen im festen Kopfbereich bei den Knöpfen", async () => {
+    rust({
+      strecke_anlegen: () => {
+        throw { kategorie: "validierung", meldung: "Konfiguration ungültig: Ordner existiert nicht" };
+      },
+    });
+    editor();
+    await userEvent.type(screen.getByLabelText("Name"), "Test");
+    await waitFor(() => expect(speichernKnopf()).toBeEnabled());
+    await userEvent.click(speichernKnopf());
+    const meldung = await screen.findByText("Konfiguration ungültig: Ordner existiert nicht");
+    expect(speichernKnopf().closest(".kopfbereich")).toContainElement(meldung);
+    // Weitertippen nimmt die veraltete Fehlermeldung weg
+    await userEvent.type(screen.getByLabelText("Name"), "x");
+    await waitFor(() => expect(screen.queryByText(/Ordner existiert nicht/)).toBeNull());
   });
 
   it("Ablehnung durch Rust wird angezeigt", async () => {
@@ -233,6 +252,56 @@ describe("Passwörter", () => {
   });
 });
 
+describe("Ordner aus dem Finder ablegen", () => {
+  /** Lässt elementFromPoint immer das Ordnerfeld mit dem angegebenen Ort treffen. */
+  function ablegen(ort: string, pfade: string[]) {
+    const feld = document.querySelector(`[data-drop-target="${ort}"]`)!;
+    document.elementFromPoint = (() => feld) as typeof document.elementFromPoint;
+    act(() => ablageSenden({ type: "enter", paths: pfade, position: { x: 1, y: 1 } as never }));
+    act(() => ablageSenden({ type: "drop", paths: pfade, position: { x: 1, y: 1 } as never }));
+  }
+
+  it("übernimmt einen Ordner als Pfad", async () => {
+    const a = rust({ ist_ordner: () => true });
+    editor("mailwerk-web");
+    await screen.findByRole("heading", { name: "Mailwerk Webseite" });
+    ablegen("stufen[0].ziel.pfad", ["/Users/kim/Spiegel"]);
+    await waitFor(() => expect(screen.getAllByLabelText("Ordner")[1]).toHaveValue("/Users/kim/Spiegel"));
+    expect(aufrufeVon(a, "ist_ordner")[0].args).toEqual({ pfad: "/Users/kim/Spiegel" });
+    // gilt als Änderung
+    await userEvent.click(screen.getByRole("button", { name: "← Strecken" }));
+    expect(screen.getByRole("alert")).toHaveTextContent("Ungespeicherte Änderungen");
+  });
+
+  it("weist Dateien ab – Meldung rot direkt unter dem Feld", async () => {
+    rust({ ist_ordner: () => false });
+    editor("mailwerk-web");
+    await screen.findByRole("heading", { name: "Mailwerk Webseite" });
+    ablegen("stufen[0].quelle.pfad", ["/Users/kim/notiz.txt"]);
+    const meldung = await screen.findByText("„/Users/kim/notiz.txt“ ist kein Ordner – bitte einen Ordner ablegen.");
+    expect(meldung).toHaveClass("feld-meldung", "fehler");
+    const feld = screen.getAllByLabelText("Ordner")[0];
+    expect(feld.closest(".feld")).toContainElement(meldung);
+    expect(feld).toHaveValue("/Users/kim/Dev/Mailwerk");
+
+    // Nächste Eingabe nimmt die Meldung weg
+    await userEvent.type(screen.getByLabelText("Name"), "!");
+    expect(screen.queryByText(/ist kein Ordner/)).toBeNull();
+  });
+
+  it("bei mehreren Objekten nur das erste – Hinweis am Feld", async () => {
+    rust({ ist_ordner: () => true });
+    editor("mailwerk-web");
+    await screen.findByRole("heading", { name: "Mailwerk Webseite" });
+    ablegen("stufen[0].ziel.pfad", ["/a", "/b"]);
+    const hinweis = await screen.findByText("Mehrere Objekte abgelegt – übernommen wurde nur das erste.");
+    expect(hinweis).toHaveClass("feld-meldung", "warnung");
+    const feld = screen.getAllByLabelText("Ordner")[1];
+    expect(feld.closest(".feld")).toContainElement(hinweis);
+    expect(feld).toHaveValue("/a");
+  });
+});
+
 describe("Vorhandene Strecke", () => {
   it("lädt, Kennung bleibt fest, Speichern überschreibt", async () => {
     const a = rust();
@@ -248,6 +317,7 @@ describe("Vorhandene Strecke", () => {
     await waitFor(() => expect(speichernKnopf()).toBeEnabled());
     await userEvent.click(speichernKnopf());
     expect(await screen.findByText("Gespeichert.")).toBeInTheDocument();
+    expect(speichernKnopf().closest(".kopfbereich")).toContainElement(screen.getByText("Gespeichert."));
     const gesendet = (aufrufeVon(a, "strecke_speichern")[0].args as Args).strecke;
     expect(gesendet.name).toBe("Mailwerk Webseite neu");
     expect(aufrufeVon(a, "strecke_anlegen")).toHaveLength(0);

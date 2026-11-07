@@ -4,7 +4,7 @@ import userEvent from "@testing-library/user-event";
 
 import type { Endpunkt, Quelle, Stufe } from "../api";
 import { aufrufeVon, mitQuery, rustAttrappe, Zustand } from "../test/hilfen";
-import { AuswahlFeld, EndpunktFelder, PfadFeld, ProblemeKontext, QuelleFelder, TextFeld, ZielFelder } from "./Felder";
+import { AblageKontext, AuswahlFeld, EndpunktFelder, PfadFeld, ProblemeKontext, QuelleFelder, TextFeld, ZielFelder } from "./Felder";
 import { neueStufe } from "./modell";
 
 describe("Feld und Meldungen", () => {
@@ -67,6 +67,27 @@ describe("PfadFeld", () => {
     await userEvent.click(screen.getByRole("button", { name: "Wählen …" }));
     await waitFor(() => expect(a).toHaveLength(1));
     expect(f).not.toHaveBeenCalled();
+  });
+
+  it("Drag-and-drop: Felder sind Ablageziele und werden hervorgehoben", () => {
+    const rahmen = () => screen.getByLabelText("Ordner").parentElement!;
+    const mit = (aktiv: string | null, wartet: boolean) => (
+      <AblageKontext.Provider value={{ aktiv, wartet }}>
+        <PfadFeld label="Ordner" ort="stufen[0].ziel.pfad" wert="/alt" onChange={() => {}} />
+      </AblageKontext.Provider>
+    );
+    const { rerender } = render(mit(null, false));
+    expect(rahmen()).toHaveAttribute("data-drop-target", "stufen[0].ziel.pfad");
+    expect(rahmen().className).toBe("pfad");
+
+    rerender(mit(null, true));
+    expect(rahmen().className).toBe("pfad ablage-bereit");
+    rerender(mit("stufen[1].ziel.pfad", true));
+    expect(rahmen().className).toBe("pfad");
+    rerender(mit("stufen[0].ziel.pfad", true));
+    expect(rahmen().className).toBe("pfad ablage-aktiv");
+    expect(screen.getByLabelText("Ordner")).toHaveAttribute("placeholder", "Ordner hier ablegen …");
+    expect(screen.getByLabelText("Ordner")).toHaveValue("");
   });
 
   it("Pfad lässt sich auch tippen", async () => {

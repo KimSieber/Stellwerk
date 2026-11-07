@@ -12,8 +12,13 @@ use stellwerk_core::config::ConfigStore;
 use stellwerk_core::secrets::SpeicherTresor;
 use stellwerk_lib::{befehle, state::AppState};
 
-/// Beispielstrecke im JSON-Format, wie das Frontend sie sendet.
-fn strecke_json() -> Value {
+/// Beispielstrecke im JSON-Format, wie das Frontend sie sendet; die lokalen
+/// Ordner liegen unter `basis` und existieren.
+fn strecke_json(basis: &std::path::Path) -> Value {
+    let quelle = basis.join("daten/quelle");
+    let ziel = basis.join("daten/spiegel");
+    std::fs::create_dir_all(&quelle).unwrap();
+    std::fs::create_dir_all(&ziel).unwrap();
     json!({
         "id": "mailwerk-web",
         "name": "Mailwerk Webseite",
@@ -22,8 +27,8 @@ fn strecke_json() -> Value {
         "stufen": [
             {
                 "id": "spiegel", "name": "Entwicklung → Spiegel", "modus": "direkt",
-                "quelle": { "typ": "lokal", "pfad": "/Users/kim/Dropbox/Dev/GitHub/Mailwerk/Webseite" },
-                "ziel":   { "typ": "lokal", "pfad": "/Users/kim/Server/mailwerk" },
+                "quelle": { "typ": "lokal", "pfad": quelle },
+                "ziel":   { "typ": "lokal", "pfad": ziel },
                 "nur_online": "herunterladen"
             },
             {
@@ -85,7 +90,7 @@ fn leere_liste() {
 fn speichern_laden_liste_loeschen() {
     let a = app();
 
-    let warnungen = a.aufruf("strecke_speichern", json!({ "strecke": strecke_json() })).unwrap();
+    let warnungen = a.aufruf("strecke_speichern", json!({ "strecke": strecke_json(&a.wurzel) })).unwrap();
     assert_eq!(warnungen, json!([]));
     assert!(a.wurzel.join("strecken/mailwerk-web.toml").exists());
 
@@ -102,8 +107,8 @@ fn speichern_laden_liste_loeschen() {
             "name": "Mailwerk Webseite",
             "stufen": [
                 { "id": "spiegel", "name": "Entwicklung → Spiegel",
-                  "quelle": "/Users/kim/Dropbox/Dev/GitHub/Mailwerk/Webseite",
-                  "ziel": "/Users/kim/Server/mailwerk" },
+                  "quelle": a.wurzel.join("daten/quelle").display().to_string(),
+                  "ziel": a.wurzel.join("daten/spiegel").display().to_string() },
                 { "id": "server", "name": "Spiegel → Server",
                   "quelle": "Ziel von „spiegel“",
                   "ziel": "ftps://ftp.example.de/httpdocs" }
@@ -120,7 +125,7 @@ fn speichern_laden_liste_loeschen() {
 #[test]
 fn liste_zeigt_warnungen_alte_ftps_quellen_und_defekte_dateien() {
     let a = app();
-    let mut s = strecke_json();
+    let mut s = strecke_json(&a.wurzel);
     s["stufen"][1]["rechte"] = json!({ "modus": "fest", "dateien": "777" });
     let w = a.aufruf("strecke_speichern", json!({ "strecke": s })).unwrap();
     assert_eq!(w[0]["schwere"], "warnung");
@@ -155,7 +160,7 @@ ziel = { typ = "lokal", pfad = "/tmp/x" }
 #[test]
 fn pruefen_speichert_nichts() {
     let a = app();
-    let mut s = strecke_json();
+    let mut s = strecke_json(&a.wurzel);
     s["name"] = json!("");
     let p = a.aufruf("strecke_pruefen", json!({ "strecke": s })).unwrap();
     assert_eq!(p, json!([{ "schwere": "fehler", "ort": "name", "meldung": "Name fehlt" }]));
@@ -166,7 +171,7 @@ fn pruefen_speichert_nichts() {
 fn fehlerkategorien() {
     let a = app();
 
-    let mut s = strecke_json();
+    let mut s = strecke_json(&a.wurzel);
     s["stufen"][0]["ziel"]["pfad"] = json!("relativ");
     let e = a.aufruf("strecke_speichern", json!({ "strecke": s })).unwrap_err();
     assert_eq!(e["kategorie"], "validierung");
@@ -192,7 +197,12 @@ fn defekte_globale_konfiguration_wird_gemeldet() {
     std::fs::write(a.wurzel.join("config.toml"), "kaputt =").unwrap();
     assert_eq!(a.aufruf("strecken_liste", json!({})).unwrap_err()["kategorie"], "konfiguration");
     assert_eq!(
-        a.aufruf("strecke_pruefen", json!({ "strecke": strecke_json() })).unwrap_err()["kategorie"],
+        a.aufruf("strecke_pruefen", json!({ "strecke": strecke_json(&a.wurzel) })).unwrap_err()["kategorie"],
+        "konfiguration"
+    );
+
+    assert_eq!(
+        a.aufruf("strecke_anlegen", json!({ "strecke": strecke_json(&a.wurzel) })).unwrap_err()["kategorie"],
         "konfiguration"
     );
 
@@ -205,7 +215,7 @@ fn defekte_globale_konfiguration_wird_gemeldet() {
 fn ungueltiges_json_wird_abgewiesen() {
     // Klartext-FTP lässt sich auch über die Oberfläche nicht einschleusen.
     let a = app();
-    let mut s = strecke_json();
+    let mut s = strecke_json(&a.wurzel);
     s["stufen"][1]["ziel"]["tls"] = json!("keins");
     assert!(a.aufruf("strecke_speichern", json!({ "strecke": s })).is_err());
     assert!(!a.wurzel.join("strecken").exists());
@@ -214,8 +224,8 @@ fn ungueltiges_json_wird_abgewiesen() {
 #[test]
 fn anlegen_ueberschreibt_keine_vorhandene_strecke() {
     let a = app();
-    assert_eq!(a.aufruf("strecke_anlegen", json!({ "strecke": strecke_json() })).unwrap(), json!([]));
-    let mut zweite = strecke_json();
+    assert_eq!(a.aufruf("strecke_anlegen", json!({ "strecke": strecke_json(&a.wurzel) })).unwrap(), json!([]));
+    let mut zweite = strecke_json(&a.wurzel);
     zweite["name"] = json!("Andere");
     let e = a.aufruf("strecke_anlegen", json!({ "strecke": zweite })).unwrap_err();
     assert_eq!(e["kategorie"], "vorhanden");
@@ -244,7 +254,7 @@ fn passwort_wird_hinterlegt_aber_nie_zurueckgegeben() {
 #[test]
 fn loeschen_entfernt_auch_die_passwoerter() {
     let a = app();
-    a.aufruf("strecke_anlegen", json!({ "strecke": strecke_json() })).unwrap();
+    a.aufruf("strecke_anlegen", json!({ "strecke": strecke_json(&a.wurzel) })).unwrap();
     a.aufruf("passwort_speichern", json!({ "konto": "stellwerk:mailwerk-web:server", "passwort": "geheim" }))
         .unwrap();
     a.aufruf("strecke_loeschen", json!({ "id": "mailwerk-web" })).unwrap();
@@ -259,4 +269,40 @@ fn defekte_datei_laesst_sich_loeschen() {
     std::fs::write(a.wurzel.join("strecken/kaputt.toml"), "id = ").unwrap();
     assert_eq!(a.aufruf("strecke_loeschen", json!({ "id": "kaputt" })).unwrap(), Value::Null);
     assert!(!a.wurzel.join("strecken/kaputt.toml").exists());
+}
+
+#[test]
+fn ist_ordner_fuer_drag_and_drop() {
+    let a = app();
+    let ordner = a.wurzel.display().to_string();
+    std::fs::write(a.wurzel.join("datei.txt"), "x").unwrap();
+    let datei = a.wurzel.join("datei.txt").display().to_string();
+    assert_eq!(a.aufruf("ist_ordner", json!({ "pfad": ordner })).unwrap(), json!(true));
+    assert_eq!(a.aufruf("ist_ordner", json!({ "pfad": datei })).unwrap(), json!(false));
+    assert_eq!(a.aufruf("ist_ordner", json!({ "pfad": "/gibt/es/nicht" })).unwrap(), json!(false));
+}
+
+#[test]
+fn fehlende_ordner_werden_gemeldet_und_verhindern_das_speichern() {
+    let a = app();
+    let mut s = strecke_json(&a.wurzel);
+    s["stufen"][0]["ziel"]["pfad"] = json!(a.wurzel.join("gibt-es-nicht"));
+
+    // Schon beim Prüfen sichtbar
+    let p = a.aufruf("strecke_pruefen", json!({ "strecke": s })).unwrap();
+    assert_eq!(p, json!([{ "schwere": "fehler", "ort": "stufen[0].ziel.pfad", "meldung": "Ordner existiert nicht" }]));
+
+    // Anlegen und Speichern lehnen ab, nichts wird geschrieben
+    for befehl in ["strecke_anlegen", "strecke_speichern"] {
+        let e = a.aufruf(befehl, json!({ "strecke": s })).unwrap_err();
+        assert_eq!(e["kategorie"], "validierung", "{befehl}");
+        assert_eq!(e["probleme"][0]["ort"], "stufen[0].ziel.pfad");
+    }
+    assert!(!a.wurzel.join("strecken/mailwerk-web.toml").exists());
+
+    // Startseite zeigt es ebenfalls, z. B. wenn ein Ordner später verschwindet
+    a.aufruf("strecke_anlegen", json!({ "strecke": strecke_json(&a.wurzel) })).unwrap();
+    std::fs::remove_dir(a.wurzel.join("daten/spiegel")).unwrap();
+    let liste = a.aufruf("strecken_liste", json!({})).unwrap();
+    assert_eq!(liste[0]["probleme"][0]["meldung"], "Ordner existiert nicht");
 }

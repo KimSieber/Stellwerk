@@ -6,7 +6,7 @@ mod validate;
 
 pub use global::{Ausfuehrung, GlobalConfig, GlobaleRegeln};
 pub use store::{ConfigStore, StreckeEintrag, APP_ID};
-pub use validate::{effektive_quelle, validiere_strecke, Problem, Schwere};
+pub use validate::{effektive_quelle, pruefe_ordner, validiere_strecke, Problem, Schwere};
 
 use std::path::Path;
 

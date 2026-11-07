@@ -3,7 +3,7 @@
 use serde::Serialize;
 use tauri::State;
 
-use stellwerk_core::config::{validiere_strecke, Problem};
+use stellwerk_core::config::{pruefe_ordner, validiere_strecke, GlobalConfig, Problem};
 use stellwerk_core::secrets::konten_der_strecke;
 use stellwerk_core::model::{Endpunkt, Quelle, Strecke};
 use stellwerk_core::StellwerkError;
@@ -32,6 +32,22 @@ impl From<StellwerkError> for BefehlsFehler {
 }
 
 type Antwort<T> = Result<T, BefehlsFehler>;
+
+/// Konfigurationsprüfung und Prüfung der lokalen Ordner zusammen.
+fn alle_probleme(s: &Strecke, global: &GlobalConfig) -> Vec<Problem> {
+    let mut p = validiere_strecke(s, global);
+    p.extend(pruefe_ordner(s));
+    p
+}
+
+/// Vor dem Schreiben: Fehler (auch fehlende Ordner) verhindern das Speichern.
+fn speicherbar(state: &AppState, s: &Strecke) -> Result<(), StellwerkError> {
+    let p = alle_probleme(s, &state.store.global_laden()?);
+    if p.iter().any(Problem::ist_fehler) {
+        return Err(StellwerkError::Validierung(p));
+    }
+    Ok(())
+}
 
 #[derive(Debug, Serialize)]
 pub struct StufeKurz {
@@ -91,7 +107,7 @@ pub fn strecken_liste(state: State<'_, AppState>) -> Antwort<Vec<StreckeUebersic
                         ziel: ziel_kurz(&st.ziel),
                     })
                     .collect(),
-                probleme: validiere_strecke(&s, &global),
+                probleme: alle_probleme(&s, &global),
                 fehler: None,
             },
             Err(err) => StreckeUebersicht {
@@ -113,18 +129,20 @@ pub fn strecke_laden(state: State<'_, AppState>, id: String) -> Antwort<Strecke>
 #[tauri::command]
 pub fn strecke_pruefen(state: State<'_, AppState>, strecke: Strecke) -> Antwort<Vec<Problem>> {
     let global = state.store.global_laden()?;
-    Ok(validiere_strecke(&strecke, &global))
+    Ok(alle_probleme(&strecke, &global))
 }
 
 /// Legt eine neue Strecke an; eine vorhandene Kennung wird nie überschrieben.
 #[tauri::command]
 pub fn strecke_anlegen(state: State<'_, AppState>, strecke: Strecke) -> Antwort<Vec<Problem>> {
+    speicherbar(&state, &strecke)?;
     Ok(state.store.strecke_anlegen(&strecke)?)
 }
 
 /// Speichert und liefert verbleibende Warnungen.
 #[tauri::command]
 pub fn strecke_speichern(state: State<'_, AppState>, strecke: Strecke) -> Antwort<Vec<Problem>> {
+    speicherbar(&state, &strecke)?;
     Ok(state.store.strecke_speichern(&strecke)?)
 }
 
@@ -138,6 +156,13 @@ pub fn strecke_loeschen(state: State<'_, AppState>, id: String) -> Antwort<()> {
         state.tresor.entfernen(&konto)?;
     }
     Ok(())
+}
+
+/// Ob ein (z. B. per Drag-and-drop abgelegter) Pfad ein vorhandener Ordner ist.
+/// Liest nur die Dateiart, nichts sonst.
+#[tauri::command]
+pub fn ist_ordner(pfad: String) -> bool {
+    std::path::Path::new(&pfad).is_dir()
 }
 
 /// Legt ein Passwort im Schlüsselbund ab. Es wird nie zurückgegeben.

@@ -108,6 +108,7 @@ export const api = {
   streckeAnlegen: (strecke: Strecke) => invoke<Problem[]>("strecke_anlegen", { strecke }),
   streckeSpeichern: (strecke: Strecke) => invoke<Problem[]>("strecke_speichern", { strecke }),
   streckeLoeschen: (id: string) => invoke<void>("strecke_loeschen", { id }),
+  istOrdner: (pfad: string) => invoke<boolean>("ist_ordner", { pfad }),
   /** Passwort in den Schlüsselbund – es kommt nie zurück. */
   passwortSpeichern: (konto: string, passwort: string) => invoke<void>("passwort_speichern", { konto, passwort }),
   passwortVorhanden: (konto: string) => invoke<boolean>("passwort_vorhanden", { konto }),

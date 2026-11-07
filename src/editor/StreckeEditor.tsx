@@ -6,8 +6,9 @@ import { useState } from "react";
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { api, fehlerText, type BefehlsFehler, type Problem, type Strecke } from "../api";
-import { ProblemeKontext, TextFeld } from "./Felder";
-import { hatFehler, kennungAus, kontenAngleichen, neueStrecke, neueStufe } from "./modell";
+import { useOrdnerAblage } from "../hooks/useOrdnerAblage";
+import { AblageKontext, ProblemeKontext, TextFeld, type AblageMeldung } from "./Felder";
+import { hatFehler, kennungAus, kontenAngleichen, neueStrecke, neueStufe, ortLesbar, pfadSetzen } from "./modell";
 import { RegelListe } from "./RegelListe";
 import { StufeEditor } from "./StufeEditor";
 
@@ -48,6 +49,21 @@ function Bearbeiten(props: Props & { start: Strecke; neu: boolean }) {
   const [kennungVonHand, setKennungVonHand] = useState(false);
   const [rueckfrage, setRueckfrage] = useState<"verwerfen" | "loeschen" | null>(null);
   const [meldung, setMeldung] = useState<string | null>(null);
+  const [ablageMeldung, setAblageMeldung] = useState<AblageMeldung | null>(null);
+
+  // Ordner aus dem Finder auf ein Ordnerfeld ziehen
+  const ablage = useOrdnerAblage(async (ort, pfad, mehrere) => {
+    if (!(await api.istOrdner(pfad))) {
+      setAblageMeldung({ ort, text: `„${pfad}“ ist kein Ordner – bitte einen Ordner ablegen.`, fehler: true });
+      return;
+    }
+    setAblageMeldung(
+      mehrere ? { ort, text: "Mehrere Objekte abgelegt – übernommen wurde nur das erste.", fehler: false } : null,
+    );
+    setS((alt) => kontenAngleichen(pfadSetzen(alt, ort, pfad)));
+    setGeaendert(true);
+    setMeldung(null);
+  });
 
   // Vorherige Meldungen bleiben stehen, bis die neue Prüfung da ist (kein Flackern).
   const pruefung = useQuery({
@@ -68,7 +84,9 @@ function Bearbeiten(props: Props & { start: Strecke; neu: boolean }) {
     setS(kontenAngleichen(neu));
     setGeaendert(true);
     setMeldung(null);
+    setAblageMeldung(null);
     setRueckfrage(null);
+    speichern.reset(); // alte Fehlermeldung des Speicherns passt nicht mehr
   }
 
   const speichern = useMutation({
@@ -102,111 +120,120 @@ function Bearbeiten(props: Props & { start: Strecke; neu: boolean }) {
 
   return (
     <ProblemeKontext.Provider value={probleme}>
-      <section className="editor">
-        <div className="leiste">
-          <button onClick={() => (geaendert ? setRueckfrage("verwerfen") : props.onSchliessen())}>← Strecken</button>
-          <h2>{props.neu ? "Neue Strecke" : s.name || s.id}</h2>
-          <button className="primaer" onClick={() => speichern.mutate()} disabled={fehler || pruefung.isFetching || pruefung.isError || speichern.isPending}>
-            Speichern
-          </button>
-        </div>
+      <AblageKontext.Provider value={{ ...ablage, meldung: ablageMeldung }}>
+        <section className="editor">
+          {/* Bleibt beim Scrollen oben: Knöpfe und die Meldungen zu ihrer Bedienung */}
+          <div className="kopfbereich">
+            <div className="leiste">
+              <button onClick={() => (geaendert ? setRueckfrage("verwerfen") : props.onSchliessen())}>
+                ← Strecken
+              </button>
+              <h2>{props.neu ? "Neue Strecke" : s.name || s.id}</h2>
+              <button
+                className="primaer"
+                onClick={() => speichern.mutate()}
+                disabled={fehler || pruefung.isFetching || pruefung.isError || speichern.isPending}
+              >
+                Speichern
+              </button>
+            </div>
 
-        {rueckfrage === "verwerfen" && (
-          <div className="rueckfrage" role="alert">
-            Ungespeicherte Änderungen verwerfen?
-            <button onClick={props.onSchliessen}>Verwerfen</button>
-            <button onClick={() => setRueckfrage(null)}>Weiter bearbeiten</button>
+            {rueckfrage === "verwerfen" && (
+              <div className="rueckfrage" role="alert">
+                Ungespeicherte Änderungen verwerfen?
+                <button onClick={props.onSchliessen}>Verwerfen</button>
+                <button onClick={() => setRueckfrage(null)}>Weiter bearbeiten</button>
+              </div>
+            )}
+            {meldung && <p className="meldung ok">{meldung}</p>}
+            {fehlerSpeichern && <p className="meldung fehler">{fehlerText(fehlerSpeichern)}</p>}
+            {pruefung.isError && <p className="meldung fehler">Eingabe ungültig: {fehlerText(pruefung.error)}</p>}
           </div>
-        )}
-        {meldung && <p className="meldung ok">{meldung}</p>}
-        {fehlerSpeichern && <p className="meldung fehler">{fehlerText(fehlerSpeichern)}</p>}
-        {pruefung.isError && <p className="meldung fehler">Eingabe ungültig: {fehlerText(pruefung.error)}</p>}
-        <Uebersicht probleme={probleme} />
+          <Uebersicht probleme={probleme} strecke={s} />
 
-        <fieldset>
-          <legend>Strecke</legend>
-          <div className="raster">
-            <TextFeld
-              label="Name"
-              ort="name"
-              wert={s.name}
-              platzhalter="z. B. Mailwerk Webseite"
-              onChange={(name) =>
-                aendern({ ...s, name, id: props.neu && !kennungVonHand ? kennungAus(name) : s.id })
-              }
-            />
-            <TextFeld
-              label="Kennung"
-              ort="id"
-              wert={s.id}
-              nurLesen={!props.neu}
-              onChange={(id) => {
-                setKennungVonHand(true);
-                aendern({ ...s, id });
+          <fieldset>
+            <legend>Strecke</legend>
+            <div className="raster">
+              <TextFeld
+                label="Name"
+                ort="name"
+                wert={s.name}
+                platzhalter="z. B. Mailwerk Webseite"
+                onChange={(name) => aendern({ ...s, name, id: props.neu && !kennungVonHand ? kennungAus(name) : s.id })}
+              />
+              <TextFeld
+                label="Kennung"
+                ort="id"
+                wert={s.id}
+                nurLesen={!props.neu}
+                onChange={(id) => {
+                  setKennungVonHand(true);
+                  aendern({ ...s, id });
+                }}
+              />
+            </div>
+            {!props.neu && <p className="hinweis">Die Kennung ist der Dateiname und bleibt fest.</p>}
+          </fieldset>
+
+          <RegelListe
+            titel="Eigene Regeln der Strecke (für alle Stufen)"
+            regeln={s.regeln?.eigene ?? []}
+            ort="regeln.eigene"
+            onChange={(eigene) => aendern({ ...s, regeln: { ...s.regeln, eigene } })}
+          />
+
+          <h2>Stufen</h2>
+          {s.stufen.map((st, i) => (
+            <StufeEditor
+              key={i}
+              stufe={st}
+              index={i}
+              vorstufen={s.stufen.slice(0, i)}
+              streckeId={s.id}
+              onChange={(neu) => aendern({ ...s, stufen: s.stufen.map((x, k) => (k === i ? neu : x)) })}
+              onEntfernen={() => {
+                setPasswoerter(passwoerter.filter((_, k) => k !== i));
+                aendern({ ...s, stufen: s.stufen.filter((_, k) => k !== i) });
+              }}
+              passwort={passwoerter[i]}
+              onPasswort={(p) => {
+                setPasswoerter(passwoerter.map((x, k) => (k === i ? p : x)));
+                setGeaendert(true);
               }}
             />
-          </div>
-          {!props.neu && <p className="hinweis">Die Kennung ist der Dateiname und bleibt fest.</p>}
-        </fieldset>
-
-        <RegelListe
-          titel="Eigene Regeln der Strecke (für alle Stufen)"
-          regeln={s.regeln?.eigene ?? []}
-          ort="regeln.eigene"
-          onChange={(eigene) => aendern({ ...s, regeln: { ...s.regeln, eigene } })}
-        />
-
-        <h2>Stufen</h2>
-        {s.stufen.map((st, i) => (
-          <StufeEditor
-            key={i}
-            stufe={st}
-            index={i}
-            vorstufen={s.stufen.slice(0, i)}
-            streckeId={s.id}
-            onChange={(neu) => aendern({ ...s, stufen: s.stufen.map((x, k) => (k === i ? neu : x)) })}
-            onEntfernen={() => {
-              setPasswoerter(passwoerter.filter((_, k) => k !== i));
-              aendern({ ...s, stufen: s.stufen.filter((_, k) => k !== i) });
+          ))}
+          <button
+            onClick={() => {
+              setPasswoerter([...passwoerter, ""]);
+              aendern({ ...s, stufen: [...s.stufen, neueStufe(s)] });
             }}
-            passwort={passwoerter[i]}
-            onPasswort={(p) => {
-              setPasswoerter(passwoerter.map((x, k) => (k === i ? p : x)));
-              setGeaendert(true);
-            }}
-          />
-        ))}
-        <button
-          onClick={() => {
-            setPasswoerter([...passwoerter, ""]);
-            aendern({ ...s, stufen: [...s.stufen, neueStufe(s)] });
-          }}
-        >
-          + Stufe
-        </button>
+          >
+            + Stufe
+          </button>
 
-        {!props.neu && (
-          <fieldset className="gefahr">
-            <legend>Strecke löschen</legend>
-            {rueckfrage === "loeschen" ? (
-              <div className="rueckfrage" role="alert">
-                „{s.name}“ wirklich löschen? Nur die Konfiguration wird entfernt – keine Dateien.
-                <button onClick={() => loeschen.mutate()}>Endgültig löschen</button>
-                <button onClick={() => setRueckfrage(null)}>Abbrechen</button>
-              </div>
-            ) : (
-              <button onClick={() => setRueckfrage("loeschen")}>Strecke löschen …</button>
-            )}
-            {loeschen.isError && <p className="meldung fehler">{fehlerText(loeschen.error)}</p>}
-          </fieldset>
-        )}
-      </section>
+          {!props.neu && (
+            <fieldset className="gefahr">
+              <legend>Strecke löschen</legend>
+              {rueckfrage === "loeschen" ? (
+                <div className="rueckfrage" role="alert">
+                  „{s.name}“ wirklich löschen? Nur die Konfiguration wird entfernt – keine Dateien.
+                  <button onClick={() => loeschen.mutate()}>Endgültig löschen</button>
+                  <button onClick={() => setRueckfrage(null)}>Abbrechen</button>
+                </div>
+              ) : (
+                <button onClick={() => setRueckfrage("loeschen")}>Strecke löschen …</button>
+              )}
+              {loeschen.isError && <p className="meldung fehler">{fehlerText(loeschen.error)}</p>}
+            </fieldset>
+          )}
+        </section>
+      </AblageKontext.Provider>
     </ProblemeKontext.Provider>
   );
 }
 
 /** Zusammenfassung aller Meldungen oben im Editor. */
-function Uebersicht({ probleme }: { probleme: Problem[] }) {
+function Uebersicht({ probleme, strecke }: { probleme: Problem[]; strecke: Strecke }) {
   if (probleme.length === 0) return null;
   const anzahl = probleme.filter((p) => p.schwere === "fehler").length;
   return (
@@ -216,8 +243,8 @@ function Uebersicht({ probleme }: { probleme: Problem[] }) {
       </strong>
       <ul className="probleme">
         {probleme.map((p, i) => (
-          <li key={i} className={p.schwere}>
-            <code>{p.ort}</code> {p.meldung}
+          <li key={i} className={p.schwere} title={p.ort}>
+            <span className="ort">{ortLesbar(p.ort, strecke)}:</span> {p.meldung}
           </li>
         ))}
       </ul>

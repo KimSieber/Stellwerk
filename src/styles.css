@@ -99,7 +99,9 @@ button.link { border: none; background: none; color: var(--blau); padding: 2px; 
 
 /* --- Editor ------------------------------------------------------------- */
 .editor { display: grid; gap: 16px; max-width: 1100px; }
-.editor .leiste { position: sticky; top: 0; z-index: 1; background: var(--hg); padding: 8px 0; }
+.editor .kopfbereich { position: sticky; top: 0; z-index: 1; background: var(--hg); padding: 8px 0; display: grid; gap: 6px; }
+.editor .kopfbereich .leiste { margin-bottom: 0; }
+.editor .kopfbereich p { margin: 0; }
 .editor .leiste h2 { flex: 1; margin: 0 12px; }
 fieldset { border: 1px solid var(--rand); border-radius: 10px; background: var(--flaeche); padding: 12px 16px; margin: 0; }
 legend { font-weight: 600; padding: 0 6px; }
@@ -115,7 +117,9 @@ legend { font-weight: 600; padding: 0 6px; }
 .feld-meldung { font-size: 12px; padding-left: 8px; border-left: 3px solid; }
 .feld-meldung.fehler { border-color: var(--loeschen); color: var(--loeschen); }
 .feld-meldung.warnung { border-color: var(--geaendert); }
-.pfad { display: flex; gap: 6px; }
+.pfad { display: flex; gap: 6px; border: 2px solid transparent; border-radius: 8px; padding: 2px; transition: background .15s; }
+.pfad.ablage-bereit { border: 2px dashed var(--rand); }
+.pfad.ablage-aktiv { border: 2px dashed var(--signal); background: rgba(47, 191, 113, .12); }
 .pfad input { flex: 1; }
 .ftps { display: grid; gap: 8px; }
 
@@ -144,3 +148,4 @@ legend { font-weight: 600; padding: 0 6px; }
 .ueber-icon { width: 96px; height: 96px; }
 .ueber p { margin: 0; }
 .ueber .schliessen { margin-top: 14px; }
+.probleme .ort { color: var(--text-leise); }

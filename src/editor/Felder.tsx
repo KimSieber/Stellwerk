@@ -7,11 +7,21 @@ import { api, type Endpunkt, type Problem, type Quelle, type Stufe } from "../ap
 import { system } from "../system";
 import { endpunktVom, problemeAn, quelleVom } from "./modell";
 
+/** Meldung zu einer Ablage (z. B. „ist kein Ordner“), angezeigt direkt am Feld. */
+export type AblageMeldung = { ort: string; text: string; fehler: boolean };
+
+/** Zustand eines laufenden Drag-and-drop aus dem Finder (siehe useOrdnerAblage). */
+export const AblageKontext = createContext<{ aktiv: string | null; wartet: boolean; meldung?: AblageMeldung | null }>({
+  aktiv: null,
+  wartet: false,
+});
+
 /** Alle aktuellen Prüfmeldungen; jedes Feld zeigt die zu seinem Ort. */
 export const ProblemeKontext = createContext<Problem[]>([]);
 
 /** Beschriftetes Feld; `kind` erhält die Kennung für `id`/`htmlFor`. */
-export function Feld({ label, ort, kind }: { label: string; ort: string; kind: (id: string) => ReactNode }) {
+export function Feld(props: { label: string; ort: string; kind: (id: string) => ReactNode; nachher?: ReactNode }) {
+  const { label, ort, kind } = props;
   const id = useId();
   const probleme = problemeAn(useContext(ProblemeKontext), ort);
   return (
@@ -23,6 +33,7 @@ export function Feld({ label, ort, kind }: { label: string; ort: string; kind: (
           {p.meldung}
         </span>
       ))}
+      {props.nachher}
     </div>
   );
 }
@@ -76,8 +87,12 @@ export function AuswahlFeld<T extends string>(props: {
   );
 }
 
-/** Lokaler Pfad mit Auswahldialog. */
+/** Lokaler Pfad mit Auswahldialog; nimmt Ordner per Drag-and-drop aus dem Finder an. */
 export function PfadFeld(props: { label: string; ort: string; wert: string; onChange: (w: string) => void }) {
+  const ablage = useContext(AblageKontext);
+  const hier = ablage.aktiv === props.ort;
+  const meldung = ablage.meldung?.ort === props.ort ? ablage.meldung : null;
+  const klasse = hier ? "pfad ablage-aktiv" : ablage.wartet && ablage.aktiv === null ? "pfad ablage-bereit" : "pfad";
   async function waehlen() {
     const pfad = await system.ordnerWaehlen(props.wert);
     if (pfad) props.onChange(pfad);
@@ -87,13 +102,21 @@ export function PfadFeld(props: { label: string; ort: string; wert: string; onCh
       label={props.label}
       ort={props.ort}
       kind={(id) => (
-        <div className="pfad">
-          <input id={id} value={props.wert} placeholder="/Users/…" onChange={(e) => props.onChange(e.target.value)} />
+        <div className={klasse} data-drop-target={props.ort}>
+          <input
+            id={id}
+            value={hier ? "" : props.wert}
+            placeholder={hier ? "Ordner hier ablegen …" : "/Users/… oder Ordner aus dem Finder hierher ziehen"}
+            onChange={(e) => props.onChange(e.target.value)}
+          />
           <button type="button" onClick={waehlen}>
             Wählen …
           </button>
         </div>
       )}
+      nachher={
+        meldung && <span className={`feld-meldung ${meldung.fehler ? "fehler" : "warnung"}`}>{meldung.text}</span>
+      }
     />
   );
 }
@@ -110,12 +133,20 @@ export function EndpunktFelder(props: {
 }) {
   const { wert, ort, onChange } = props;
   if (wert.typ === "lokal") {
-    return <PfadFeld label="Ordner" ort={`${ort}.pfad`} wert={wert.pfad} onChange={(pfad) => onChange({ ...wert, pfad })} />;
+    return (
+      <PfadFeld label="Ordner" ort={`${ort}.pfad`} wert={wert.pfad} onChange={(pfad) => onChange({ ...wert, pfad })} />
+    );
   }
   const setze = (teil: Partial<Endpunkt & { typ: "ftps" }>) => onChange({ ...wert, ...teil });
   return (
     <div className="ftps">
-      <TextFeld label="Server" ort={`${ort}.host`} wert={wert.host} platzhalter="ftp.example.de" onChange={(host) => setze({ host })} />
+      <TextFeld
+        label="Server"
+        ort={`${ort}.host`}
+        wert={wert.host}
+        platzhalter="ftp.example.de"
+        onChange={(host) => setze({ host })}
+      />
       <TextFeld
         label="Port"
         ort={`${ort}.port`}
@@ -123,7 +154,12 @@ export function EndpunktFelder(props: {
         onChange={(p) => setze({ port: Number.parseInt(p, 10) || 0 })}
       />
       <TextFeld label="Serverpfad" ort={`${ort}.pfad`} wert={wert.pfad} onChange={(pfad) => setze({ pfad })} />
-      <TextFeld label="Benutzer" ort={`${ort}.benutzer`} wert={wert.benutzer} onChange={(benutzer) => setze({ benutzer })} />
+      <TextFeld
+        label="Benutzer"
+        ort={`${ort}.benutzer`}
+        wert={wert.benutzer}
+        onChange={(benutzer) => setze({ benutzer })}
+      />
       {props.passwort && <PasswortFeld konto={wert.konto_ref} ort={`${ort}.passwort`} {...props.passwort} />}
       <p className="hinweis">Verbindung immer verschlüsselt (FTP mit explizitem TLS).</p>
     </div>
@@ -136,7 +172,10 @@ export function EndpunktFelder(props: {
  * selbst kommt nie aus Rust zurück.
  */
 export function PasswortFeld(props: { konto: string; ort: string } & PasswortEingabe) {
-  const vorhanden = useQuery({ queryKey: ["passwort", props.konto], queryFn: () => api.passwortVorhanden(props.konto) });
+  const vorhanden = useQuery({
+    queryKey: ["passwort", props.konto],
+    queryFn: () => api.passwortVorhanden(props.konto),
+  });
   const [aendern, setAendern] = useState(false);
   if (vorhanden.data && !aendern) {
     return (

@@ -166,6 +166,32 @@ pub fn validiere_strecke(s: &Strecke, global: &GlobalConfig) -> Vec<Problem> {
     p
 }
 
+/// Prüft, ob die lokalen Ordner einer Strecke vorhanden sind (liest nur die Dateiart).
+/// Leere oder relative Pfade meldet bereits [`validiere_strecke`]; sie werden hier übergangen.
+pub fn pruefe_ordner(s: &Strecke) -> Vec<Problem> {
+    let mut p = Vec::new();
+    for (i, st) in s.stufen.iter().enumerate() {
+        let quelle = match &st.quelle {
+            Quelle::Lokal { pfad } => Some(pfad),
+            _ => None,
+        };
+        let ziel = match &st.ziel {
+            Endpunkt::Lokal { pfad } => Some(pfad),
+            Endpunkt::Ftps(_) => None,
+        };
+        for (seite, pfad) in [("quelle", quelle), ("ziel", ziel)] {
+            let Some(pfad) = pfad.filter(|p| p.is_absolute()) else { continue };
+            let meldung = match std::fs::metadata(pfad) {
+                Ok(m) if m.is_dir() => continue,
+                Ok(_) => "Kein Ordner, sondern eine Datei",
+                Err(_) => "Ordner existiert nicht",
+            };
+            p.push(Problem::fehler(format!("stufen[{i}].{seite}.pfad"), meldung));
+        }
+    }
+    p
+}
+
 /// Löst `Quelle::Stufe` zum Ziel der referenzierten Stufe auf. Da ein Ziel nie
 /// selbst auf eine Stufe verweist, genügt ein Schritt (keine Zyklen möglich).
 /// `None`, wenn die referenzierte Stufe nicht existiert.

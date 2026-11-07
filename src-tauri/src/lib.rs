@@ -22,6 +22,7 @@ pub fn befehle<R: Runtime>(builder: tauri::Builder<R>) -> tauri::Builder<R> {
         commands::strecke_anlegen,
         commands::strecke_speichern,
         commands::strecke_loeschen,
+        commands::ist_ordner,
         commands::passwort_speichern,
         commands::passwort_vorhanden,
         commands::passwort_entfernen,

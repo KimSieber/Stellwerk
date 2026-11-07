@@ -7,6 +7,8 @@ import {
   hatFehler,
   kennungAus,
   kontenAngleichen,
+  ortLesbar,
+  pfadSetzen,
   kontoRef,
   neueRegel,
   neueStrecke,
@@ -105,5 +107,55 @@ describe("Prüfmeldungen", () => {
   it("hatFehler", () => {
     expect(hatFehler(p)).toBe(true);
     expect(hatFehler([p[1]])).toBe(false);
+  });
+});
+
+describe("pfadSetzen (Ablage per Drag-and-drop)", () => {
+  const s: Strecke = {
+    id: "s",
+    name: "S",
+    version: 1,
+    stufen: [
+      { ...neueStufe({ id: "", name: "", version: 1, stufen: [] }), ziel: endpunktVom("ftps", "k") },
+    ],
+  };
+  it("setzt Quelle oder Ziel einer Stufe", () => {
+    expect(pfadSetzen(s, "stufen[0].quelle.pfad", "/a").stufen[0].quelle).toEqual({ typ: "lokal", pfad: "/a" });
+  });
+  it("ignoriert FTPS-Ziele, fremde Orte und fehlende Stufen", () => {
+    expect(pfadSetzen(s, "stufen[0].ziel.pfad", "/a")).toBe(s);
+    expect(pfadSetzen(s, "name", "/a")).toBe(s);
+    expect(pfadSetzen(s, "stufen[5].quelle.pfad", "/a")).toBe(s);
+  });
+});
+
+describe("ortLesbar", () => {
+  const basis = neueStufe({ id: "", name: "", version: 1, stufen: [] });
+  const s = {
+    id: "s",
+    name: "S",
+    version: 1,
+    stufen: [{ ...basis, name: "Server" }, { ...basis, name: "", ziel: endpunktVom("ftps", "k") }],
+  };
+  it.each([
+    ["name", "Name"],
+    ["id", "Kennung"],
+    ["stufen", "Stufe"],
+    ["stufen[0].ziel.pfad", "Stufe 1 „Server“ › Ziel › Ordner"],
+    ["stufen[0].quelle.pfad", "Stufe 1 „Server“ › Quelle › Ordner"],
+    ["stufen[1].ziel.pfad", "Stufe 2 › Ziel › Serverpfad"],
+    ["stufen[5].ziel.pfad", "Stufe 6 › Ziel › Pfad"],
+    ["stufen[3].quelle.typ", "Stufe 4 › Quelle › Art"],
+    ["stufen[0].regeln.eigene[2].muster", "Stufe 1 „Server“ › Regeln › Regel 3 › Muster"],
+    ["regeln.eigene[0].quelle", "Regeln der Strecke › Regel 1 › Quelle"],
+    ["regeln.standard_aus[1]", "Regeln der Strecke › Abschaltung 2"],
+    ["stufen[0].rechte.regeln[0].muster", "Stufe 1 „Server“ › Dateirechte › Regeln 1 › Muster"],
+    ["unbekannt.feld", "unbekannt › feld"],
+  ])("%s → %s", (ort, text) => {
+    expect(ortLesbar(ort, s as Strecke)).toBe(text);
+  });
+  it("ohne Strecke nur mit Nummer", () => {
+    expect(ortLesbar("stufen[0].name")).toBe("Stufe 1 › Name");
+    expect(ortLesbar("stufen[0].ziel.pfad")).toBe("Stufe 1 › Ziel › Pfad");
   });
 });
