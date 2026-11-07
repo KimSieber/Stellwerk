@@ -81,17 +81,35 @@ describe("Vergleichsansicht – Ablauf", () => {
     expect(aufrufeVon(aufrufe, "vergleich_starten")).toHaveLength(3);
   });
 
-  it("Zurück nach dem Vergleich gibt ihn in Rust frei", async () => {
+  it("Zurück nach dem Vergleich gibt den Stand zurück – freigeben ist Sache der Streckenansicht", async () => {
     const aufrufe = rust();
     const zurueck = vi.fn();
     ansicht(zurueck);
     await screen.findByText("/Users/kim/Dev/web");
     await userEvent.click(screen.getByRole("button", { name: "← Zurück" }));
-    expect(zurueck).toHaveBeenCalled();
-    expect(aufrufeVon(aufrufe, "vergleich_schliessen")).toEqual([
-      { cmd: "vergleich_schliessen", args: { vergleichId: "web/spiegel#1" } },
-    ]);
+    expect(zurueck).toHaveBeenCalledWith(start(), false);
+    expect(aufrufeVon(aufrufe, "vergleich_schliessen")).toHaveLength(0);
     expect(aufrufeVon(aufrufe, "vergleich_abbrechen")).toHaveLength(0);
+  });
+
+  it("mit fertigem Ergebnis wird beim Öffnen nicht verglichen – auch nicht im StrictMode", async () => {
+    const aufrufe = rust();
+    const zurueck = vi.fn();
+    const fertig = start({ vergleich_id: "web/spiegel#7", quelle: "/schon/da" });
+    render(
+      <StrictMode>
+        <VergleichAnsicht strecke="web" stufe="spiegel" titel="Web" start={fertig} onZurueck={zurueck} />
+      </StrictMode>,
+    );
+    expect(screen.getByText("/schon/da")).toBeInTheDocument();
+    expect(await screen.findByRole("checkbox", { name: "bilder/a.png übertragen" })).toBeInTheDocument();
+    expect(aufrufeVon(aufrufe, "vergleich_starten")).toHaveLength(0);
+    expect(aufrufeVon(aufrufe, "diff_seite")[0].args).toMatchObject({ vergleichId: "web/spiegel#7" });
+    await userEvent.click(screen.getByRole("button", { name: "Neu vergleichen" }));
+    await screen.findByText("/Users/kim/Dev/web");
+    expect(aufrufeVon(aufrufe, "vergleich_starten")).toHaveLength(1);
+    await userEvent.click(screen.getByRole("button", { name: "← Zurück" }));
+    expect(zurueck).toHaveBeenCalledWith(start(), false);
   });
 
   it("Zurück während des Vergleichs bricht ihn ab", async () => {
@@ -99,7 +117,7 @@ describe("Vergleichsansicht – Ablauf", () => {
     const zurueck = vi.fn();
     ansicht(zurueck);
     await userEvent.click(screen.getByRole("button", { name: "← Zurück" }));
-    expect(zurueck).toHaveBeenCalled();
+    expect(zurueck).toHaveBeenCalledWith(null, false);
     expect(aufrufeVon(aufrufe, "vergleich_abbrechen")).toEqual([
       { cmd: "vergleich_abbrechen", args: { strecke: "web", stufe: "spiegel" } },
     ]);
@@ -482,5 +500,46 @@ describe("Vergleichsansicht – Regel setzen per Rechtsklick", () => {
     await klick("Ignorieren");
     await waitFor(() => expect(screen.queryByText(/Regel nicht gespeichert/)).toBeNull());
     await waitFor(() => expect(aufrufeVon(aufrufe, "vergleich_starten")).toHaveLength(2));
+  });
+});
+
+describe("Vergleichsansicht – Übertragen", () => {
+  const vorschau = {
+    zusammenfassung: { ordner_anlegen: 0, kopieren: 1, ueberschreiben: 0, rechte: 0, dateien_loeschen: 0, ordner_loeschen: 0, bytes: 1500 },
+    loeschliste: [],
+    warnungen: [],
+    quelle: "/q",
+    ziel: "/z",
+    worker: 4,
+  };
+  const ergebnis = { erledigt: 1, fehler: [], uebersprungen: 0, abgebrochen: false, gestoppt: false, bytes: 1500, journal_fehler: null };
+
+  it("öffnet den Dialog erst nach dem Vergleich; Abbrechen schließt ohne Übertragung", async () => {
+    const aufrufe = rust({ plan_erstellen: () => vorschau });
+    ansicht();
+    expect(screen.getByRole("button", { name: "Übertragen …" })).toBeDisabled();
+    await screen.findByText("/Users/kim/Dev/web");
+    await userEvent.click(screen.getByRole("button", { name: "Übertragen …" }));
+    const d = await screen.findByRole("dialog", { name: "Übertragen" });
+    expect(aufrufeVon(aufrufe, "plan_erstellen")[0].args).toEqual({ vergleichId: "web/spiegel#1" });
+    await within(d).findByText("1 Datei neu");
+    await userEvent.click(within(d).getByRole("button", { name: "Abbrechen" }));
+    expect(screen.queryByRole("dialog", { name: "Übertragen" })).toBeNull();
+    expect(aufrufeVon(aufrufe, "vergleich_starten")).toHaveLength(1);
+  });
+
+  it("nach der Übertragung wird automatisch neu verglichen; Zurück meldet die Übertragung", async () => {
+    const aufrufe = rust({ plan_erstellen: () => vorschau, lauf_starten: () => ({ lauf_id: "l1", ergebnis }) });
+    const zurueck = vi.fn();
+    ansicht(zurueck);
+    await screen.findByText("/Users/kim/Dev/web");
+    await userEvent.click(screen.getByRole("button", { name: "Übertragen …" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Übertragen" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Schließen und neu vergleichen" }));
+    expect(screen.queryByRole("dialog", { name: "Übertragen" })).toBeNull();
+    await waitFor(() => expect(aufrufeVon(aufrufe, "vergleich_starten")).toHaveLength(2));
+    await screen.findByText("/Users/kim/Dev/web");
+    await userEvent.click(screen.getByRole("button", { name: "← Zurück" }));
+    expect(zurueck).toHaveBeenCalledWith(start(), true);
   });
 });

@@ -22,6 +22,8 @@ export interface BefehlsFehler {
     | "schluesselbund"
     | "nicht_unterstuetzt"
     | "abbruch"
+    | "nicht_bestaetigt"
+    | "datenbank"
     | "io";
   meldung: string;
   probleme?: Problem[];
@@ -195,6 +197,86 @@ export interface VergleichStart {
   lesefehler: Lesefehler[];
 }
 
+// --- Übertragen „Direkt“ (Spiegel von stellwerk_core::plan / ::exec) ---
+
+export interface PlanZusammenfassung {
+  ordner_anlegen: number;
+  kopieren: number;
+  ueberschreiben: number;
+  rechte: number;
+  dateien_loeschen: number;
+  ordner_loeschen: number;
+  bytes: number;
+}
+
+export type PlanWarnung = { art: "weltschreibbar"; modus: string; anzahl: number };
+
+/** Was vor dem Übertragen zur Bestätigung gezeigt wird. */
+export interface PlanVorschau {
+  zusammenfassung: PlanZusammenfassung;
+  /** Alle Pfade, die am Ziel gelöscht werden. */
+  loeschliste: string[];
+  warnungen: PlanWarnung[];
+  quelle: string;
+  ziel: string;
+  worker: number;
+}
+
+export type OpArt = "ordner_anlegen" | "kopieren" | "ueberschreiben" | "rechte_setzen" | "datei_loeschen" | "ordner_loeschen";
+
+export interface ExecFortschritt {
+  fertig: number;
+  gesamt: number;
+  bytes: number;
+  bytes_gesamt: number;
+  fehler: number;
+}
+
+export interface LaufErgebnis {
+  erledigt: number;
+  fehler: { nr: number; art: OpArt; pfad: string; meldung: string }[];
+  uebersprungen: number;
+  abgebrochen: boolean;
+  gestoppt: boolean;
+  bytes: number;
+  journal_fehler: string | null;
+}
+
+export type LaufPhase = "geplant" | "laeuft" | "fertig" | "abgebrochen";
+export type JournalStatus = "offen" | "erledigt" | "fehler" | "uebersprungen";
+
+/** Ein Lauf aus der Datenbank (Protokoll der Streckenansicht). */
+export interface Lauf {
+  id: string;
+  strecke_id: string;
+  stufe_id: string;
+  modus: "direkt" | "umschalten";
+  phase: LaufPhase;
+  /** Millisekunden seit 1970. */
+  gestartet: number;
+  beendet: number | null;
+  zusammenfassung: PlanZusammenfassung;
+  ergebnis: LaufErgebnis | null;
+}
+
+/** Ein Schritt eines Laufs. */
+export interface JournalZeile {
+  nr: number;
+  op: OpArt;
+  pfad: string;
+  quelle: string | null;
+  modus: string | null;
+  groesse: number;
+  status: JournalStatus;
+  fehler: string | null;
+  aktualisiert: number;
+}
+
+export interface LaufAntwort {
+  lauf_id: string;
+  ergebnis: LaufErgebnis;
+}
+
 // --- Commands ---
 
 export const api = {
@@ -226,6 +308,26 @@ export const api = {
     invoke<Problem[]>("regel_entfernen", { strecke, ort, pfad, ordner }),
   /** Dateien der Quelle im selben Ordner – Vorschläge für „Ersetzen durch …“. */
   ersatzVorschlaege: (vergleichId: string, pfad: string) => invoke<string[]>("ersatz_vorschlaege", { vergleichId, pfad }),
+  /** Plan aus der aktuellen Auswahl – verändert nichts, Rust merkt ihn sich für `laufStarten`. */
+  planErstellen: (vergleichId: string) => invoke<PlanVorschau>("plan_erstellen", { vergleichId }),
+  /** Führt den zuletzt gezeigten Plan aus („Direkt“). Schreibt nur ins Ziel. */
+  laufStarten: (
+    vergleichId: string,
+    loeschenBestaetigt: boolean,
+    beiFehlerStoppen: boolean,
+    beiFortschritt: (f: ExecFortschritt) => void,
+  ) =>
+    invoke<LaufAntwort>("lauf_starten", {
+      vergleichId,
+      loeschenBestaetigt,
+      beiFehlerStoppen,
+      fortschritt: new Channel(beiFortschritt),
+    }),
+  laufAbbrechen: (strecke: string, stufe: string) => invoke<boolean>("lauf_abbrechen", { strecke, stufe }),
+  /** Läufe einer Stufe, neueste zuerst. */
+  laeufe: (strecke: string, stufe: string, limit: number) => invoke<Lauf[]>("laeufe", { strecke, stufe, limit }),
+  /** Jeder Schritt eines Laufs. */
+  laufJournal: (laufId: string) => invoke<JournalZeile[]>("lauf_journal", { laufId }),
 };
 
 /** Ereignis vom App-Menü „Über Stellwerk“ (siehe src-tauri/src/lib.rs). */

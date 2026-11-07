@@ -1,16 +1,21 @@
 import { useQuery } from "@tanstack/react-query";
 
-import { api, fehlerText, type Problem, type StreckeUebersicht, type StufeKurz } from "../api";
+import { api, fehlerText, type Problem, type StreckeUebersicht } from "../api";
 
-/** Startseite: Strecken als Karten mit ihren Stufen (ARCHITEKTUR Kap. 10, Ansicht 1). */
+/**
+ * Startseite: Strecken als Karten mit ihren Stufen (ARCHITEKTUR Kap. 10, Ansicht 1).
+ * Ein Klick auf die Karte öffnet die Streckenansicht (Status und Protokoll je Stufe).
+ * Hier wird bewusst nichts verglichen – das kostet je Strecke Zeit, bei FTPS erst recht.
+ */
 type Props = {
   onNeu: () => void;
+  /** Strecke bearbeiten (Editor). */
   onOeffnen: (id: string) => void;
-  /** Vergleichsansicht einer Stufe öffnen (vergleicht nur, überträgt nie). */
-  onVergleichen: (strecke: StreckeUebersicht, stufe: StufeKurz) => void;
+  /** Streckenansicht öffnen. */
+  onAnzeigen: (strecke: StreckeUebersicht) => void;
 };
 
-export function StreckenListe({ onNeu, onOeffnen, onVergleichen }: Props) {
+export function StreckenListe({ onNeu, onOeffnen, onAnzeigen }: Props) {
   const liste = useQuery({ queryKey: ["strecken"], queryFn: api.streckenListe });
   const ort = useQuery({ queryKey: ["konfig_ort"], queryFn: api.konfigOrt });
 
@@ -50,7 +55,7 @@ export function StreckenListe({ onNeu, onOeffnen, onVergleichen }: Props) {
               key={s.id}
               strecke={s}
               onOeffnen={() => onOeffnen(s.id)}
-              onVergleichen={(st) => onVergleichen(s, st)}
+              onAnzeigen={() => onAnzeigen(s)}
             />
           ))}
         </div>
@@ -62,10 +67,10 @@ export function StreckenListe({ onNeu, onOeffnen, onVergleichen }: Props) {
 type KarteProps = {
   strecke: StreckeUebersicht;
   onOeffnen: () => void;
-  onVergleichen: (stufe: StufeKurz) => void;
+  onAnzeigen: () => void;
 };
 
-function StreckeKarte({ strecke, onOeffnen, onVergleichen }: KarteProps) {
+function StreckeKarte({ strecke, onOeffnen, onAnzeigen }: KarteProps) {
   if (strecke.fehler) {
     return (
       <article className="karte defekt">
@@ -76,7 +81,19 @@ function StreckeKarte({ strecke, onOeffnen, onVergleichen }: KarteProps) {
     );
   }
   return (
-    <article className="karte">
+    <article
+      className="karte klickbar"
+      role="button"
+      tabIndex={0}
+      aria-label={`${strecke.name} öffnen`}
+      onClick={onAnzeigen}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          onAnzeigen();
+        }
+      }}
+    >
       <h3>{strecke.name}</h3>
       <span className="kennung">{strecke.id}</span>
       <ol className="stufen">
@@ -89,12 +106,18 @@ function StreckeKarte({ strecke, onOeffnen, onVergleichen }: KarteProps) {
                 {st.quelle} → {st.ziel}
               </div>
             </div>
-            <VergleichKnopf stufe={st} onVergleichen={() => onVergleichen(st)} />
           </li>
         ))}
       </ol>
       <Probleme probleme={strecke.probleme} />
-      <button className="karte-knopf" onClick={onOeffnen}>
+      <button
+        className="karte-knopf"
+        onClick={(e) => {
+          e.stopPropagation();
+          onOeffnen();
+        }}
+        onKeyDown={(e) => e.stopPropagation()}
+      >
         Bearbeiten
       </button>
     </article>
@@ -111,21 +134,5 @@ function Probleme({ probleme }: { probleme: Problem[] }) {
         </li>
       ))}
     </ul>
-  );
-}
-
-/** FTPS-Ziele sind erst mit dem Manifest vergleichbar (v0.3 ff.). */
-function VergleichKnopf({ stufe, onVergleichen }: { stufe: StufeKurz; onVergleichen: () => void }) {
-  const ftps = stufe.ziel.startsWith("ftps://");
-  return (
-    <button
-      className="stufe-knopf"
-      onClick={onVergleichen}
-      disabled={ftps}
-      title={ftps ? "FTPS-Ziele können in dieser Version noch nicht verglichen werden" : "Quelle und Ziel vergleichen – überträgt nichts"}
-      aria-label={`${stufe.name} vergleichen`}
-    >
-      Vergleichen
-    </button>
   );
 }

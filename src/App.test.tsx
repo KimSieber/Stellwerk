@@ -28,6 +28,7 @@ function rust() {
     "plugin:app|version": () => "0.1.0",
     vergleich_starten: () => new Promise(() => {}),
     vergleich_abbrechen: () => true,
+    laeufe: () => [],
   });
 }
 
@@ -49,14 +50,18 @@ describe("App", () => {
     expect(await screen.findByRole("heading", { level: 2, name: "Strecken" })).toBeInTheDocument();
   });
 
-  it("Startseite → Vergleichen → zurück", async () => {
+  it("Startseite → Strecke → Bearbeiten, und Strecke → zurück", async () => {
     const aufrufe = rust();
     mitQuery(<App />);
-    await userEvent.click(await screen.findByRole("button", { name: "Entwicklung → Spiegel vergleichen" }));
-    expect(screen.getByRole("heading", { level: 2, name: "Mailwerk Webseite · Entwicklung → Spiegel" })).toBeInTheDocument();
+    await userEvent.click(await screen.findByRole("button", { name: "Mailwerk Webseite öffnen" }));
+    expect(screen.getByRole("heading", { level: 2, name: "Mailwerk Webseite" })).toBeInTheDocument();
     expect(aufrufe.find((a) => a.cmd === "vergleich_starten")?.args).toMatchObject({ strecke: "mailwerk-web", stufe: "spiegel" });
-    await userEvent.click(screen.getByRole("button", { name: "← Zurück" }));
+    await userEvent.click(screen.getByRole("button", { name: "← Strecken" }));
     expect(await screen.findByRole("heading", { level: 2, name: "Strecken" })).toBeInTheDocument();
+
+    await userEvent.click(await screen.findByRole("button", { name: "Mailwerk Webseite öffnen" }));
+    await userEvent.click(screen.getByRole("button", { name: "Bearbeiten" }));
+    expect(await screen.findByLabelText("Kennung")).toHaveValue("mailwerk-web");
   });
 
   it("neue Strecke: nach dem Anlegen wird sie zum Bearbeiten geöffnet", async () => {

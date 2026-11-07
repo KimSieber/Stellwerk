@@ -1,0 +1,269 @@
+// Streckenansicht: Wo steht welche Stufe? (Kims Überblick über eine Strecke)
+//
+// Beim Öffnen werden alle Stufen nacheinander im Hintergrund verglichen – das
+// verändert nichts (E4). Je Stufe links der Status (was zu tun ist), rechts die
+// Läufe, neueste oben, aufklappbar bis zu jedem einzelnen Schritt.
+// „Ansehen & übertragen …“ öffnet den fertigen Vergleich ohne neuen Lauf.
+// Nach einer Übertragung wird die folgende Stufe neu verglichen – ihre Quelle
+// hat sich geändert.
+//
+// Die Vergleiche gehören dieser Ansicht: Sie gibt sie beim Verlassen in Rust frei.
+// Wie in der Vergleichsansicht startet je Auftrag genau ein Durchlauf, auch wenn
+// React im StrictMode Effekte doppelt ausführt.
+
+import { useEffect, useRef, useState } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+
+import { api, fehlerText, type BefehlsFehler, type Fortschritt, type StreckeUebersicht, type StufeKurz, type VergleichStart } from "../api";
+import { fortschrittText, groesse, JOURNAL_TEXT, laufText, laufZeit, offen, OP_TEXT, stufenText, uhrzeit } from "../vergleich/format";
+import { VergleichAnsicht } from "../vergleich/VergleichAnsicht";
+
+/** So viele Läufe je Stufe werden gezeigt. */
+export const LAEUFE_LIMIT = 50;
+
+type Props = {
+  strecke: StreckeUebersicht;
+  onZurueck: () => void;
+  onBearbeiten: () => void;
+};
+
+export type StufenStatus =
+  | { art: "wartet" }
+  | { art: "laeuft"; fortschritt: Fortschritt | null }
+  | { art: "fertig"; v: VergleichStart; zeit: Date }
+  | { art: "fehler"; fehler: unknown }
+  /** Nicht (mehr) verglichen, z. B. Vergleich in der Detailansicht abgebrochen. */
+  | { art: "offen" }
+  /** FTPS-Ziele werden erst mit dem Manifest verglichen (v0.4). */
+  | { art: "ftps" };
+
+const istFtps = (st: StufeKurz) => st.ziel.startsWith("ftps://");
+
+export function StreckeAnsicht({ strecke, onZurueck, onBearbeiten }: Props) {
+  const lokale = strecke.stufen.filter((st) => !istFtps(st)).map((st) => st.id);
+  const [status, setStatus] = useState<Record<string, StufenStatus>>(() =>
+    Object.fromEntries(strecke.stufen.map((st) => [st.id, istFtps(st) ? { art: "ftps" } : { art: "wartet" }])),
+  );
+  const [geoeffnet, setGeoeffnet] = useState<StufeKurz | null>(null);
+  /** Stufen, die noch verglichen werden sollen – abgearbeitet von genau einer Schleife. */
+  const warteschlange = useRef<string[]>([]);
+  const arbeitet = useRef(false);
+  const begonnen = useRef(false);
+  /** Stufe, deren Vergleich gerade läuft (zum Abbrechen beim Verlassen). */
+  const laufend = useRef<string | null>(null);
+  const verlassen = useRef(false);
+  const statusRef = useRef(status);
+  statusRef.current = status;
+  const queryClient = useQueryClient();
+
+  const setze = (stufe: string, s: StufenStatus) => setStatus((alt) => ({ ...alt, [stufe]: s }));
+
+  const abarbeiten = async () => {
+    if (arbeitet.current) return;
+    arbeitet.current = true;
+    while (warteschlange.current.length > 0 && !verlassen.current) {
+      const stufe = warteschlange.current.shift()!;
+      laufend.current = stufe;
+      setze(stufe, { art: "laeuft", fortschritt: null });
+      try {
+        const v = await api.vergleichStarten(strecke.id, stufe, (f) => setze(stufe, { art: "laeuft", fortschritt: f }));
+        // Nach dem Verlassen gehört der Vergleich niemandem mehr
+        if (verlassen.current) void api.vergleichSchliessen(v.vergleich_id);
+        else setze(stufe, { art: "fertig", v, zeit: new Date() });
+      } catch (fehler) {
+        if (!verlassen.current) setze(stufe, { art: "fehler", fehler });
+      }
+    }
+    laufend.current = null;
+    arbeitet.current = false;
+  };
+
+  const vergleichen = (stufen: string[]) => {
+    for (const st of stufen) setze(st, { art: "wartet" });
+    warteschlange.current.push(...stufen);
+    void abarbeiten();
+  };
+
+  // Beim Öffnen alle lokalen Stufen vergleichen – genau einmal, auch im StrictMode
+  useEffect(() => {
+    if (begonnen.current) return;
+    begonnen.current = true;
+    vergleichen(lokale);
+    // Nur beim Öffnen; die Strecke wechselt nie innerhalb einer Ansicht (key in App)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const zurueck = () => {
+    verlassen.current = true;
+    if (laufend.current) void api.vergleichAbbrechen(strecke.id, laufend.current);
+    for (const s of Object.values(statusRef.current)) {
+      if (s.art === "fertig") void api.vergleichSchliessen(s.v.vergleich_id);
+    }
+    onZurueck();
+  };
+
+  if (geoeffnet) {
+    const st = geoeffnet;
+    const s = status[st.id];
+    return (
+      <VergleichAnsicht
+        strecke={strecke.id}
+        stufe={st.id}
+        titel={`${strecke.name} · ${st.name}`}
+        start={s.art === "fertig" ? s.v : undefined}
+        onZurueck={(stand, uebertragen) => {
+          setGeoeffnet(null);
+          const bisher = statusRef.current[st.id];
+          const zeit = bisher.art === "fertig" && bisher.v.vergleich_id === stand?.vergleich_id ? bisher.zeit : new Date();
+          setze(st.id, stand ? { art: "fertig", v: stand, zeit } : { art: "offen" });
+          void queryClient.invalidateQueries({ queryKey: ["laeufe", strecke.id, st.id] });
+          if (uebertragen) {
+            // Die eigene Stufe neu, falls der Vergleich danach nicht fertig wurde; die
+            // folgende immer – ihre Quelle hat sich geändert
+            const folgende = strecke.stufen[strecke.stufen.indexOf(st) + 1];
+            const neu = [...(stand ? [] : [st.id]), ...(folgende && !istFtps(folgende) ? [folgende.id] : [])];
+            vergleichen(neu);
+          }
+        }}
+      />
+    );
+  }
+
+  const laeuftGerade = Object.values(status).some((s) => s.art === "laeuft" || s.art === "wartet");
+  return (
+    <section className="strecke-ansicht">
+      <div className="leiste">
+        <button onClick={zurueck}>← Strecken</button>
+        <h2>{strecke.name}</h2>
+        <div className="knoepfe">
+          <button onClick={() => vergleichen(lokale)} disabled={laeuftGerade || lokale.length === 0}>
+            Alle neu vergleichen
+          </button>
+          <button onClick={onBearbeiten}>Bearbeiten</button>
+        </div>
+      </div>
+      <ol className="stufen-status">
+        {strecke.stufen.map((st, i) => (
+          <li key={st.id} className="stufen-zeile">
+            <StufenKarte nr={i + 1} stufe={st} status={status[st.id]} onOeffnen={() => setGeoeffnet(st)} />
+            <LaufListe strecke={strecke.id} stufe={st.id} />
+          </li>
+        ))}
+      </ol>
+    </section>
+  );
+}
+
+type KarteProps = { nr: number; stufe: StufeKurz; status: StufenStatus; onOeffnen: () => void };
+
+function StufenKarte({ nr, stufe, status, onOeffnen }: KarteProps) {
+  const art =
+    status.art === "fertig" ? (offen(status.v.zusammenfassung) === 0 ? "gleich" : "differenz") : status.art === "fehler" ? "fehler" : "grau";
+  return (
+    <div className={`stufen-karte status-${art}`}>
+      <div className="stufen-kopf">
+        <span className="stufe-nr">{nr}</span>
+        <h3>{stufe.name}</h3>
+      </div>
+      <div className="stufe-weg" title={`${stufe.quelle} → ${stufe.ziel}`}>
+        <div className="pfad">{stufe.quelle}</div>
+        <div className="pfad">→ {stufe.ziel}</div>
+      </div>
+      <StatusZeile status={status} />
+      {status.art !== "ftps" && (
+        <div className="knoepfe">
+          <button className="primaer" onClick={onOeffnen} disabled={status.art === "laeuft" || status.art === "wartet"}>
+            {status.art === "fertig" ? "Ansehen & übertragen …" : "Vergleichen …"}
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function StatusZeile({ status }: { status: StufenStatus }) {
+  switch (status.art) {
+    case "wartet":
+      return <p className="hinweis">Vergleich wartet …</p>;
+    case "laeuft":
+      return <p className="hinweis">{fortschrittText(status.fortschritt)}</p>;
+    case "fehler": {
+      const abbruch = (status.fehler as BefehlsFehler | null)?.kategorie === "abbruch";
+      return <p className={abbruch ? "hinweis" : "meldung fehler"}>{abbruch ? "Vergleich abgebrochen." : fehlerText(status.fehler)}</p>;
+    }
+    case "offen":
+      return <p className="hinweis">Nicht verglichen.</p>;
+    case "ftps":
+      return <p className="hinweis">FTPS-Ziel – Vergleich folgt mit dem Manifest (v0.4).</p>;
+    case "fertig": {
+      const z = status.v.zusammenfassung;
+      return (
+        <p className="stufen-stand">
+          <span className="marke" aria-hidden="true">●</span> <b>{stufenText(z)}</b>
+          {offen(z) > 0 && ` · ${groesse(z.bytes_uebertragen)}`}
+          <span className="hinweis"> · verglichen {uhrzeit(status.zeit)}</span>
+        </p>
+      );
+    }
+  }
+}
+
+function LaufListe({ strecke, stufe }: { strecke: string; stufe: string }) {
+  const laeufe = useQuery({ queryKey: ["laeufe", strecke, stufe], queryFn: () => api.laeufe(strecke, stufe, LAEUFE_LIMIT) });
+  return (
+    <div className="lauf-liste" aria-label="Protokoll">
+      <h4>Protokoll</h4>
+      {laeufe.isPending ? (
+        <p className="hinweis">…</p>
+      ) : laeufe.isError ? (
+        <p className="meldung fehler">{fehlerText(laeufe.error)}</p>
+      ) : laeufe.data.length === 0 ? (
+        <p className="hinweis">Noch nichts übertragen.</p>
+      ) : (
+        <ul>
+          {laeufe.data.map((l) => {
+            const t = laufText(l);
+            return (
+              <li key={l.id}>
+                <LaufEintrag id={l.id} kopf={`${laufZeit(l.gestartet)} · ${t.text}`} art={t.art} />
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+const ZEICHEN = { ok: "✓", warnung: "⚠", fehler: "✗" } as const;
+
+function LaufEintrag({ id, kopf, art }: { id: string; kopf: string; art: keyof typeof ZEICHEN }) {
+  const [auf, setAuf] = useState(false);
+  return (
+    <details className={`lauf ${art}`} onToggle={(e) => setAuf(e.currentTarget.open)}>
+      <summary>
+        <span className="zeichen">{ZEICHEN[art]}</span> {kopf}
+      </summary>
+      {auf && <Journal laufId={id} />}
+    </details>
+  );
+}
+
+function Journal({ laufId }: { laufId: string }) {
+  const j = useQuery({ queryKey: ["journal", laufId], queryFn: () => api.laufJournal(laufId) });
+  if (j.isPending) return <p className="hinweis">…</p>;
+  if (j.isError) return <p className="meldung fehler">{fehlerText(j.error)}</p>;
+  return (
+    <ol className="journal">
+      {j.data.map((z) => (
+        <li key={z.nr} className={`journal-${z.status}`} title={`Lauf ${laufId} · Schritt ${z.nr + 1}`}>
+          <span className="op">{OP_TEXT[z.op]}</span> <code>{z.pfad}</code>
+          {z.quelle && z.quelle !== z.pfad && <span className="hinweis"> ← {z.quelle}</span>}
+          {z.modus && <span className="hinweis"> {z.modus}</span>}
+          <span className="journal-status"> {JOURNAL_TEXT[z.status]}</span>
+          {z.fehler && <span className="meldung fehler"> – {z.fehler}</span>}
+        </li>
+      ))}
+    </ol>
+  );
+}

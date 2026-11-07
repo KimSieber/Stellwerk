@@ -54,24 +54,29 @@ fn app() -> Testapp {
     let tmp = tempfile::tempdir().unwrap();
     let wurzel = tmp.path().to_path_buf();
     let app = befehle(mock_builder()).build(mock_context(noop_assets())).unwrap();
-    app.manage(AppState::new(ConfigStore::new(&wurzel), Box::new(SpeicherTresor::default())));
+    app.manage(AppState::new(ConfigStore::new(&wurzel), Box::new(SpeicherTresor::default())).unwrap());
     let fenster = WebviewWindowBuilder::new(&app, "main", Default::default()).build().unwrap();
     Testapp { _tmp: tmp, wurzel, fenster, _app: app }
 }
 
 impl Testapp {
     fn aufruf(&self, cmd: &str, args: Value) -> Result<Value, Value> {
-        let req = InvokeRequest {
-            cmd: cmd.into(),
-            callback: CallbackFn(0),
-            error: CallbackFn(1),
-            url: "tauri://localhost".parse().unwrap(),
-            body: InvokeBody::Json(args),
-            headers: Default::default(),
-            invoke_key: INVOKE_KEY.to_string(),
-        };
-        get_ipc_response(&self.fenster, req).map(|b| b.deserialize::<Value>().unwrap())
+        aufruf_im(&self.fenster, cmd, args)
     }
+}
+
+/// Befehl über die IPC-Schicht eines Fensters (auch aus einem anderen Thread).
+fn aufruf_im(fenster: &WebviewWindow<tauri::test::MockRuntime>, cmd: &str, args: Value) -> Result<Value, Value> {
+    let req = InvokeRequest {
+        cmd: cmd.into(),
+        callback: CallbackFn(0),
+        error: CallbackFn(1),
+        url: "tauri://localhost".parse().unwrap(),
+        body: InvokeBody::Json(args),
+        headers: Default::default(),
+        invoke_key: INVOKE_KEY.to_string(),
+    };
+    get_ipc_response(fenster, req).map(|b| b.deserialize::<Value>().unwrap())
 }
 
 #[test]
@@ -590,4 +595,272 @@ fn ersatz_vorschlaege_aus_dem_selben_ordner() {
     assert_eq!(v, json!(["css/site.css"]));
     let e = a.aufruf("ersatz_vorschlaege", json!({ "vergleichId": "x", "pfad": "a" })).unwrap_err();
     assert_eq!(e["kategorie"], "nicht_gefunden");
+}
+
+// --- Übertragen „Direkt“ (v0.3) --------------------------------------------------
+
+/// Vergleicht die Beispielstufe und erstellt den Plan; liefert (Vergleich, Vorschau).
+fn vergleichen_und_planen(a: &Testapp) -> (Value, Value) {
+    let id = starten(a)["vergleich_id"].clone();
+    let vorschau = a.aufruf("plan_erstellen", json!({ "vergleichId": id })).unwrap();
+    (id, vorschau)
+}
+
+fn uebertragen(a: &Testapp, id: &Value, bestaetigt: bool, stoppen: bool) -> Result<Value, Value> {
+    a.aufruf(
+        "lauf_starten",
+        json!({ "vergleichId": id, "loeschenBestaetigt": bestaetigt, "beiFehlerStoppen": stoppen, "fortschritt": KANAL }),
+    )
+}
+
+fn db(a: &Testapp) -> std::sync::MutexGuard<'_, stellwerk_core::store::Datenbank> {
+    a.fenster.state::<AppState>().inner().datenbank.lock().unwrap()
+}
+
+/// (Aktion, Ebene) der Protokolleinträge eines Laufs, älteste zuerst.
+fn protokoll(a: &Testapp, lauf: &str) -> Vec<(String, String)> {
+    let f = stellwerk_core::store::ProtokollFilter { lauf_id: Some(lauf.into()), ..Default::default() };
+    let mut v: Vec<(String, String)> = db(a)
+        .protokoll(&f)
+        .unwrap()
+        .into_iter()
+        .map(|e| (e.aktion, serde_json::to_value(e.ebene).unwrap().as_str().unwrap().to_string()))
+        .collect();
+    v.reverse();
+    v
+}
+
+#[test]
+fn plan_zeigen_uebertragen_danach_alles_gleich() {
+    let a = app();
+    mit_vergleichsdaten(&a);
+    let (id, v) = vergleichen_und_planen(&a);
+    assert_eq!(
+        v["zusammenfassung"],
+        json!({ "ordner_anlegen": 1, "kopieren": 2, "ueberschreiben": 0, "rechte": 0,
+                "dateien_loeschen": 1, "ordner_loeschen": 0, "bytes": 4 })
+    );
+    assert_eq!(v["loeschliste"], json!(["alt.txt"]));
+    assert_eq!(v["warnungen"], json!([]));
+    assert_eq!(v["ziel"], json!(a.wurzel.join("daten/spiegel").display().to_string()));
+    assert!((1..=8).contains(&v["worker"].as_u64().unwrap()));
+
+    let r = uebertragen(&a, &id, true, false).unwrap();
+    assert_eq!(r["ergebnis"]["erledigt"], 4);
+    assert_eq!(r["ergebnis"]["fehler"], json!([]));
+    let z = a.wurzel.join("daten/spiegel");
+    assert_eq!(std::fs::read_to_string(z.join("css/site.css")).unwrap(), "c");
+    assert!(!z.join("alt.txt").exists());
+    let neu = starten(&a);
+    let s = neu["zusammenfassung"].clone();
+    assert_eq!((s["neu"].clone(), s["geaendert"].clone(), s["loeschen"].clone()), (json!(0), json!(0), json!(0)));
+
+    let lauf = r["lauf_id"].as_str().unwrap();
+    let l = db(&a).lauf(lauf).unwrap().unwrap();
+    assert_eq!((l.strecke_id.as_str(), l.stufe_id.as_str()), ("mailwerk-web", "spiegel"));
+    assert_eq!(l.phase, stellwerk_core::store::LaufPhase::Fertig);
+    assert_eq!(l.ergebnis.unwrap()["erledigt"], 4);
+    let journal = db(&a).journal(lauf).unwrap();
+    assert!(journal.iter().all(|j| j.status == stellwerk_core::store::JournalStatus::Erledigt));
+    assert_eq!(journal.len(), 4);
+    assert_eq!(protokoll(&a, lauf), vec![("lauf_gestartet".into(), "info".into()), ("lauf_beendet".into(), "info".into())]);
+
+    // Der alte Vergleich ist durch den neuen ersetzt; ein Plan gilt genau einmal
+    assert_eq!(uebertragen(&a, &id, true, false).unwrap_err()["kategorie"], "nicht_gefunden");
+    let id = neu["vergleich_id"].clone();
+    a.aufruf("plan_erstellen", json!({ "vergleichId": id })).unwrap();
+    assert_eq!(uebertragen(&a, &id, true, false).unwrap()["ergebnis"]["erledigt"], 0);
+    assert_eq!(uebertragen(&a, &id, true, false).unwrap_err()["kategorie"], "nicht_bestaetigt");
+}
+
+#[test]
+fn loeschungen_muessen_bestaetigt_sein() {
+    let a = app();
+    mit_vergleichsdaten(&a);
+    let (id, _) = vergleichen_und_planen(&a);
+    let e = uebertragen(&a, &id, false, false).unwrap_err();
+    assert_eq!(e["kategorie"], "nicht_bestaetigt");
+    assert!(e["meldung"].as_str().unwrap().contains("1 Löschungen"), "{e}");
+    assert!(a.wurzel.join("daten/spiegel/alt.txt").exists(), "nichts verändert");
+    assert!(db(&a).laeufe("mailwerk-web", "spiegel", 5).unwrap().is_empty());
+}
+
+#[test]
+fn ohne_loeschungen_braucht_es_keine_bestaetigung() {
+    let a = app();
+    mit_vergleichsdaten(&a);
+    std::fs::remove_file(a.wurzel.join("daten/spiegel/alt.txt")).unwrap();
+    let (id, v) = vergleichen_und_planen(&a);
+    assert_eq!(v["loeschliste"], json!([]));
+    assert_eq!(uebertragen(&a, &id, false, false).unwrap()["ergebnis"]["erledigt"], 3);
+}
+
+#[test]
+fn ohne_plan_oder_nach_neuer_auswahl_wird_nicht_uebertragen() {
+    let a = app();
+    mit_vergleichsdaten(&a);
+    let id = starten(&a)["vergleich_id"].clone();
+    let e = uebertragen(&a, &id, true, false).unwrap_err();
+    assert_eq!(e["kategorie"], "nicht_bestaetigt");
+    assert!(e["meldung"].as_str().unwrap().contains("erneut öffnen und bestätigen"));
+
+    a.aufruf("plan_erstellen", json!({ "vergleichId": id })).unwrap();
+    a.aufruf("auswahl_setzen", json!({ "vergleichId": id, "pfade": ["alt.txt"], "an": false })).unwrap();
+    assert_eq!(uebertragen(&a, &id, true, false).unwrap_err()["kategorie"], "nicht_bestaetigt");
+
+    let e = a.aufruf("plan_erstellen", json!({ "vergleichId": "x" })).unwrap_err();
+    assert_eq!(e["kategorie"], "nicht_gefunden");
+    let e = uebertragen(&a, &json!("x"), true, false).unwrap_err();
+    assert_eq!(e["kategorie"], "nicht_gefunden");
+}
+
+#[test]
+fn plan_nur_wenn_die_stufe_noch_passt() {
+    let a = app();
+    mit_vergleichsdaten(&a);
+    let id = starten(&a)["vergleich_id"].clone();
+    let plan = || a.aufruf("plan_erstellen", json!({ "vergleichId": id })).unwrap_err();
+    let mut s = strecke_json(&a.wurzel);
+
+    // „Mit Umschalten“ gibt es lokal noch nicht
+    s["stufen"][0]["modus"] = json!("umschalten");
+    a.aufruf("strecke_speichern", json!({ "strecke": s })).unwrap();
+    let e = plan();
+    assert_eq!(e["kategorie"], "nicht_unterstuetzt");
+    assert!(e["meldung"].as_str().unwrap().contains("„Mit Umschalten“"), "{e}");
+
+    // Zielordner seit dem Vergleich geändert
+    s["stufen"][0]["modus"] = json!("direkt");
+    let anderes = a.wurzel.join("daten/anderes");
+    std::fs::create_dir_all(&anderes).unwrap();
+    s["stufen"][0]["ziel"]["pfad"] = json!(anderes);
+    a.aufruf("strecke_speichern", json!({ "strecke": s })).unwrap();
+    assert!(plan()["meldung"].as_str().unwrap().contains("seit dem Vergleich geändert"));
+
+    // Stufe umbenannt, dann Strecke gelöscht
+    s["stufen"][0]["id"] = json!("anders");
+    s["stufen"][1]["quelle"]["stufe"] = json!("anders");
+    a.aufruf("strecke_speichern", json!({ "strecke": s })).unwrap();
+    assert!(plan()["meldung"].as_str().unwrap().contains("Stufe „spiegel“"));
+    a.aufruf("strecke_loeschen", json!({ "id": "mailwerk-web" })).unwrap();
+    assert_eq!(plan()["kategorie"], "nicht_gefunden");
+}
+
+#[test]
+fn fehler_je_datei_stehen_in_journal_und_protokoll() {
+    let a = app();
+    mit_vergleichsdaten(&a);
+    let (id, _) = vergleichen_und_planen(&a);
+    std::fs::remove_file(a.wurzel.join("daten/quelle/index.php")).unwrap();
+    let r = uebertragen(&a, &id, true, true).unwrap();
+    assert_eq!(r["ergebnis"]["fehler"][0]["pfad"], "index.php");
+    assert_eq!(r["ergebnis"]["gestoppt"], true);
+    let lauf = r["lauf_id"].as_str().unwrap();
+    let p = protokoll(&a, lauf);
+    assert!(p.contains(&("operation_fehler".into(), "fehler".into())), "{p:?}");
+    assert_eq!(p.last().unwrap(), &("lauf_beendet".into(), "fehler".into()));
+    let fehler = db(&a).protokoll(&Default::default()).unwrap().into_iter().find(|e| e.aktion == "operation_fehler").unwrap();
+    assert_eq!(fehler.pfad.as_deref(), Some("index.php"));
+}
+
+#[test]
+fn zweite_uebertragung_derselben_stufe_wird_abgewiesen() {
+    let a = app();
+    mit_vergleichsdaten(&a);
+    let (id, _) = vergleichen_und_planen(&a);
+    let laeufe = &a.fenster.state::<AppState>().inner().laeufe;
+    let schalter = laeufe.anmelden("mailwerk-web/spiegel").unwrap();
+    assert!(laeufe.anmelden("mailwerk-web/spiegel").is_none());
+    let e = uebertragen(&a, &id, true, false).unwrap_err();
+    assert_eq!(e["kategorie"], "vorhanden");
+    assert!(a.wurzel.join("daten/spiegel/alt.txt").exists());
+
+    let abbrechen = |stufe: &str| a.aufruf("lauf_abbrechen", json!({ "strecke": "mailwerk-web", "stufe": stufe })).unwrap();
+    assert_eq!(abbrechen("server"), json!(false));
+    assert_eq!(abbrechen("spiegel"), json!(true));
+    assert!(schalter.load(std::sync::atomic::Ordering::Relaxed));
+    laeufe.abmelden("mailwerk-web/spiegel");
+    assert_eq!(abbrechen("spiegel"), json!(false));
+}
+
+#[test]
+fn abgebrochene_uebertragung() {
+    let a = app();
+    mit_vergleichsdaten(&a);
+    // Große Datei, damit der Abbruch während des Laufs ankommt
+    let block = vec![1u8; 1 << 20];
+    let mut f = std::fs::File::create(a.wurzel.join("daten/quelle/gross.bin")).unwrap();
+    for _ in 0..64 {
+        std::io::Write::write_all(&mut f, &block).unwrap();
+    }
+    drop(f);
+    let (id, _) = vergleichen_und_planen(&a);
+    let r = std::thread::scope(|s| {
+        let (fenster, id) = (&a.fenster, &id);
+        let lauf = s.spawn(move || {
+            let args = json!({ "vergleichId": id, "loeschenBestaetigt": true, "beiFehlerStoppen": false, "fortschritt": KANAL });
+            aufruf_im(fenster, "lauf_starten", args).unwrap()
+        });
+        while a.aufruf("lauf_abbrechen", json!({ "strecke": "mailwerk-web", "stufe": "spiegel" })).unwrap() != json!(true) {
+            std::thread::yield_now();
+        }
+        lauf.join().unwrap()
+    });
+    assert_eq!(r["ergebnis"]["abgebrochen"], true);
+    let lauf = r["lauf_id"].as_str().unwrap();
+    assert_eq!(db(&a).lauf(lauf).unwrap().unwrap().phase, stellwerk_core::store::LaufPhase::Abgebrochen);
+    assert_eq!(protokoll(&a, lauf).last().unwrap(), &("lauf_beendet".into(), "warnung".into()));
+}
+
+#[test]
+fn lauf_starten_ohne_kanal_wird_abgewiesen() {
+    let a = app();
+    let e = a.aufruf("lauf_starten", json!({ "vergleichId": "x", "loeschenBestaetigt": true, "beiFehlerStoppen": false }));
+    assert!(e.is_err());
+}
+
+#[test]
+fn ohne_beschreibbaren_konfigurationsordner_startet_nichts() {
+    let tmp = tempfile::tempdir().unwrap();
+    let datei = tmp.path().join("datei");
+    std::fs::write(&datei, "x").unwrap();
+    let e = AppState::new(ConfigStore::new(&datei), Box::new(SpeicherTresor::default())).err().unwrap();
+    assert_eq!(e.kategorie(), "io");
+}
+
+#[test]
+fn laeufe_und_journal_fuer_die_streckenansicht() {
+    let a = app();
+    mit_vergleichsdaten(&a);
+    let leer = a.aufruf("laeufe", json!({ "strecke": "mailwerk-web", "stufe": "spiegel", "limit": 10 })).unwrap();
+    assert_eq!(leer, json!([]));
+    let (id, _) = vergleichen_und_planen(&a);
+    let r = uebertragen(&a, &id, true, false).unwrap();
+
+    let l = a.aufruf("laeufe", json!({ "strecke": "mailwerk-web", "stufe": "spiegel", "limit": 10 })).unwrap();
+    assert_eq!(l[0]["id"], r["lauf_id"]);
+    assert_eq!(l[0]["phase"], "fertig");
+    assert_eq!(l[0]["ergebnis"]["erledigt"], 4);
+    assert_eq!(l[0]["zusammenfassung"]["kopieren"], 2);
+    assert!(l[0]["beendet"].is_i64());
+
+    let j = a.aufruf("lauf_journal", json!({ "laufId": r["lauf_id"] })).unwrap();
+    assert_eq!(j.as_array().unwrap().len(), 4);
+    assert_eq!(j[0], json!({ "nr": 0, "op": "ordner_anlegen", "pfad": "css", "quelle": null, "modus": null,
+                             "groesse": 0, "status": "erledigt", "fehler": null, "aktualisiert": j[0]["aktualisiert"] }));
+    assert_eq!(a.aufruf("lauf_journal", json!({ "laufId": "gibtsnicht" })).unwrap(), json!([]));
+}
+
+#[test]
+fn beschaedigte_laufdaten_werden_gemeldet() {
+    let a = app();
+    mit_vergleichsdaten(&a);
+    let (id, _) = vergleichen_und_planen(&a);
+    let lauf = uebertragen(&a, &id, true, false).unwrap()["lauf_id"].clone();
+    db(&a).verbindung().execute("UPDATE journal SET status = 'quatsch'", []).unwrap();
+    db(&a).verbindung().execute("UPDATE lauf SET phase = 'quatsch'", []).unwrap();
+    let e = a.aufruf("lauf_journal", json!({ "laufId": lauf })).unwrap_err();
+    assert_eq!(e["kategorie"], "datenbank");
+    let e = a.aufruf("laeufe", json!({ "strecke": "mailwerk-web", "stufe": "spiegel", "limit": 10 })).unwrap_err();
+    assert_eq!(e["kategorie"], "datenbank");
 }

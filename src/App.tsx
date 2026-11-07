@@ -1,18 +1,18 @@
 import { useEffect, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 
-import { EREIGNIS_UEBER } from "./api";
+import { EREIGNIS_UEBER, type StreckeUebersicht } from "./api";
 import { APP_INFO } from "./appinfo";
 import { StreckenListe } from "./components/StreckenListe";
 import { Ueber } from "./components/Ueber";
 import { StreckeEditor } from "./editor/StreckeEditor";
-import { VergleichAnsicht } from "./vergleich/VergleichAnsicht";
+import { StreckeAnsicht } from "./strecke/StreckeAnsicht";
 
 /** Welche Ansicht gerade offen ist. */
 type Ansicht =
   | { art: "liste" }
   | { art: "editor"; id?: string }
-  | { art: "vergleich"; strecke: string; stufe: string; titel: string };
+  | { art: "strecke"; strecke: StreckeUebersicht };
 
 export default function App() {
   const [ansicht, setAnsicht] = useState<Ansicht>({ art: "liste" });
@@ -38,17 +38,14 @@ export default function App() {
           <StreckenListe
             onNeu={() => setAnsicht({ art: "editor" })}
             onOeffnen={(id) => setAnsicht({ art: "editor", id })}
-            onVergleichen={(s, st) =>
-              setAnsicht({ art: "vergleich", strecke: s.id, stufe: st.id, titel: `${s.name} · ${st.name}` })
-            }
+            onAnzeigen={(strecke) => setAnsicht({ art: "strecke", strecke })}
           />
-        ) : ansicht.art === "vergleich" ? (
-          <VergleichAnsicht
-            key={`${ansicht.strecke}/${ansicht.stufe}`}
+        ) : ansicht.art === "strecke" ? (
+          <StreckeAnsicht
+            key={ansicht.strecke.id}
             strecke={ansicht.strecke}
-            stufe={ansicht.stufe}
-            titel={ansicht.titel}
             onZurueck={() => setAnsicht({ art: "liste" })}
+            onBearbeiten={() => setAnsicht({ art: "editor", id: ansicht.strecke.id })}
           />
         ) : (
           <StreckeEditor

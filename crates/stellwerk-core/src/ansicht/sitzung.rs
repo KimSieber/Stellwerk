@@ -128,6 +128,11 @@ impl VergleichsSitzung {
         self.eintraege.len()
     }
 
+    /// Alle Einträge mit aktuellem Häkchen-Stand (Grundlage für den Plan).
+    pub fn eintraege(&self) -> &[DiffEintrag] {
+        &self.eintraege
+    }
+
     /// Sichtbare Zeilen ab `offset`, höchstens `limit`. Ein Eintrag ist sichtbar, wenn er
     /// zum Filter passt oder etwas Passendes enthält und kein Vorfahr zugeklappt ist.
     pub fn seite(&self, offset: usize, limit: usize, filter: Filter, zugeklappt: &HashSet<RelPath>) -> Seite {

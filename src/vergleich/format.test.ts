@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 
-import { zeile } from "../test/vergleich";
-import { fortschrittText, groesse, regelText, warnungText, zeilenTooltip, zeit } from "./format";
+import { summe, zeile } from "../test/vergleich";
+import type { Lauf } from "../api";
+import { anzahl, execFortschrittText, JOURNAL_TEXT, laufText, laufZeit, offen, schritte, stufenText, uhrzeit, fortschrittText, groesse, OP_TEXT, planTeile, regelText, warnungText, zeilenTooltip, zeit } from "./format";
 
 describe("Darstellung", () => {
   it("Größen mit Einheit und deutschem Komma", () => {
@@ -59,5 +60,81 @@ describe("Darstellung", () => {
     expect(fortschrittText({ phase: "quelle", anzahl: 1234 })).toBe("Quelle wird gelesen … 1.234");
     expect(fortschrittText({ phase: "ziel", anzahl: 5 })).toBe("Ziel wird gelesen … 5");
     expect(fortschrittText({ phase: "vergleich", anzahl: 7 })).toBe("Einträge werden verglichen … 7");
+  });
+});
+
+describe("Übertragen", () => {
+  it("Anzahl mit Einzahl und Mehrzahl", () => {
+    expect(anzahl(1, "Datei", "Dateien")).toBe("1 Datei");
+    expect(anzahl(0, "Datei", "Dateien")).toBe("0 Dateien");
+    expect(anzahl(12345, "Datei", "Dateien")).toBe("12.345 Dateien");
+  });
+
+  it("Plan-Teile nur für Vorkommendes", () => {
+    const leer = { ordner_anlegen: 0, kopieren: 0, ueberschreiben: 0, rechte: 0, dateien_loeschen: 0, ordner_loeschen: 0, bytes: 0 };
+    expect(planTeile(leer)).toEqual([]);
+    expect(planTeile({ ordner_anlegen: 1, kopieren: 2, ueberschreiben: 1, rechte: 3, dateien_loeschen: 1, ordner_loeschen: 2, bytes: 9 })).toEqual([
+      "1 Ordner anlegen",
+      "2 Dateien neu",
+      "1 Datei überschreiben",
+      "Rechte für 3 Einträge setzen",
+      "1 Datei löschen",
+      "2 Ordner löschen",
+    ]);
+    expect(planTeile({ ...leer, rechte: 1 })).toEqual(["Rechte für 1 Eintrag setzen"]);
+  });
+
+  it("Fortschritt der Übertragung", () => {
+    expect(execFortschrittText(null)).toBe("Übertragung wird vorbereitet …");
+    expect(execFortschrittText({ fertig: 12, gesamt: 40, bytes: 1500, bytes_gesamt: 3_000_000, fehler: 0 })).toBe(
+      "12 von 40 · 1,5 KB von 3 MB",
+    );
+  });
+
+  it("Texte der Operationen", () => {
+    expect(Object.values(OP_TEXT)).toEqual(["Ordner anlegen", "Kopieren", "Überschreiben", "Rechte setzen", "Löschen", "Ordner löschen"]);
+  });
+});
+
+describe("Streckenansicht", () => {
+  it("offen zählt nur, was zu tun ist", () => {
+    expect(offen(summe({ neu: 1, geaendert: 2, loeschen: 3, konflikt: 4, gleich: 9, geschuetzt: 9, ignoriert: 9 }))).toBe(10);
+  });
+
+  it("Status einer Stufe", () => {
+    expect(stufenText(summe({ gleich: 5, geschuetzt: 2 }))).toBe("gleich");
+    expect(stufenText(summe({ neu: 1 }))).toBe("1 neu");
+    expect(stufenText(summe({ geaendert: 2, konflikt: 1 }))).toBe("2 geändert · 1 Konflikt");
+    expect(stufenText(summe({ loeschen: 1234, konflikt: 2 }))).toBe("1.234 löschen · 2 Konflikte");
+  });
+
+  it("Zeiten", () => {
+    expect(uhrzeit(new Date(2026, 10, 7, 9, 5))).toBe("09:05");
+    expect(laufZeit(new Date(2026, 10, 7, 21, 40).getTime())).toBe("07.11.2026, 21:40");
+  });
+
+  it("Kurzfassung eines Laufs", () => {
+    const z = { ordner_anlegen: 1, kopieren: 1, ueberschreiben: 1, rechte: 1, dateien_loeschen: 1, ordner_loeschen: 1, bytes: 9 };
+    expect(schritte(z)).toBe(6);
+    const e = { erledigt: 6, fehler: [], uebersprungen: 0, abgebrochen: false, gestoppt: false, bytes: 1500, journal_fehler: null };
+    const l: Lauf = { id: "l", strecke_id: "s", stufe_id: "t", modus: "direkt", phase: "fertig", gestartet: 0, beendet: 1, zusammenfassung: z, ergebnis: e };
+    expect(laufText(l)).toEqual({ text: "6 Schritte · 1,5 KB", art: "ok" });
+    expect(laufText({ ...l, ergebnis: { ...e, erledigt: 1, bytes: 0 } })).toEqual({ text: "1 Schritt · 0 B", art: "ok" });
+    expect(laufText({ ...l, phase: "geplant" })).toEqual({ text: "nicht abgeschlossen", art: "fehler" });
+    expect(laufText({ ...l, phase: "laeuft" }).text).toBe("nicht abgeschlossen");
+    expect(laufText({ ...l, ergebnis: null }).text).toBe("nicht abgeschlossen");
+    expect(laufText({ ...l, phase: "abgebrochen", ergebnis: { ...e, erledigt: 2, abgebrochen: true } })).toEqual({
+      text: "abgebrochen · 2 von 6 Schritten",
+      art: "warnung",
+    });
+    expect(laufText({ ...l, ergebnis: { ...e, erledigt: 5, journal_fehler: "voll" } })).toEqual({ text: "Journal unvollständig · 5 von 6 Schritten", art: "fehler" });
+    const einSchritt = { ...z, kopieren: 0, ueberschreiben: 0, rechte: 0, dateien_loeschen: 0, ordner_loeschen: 0 };
+    expect(laufText({ ...l, zusammenfassung: einSchritt, ergebnis: { ...e, erledigt: 0, fehler: [{ nr: 0, art: "kopieren", pfad: "a", meldung: "m" }] } }).text).toBe(
+      "1 Fehler · 0 von 1 Schritt",
+    );
+  });
+
+  it("Journal-Status", () => {
+    expect(Object.values(JOURNAL_TEXT)).toEqual(["offen", "erledigt", "Fehler", "nicht ausgeführt"]);
   });
 });

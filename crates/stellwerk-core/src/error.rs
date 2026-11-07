@@ -39,6 +39,14 @@ pub enum StellwerkError {
     #[error("Abgebrochen")]
     Abbruch,
 
+    /// Eine nötige Bestätigung fehlt (z. B. Löschungen vor dem Übertragen).
+    #[error("Nicht bestätigt: {0}")]
+    NichtBestaetigt(String),
+
+    /// Laufzeitdatenbank (Journal, Protokoll) nicht nutzbar.
+    #[error("Datenbank: {0}")]
+    Datenbank(String),
+
     #[error("Ein-/Ausgabefehler bei {pfad}: {quelle}")]
     Io {
         pfad: PathBuf,
@@ -59,6 +67,8 @@ impl StellwerkError {
             Self::Schluesselbund(_) => "schluesselbund",
             Self::NichtUnterstuetzt(_) => "nicht_unterstuetzt",
             Self::Abbruch => "abbruch",
+            Self::NichtBestaetigt(_) => "nicht_bestaetigt",
+            Self::Datenbank(_) => "datenbank",
             Self::Io { .. } => "io",
         }
     }

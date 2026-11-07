@@ -1,6 +1,6 @@
 // Darstellung der Vergleichsdaten – reine Funktionen ohne Rechnerei über die Daten (A1).
 
-import type { DiffStatus, Fortschritt, RegelTreffer, Warnung, Zeile } from "../api";
+import type { DiffStatus, ExecFortschritt, Fortschritt, JournalStatus, Lauf, OpArt, PlanZusammenfassung, RegelTreffer, Warnung, Zeile, Zusammenfassung } from "../api";
 
 const zahl = new Intl.NumberFormat("de-DE", { maximumFractionDigits: 1 });
 
@@ -93,3 +93,92 @@ const PHASE_TEXT: Record<Fortschritt["phase"], string> = {
 export function fortschrittText(f: Fortschritt | null): string {
   return f === null ? "Vergleich wird vorbereitet …" : `${PHASE_TEXT[f.phase]} … ${zahl.format(f.anzahl)}`;
 }
+
+/** Zahl mit Einzahl/Mehrzahl: „1 Datei“, „3 Dateien“. */
+export function anzahl(n: number, einzahl: string, mehrzahl: string): string {
+  return `${zahl.format(n)} ${n === 1 ? einzahl : mehrzahl}`;
+}
+
+/** Teile der Plan-Zusammenfassung, nur was vorkommt – z. B. „2 Dateien neu“. */
+export function planTeile(z: PlanZusammenfassung): string[] {
+  const teile: [number, string][] = [
+    [z.ordner_anlegen, `${anzahl(z.ordner_anlegen, "Ordner", "Ordner")} anlegen`],
+    [z.kopieren, `${anzahl(z.kopieren, "Datei", "Dateien")} neu`],
+    [z.ueberschreiben, `${anzahl(z.ueberschreiben, "Datei", "Dateien")} überschreiben`],
+    [z.rechte, `Rechte für ${anzahl(z.rechte, "Eintrag", "Einträge")} setzen`],
+    [z.dateien_loeschen, `${anzahl(z.dateien_loeschen, "Datei", "Dateien")} löschen`],
+    [z.ordner_loeschen, `${anzahl(z.ordner_loeschen, "Ordner", "Ordner")} löschen`],
+  ];
+  return teile.filter(([n]) => n > 0).map(([, text]) => text);
+}
+
+export const OP_TEXT: Record<OpArt, string> = {
+  ordner_anlegen: "Ordner anlegen",
+  kopieren: "Kopieren",
+  ueberschreiben: "Überschreiben",
+  rechte_setzen: "Rechte setzen",
+  datei_loeschen: "Löschen",
+  ordner_loeschen: "Ordner löschen",
+};
+
+/** „12 von 40 · 1,5 MB von 3 MB“ */
+export function execFortschrittText(f: ExecFortschritt | null): string {
+  if (f === null) return "Übertragung wird vorbereitet …";
+  return `${zahl.format(f.fertig)} von ${zahl.format(f.gesamt)} · ${groesse(f.bytes)} von ${groesse(f.bytes_gesamt)}`;
+}
+
+/** Zu tun ist, was neu, geändert, zu löschen oder ein Konflikt ist – Geschütztes und Ignoriertes ist gewollt. */
+export function offen(z: Zusammenfassung): number {
+  return z.neu + z.geaendert + z.loeschen + z.konflikt;
+}
+
+/** Status einer Stufe: „gleich“ oder „3 neu · 2 geändert · 1 löschen · 1 Konflikt“. */
+export function stufenText(z: Zusammenfassung): string {
+  if (offen(z) === 0) return "gleich";
+  const teile: [number, string][] = [
+    [z.neu, "neu"],
+    [z.geaendert, "geändert"],
+    [z.loeschen, "löschen"],
+    [z.konflikt, z.konflikt === 1 ? "Konflikt" : "Konflikte"],
+  ];
+  return teile
+    .filter(([n]) => n > 0)
+    .map(([n, t]) => `${zahl.format(n)} ${t}`)
+    .join(" · ");
+}
+
+const uhr = new Intl.DateTimeFormat("de-DE", { hour: "2-digit", minute: "2-digit" });
+
+/** Uhrzeit „22:31“. */
+export function uhrzeit(d: Date): string {
+  return uhr.format(d);
+}
+
+/** Startzeit eines Laufs (Millisekunden) als „07.11.2026, 21:40“. */
+export function laufZeit(ms: number): string {
+  return datum.format(new Date(ms));
+}
+
+/** Anzahl aller Operationen eines Plans. */
+export function schritte(z: PlanZusammenfassung): number {
+  return z.ordner_anlegen + z.kopieren + z.ueberschreiben + z.rechte + z.dateien_loeschen + z.ordner_loeschen;
+}
+
+/** Kurzfassung eines Laufs für das Protokoll und ob er ohne Befund war. */
+export function laufText(l: Lauf): { text: string; art: "ok" | "warnung" | "fehler" } {
+  const n = schritte(l.zusammenfassung);
+  const e = l.ergebnis;
+  if (l.phase === "geplant" || l.phase === "laeuft" || e === null) return { text: "nicht abgeschlossen", art: "fehler" };
+  const von = `${zahl.format(e.erledigt)} von ${anzahl(n, "Schritt", "Schritten")}`;
+  if (e.abgebrochen) return { text: `abgebrochen · ${von}`, art: "warnung" };
+  if (e.fehler.length > 0) return { text: `${anzahl(e.fehler.length, "Fehler", "Fehler")} · ${von}`, art: "fehler" };
+  if (e.journal_fehler !== null) return { text: `Journal unvollständig · ${von}`, art: "fehler" };
+  return { text: `${anzahl(e.erledigt, "Schritt", "Schritte")} · ${groesse(e.bytes)}`, art: "ok" };
+}
+
+export const JOURNAL_TEXT: Record<JournalStatus, string> = {
+  offen: "offen",
+  erledigt: "erledigt",
+  fehler: "Fehler",
+  uebersprungen: "nicht ausgeführt",
+};

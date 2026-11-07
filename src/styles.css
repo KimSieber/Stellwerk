@@ -260,3 +260,60 @@ legend { font-weight: 600; padding: 0 6px; }
 .dialog.ersatz p { margin: 0; }
 .dialog.ersatz label { display: grid; gap: 4px; font-size: 12px; color: var(--text-leise); }
 .dialog.ersatz .knoepfe { justify-content: flex-end; }
+
+/* --- Übertragen (v0.3) --- */
+.dialog.uebertragen { width: 560px; max-height: 85vh; overflow: auto; display: grid; gap: 12px; }
+.dialog.uebertragen h2 { margin: 0; font-size: 18px; }
+.dialog.uebertragen p { margin: 0; }
+.dialog.uebertragen .knoepfe { justify-content: flex-end; }
+.dialog.uebertragen .weg { display: flex; gap: 6px; align-items: center; min-width: 0; font-size: 12px; }
+.dialog.uebertragen .weg code { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.dialog.uebertragen .weg .pfeil { color: var(--signal); font-weight: 600; }
+.plan-teile { margin: 0; padding-left: 18px; display: grid; gap: 2px; }
+.loeschungen { border: 1px solid var(--loeschen); border-radius: 10px; padding: 10px 12px; display: grid; gap: 8px; background: rgba(224, 80, 60, .06); }
+.loeschungen summary { color: var(--loeschen); font-weight: 600; cursor: pointer; }
+.loeschungen ul, .lauf-fehler ul { margin: 6px 0 0; padding-left: 18px; max-height: 200px; overflow: auto; font-size: 12px; }
+.loeschungen label, .dialog.uebertragen .schalter { display: flex; gap: 8px; align-items: center; }
+.meldung.warnung { color: var(--konflikt); }
+.hinweis.klein { font-size: 12px; }
+.balken { height: 8px; border-radius: 4px; background: var(--rand); overflow: hidden; }
+.balken > div { height: 100%; background: var(--signal); transition: width .2s ease; }
+.lauf-fehler summary { cursor: pointer; }
+
+/* --- Streckenansicht (v0.3) --- */
+.karte.klickbar { cursor: pointer; transition: border-color .15s ease, box-shadow .15s ease; }
+.karte.klickbar:hover, .karte.klickbar:focus-visible { border-color: var(--signal); box-shadow: 0 0 0 1px var(--signal); outline: none; }
+.strecke-ansicht > .leiste h2 { flex: 1; margin: 0 12px; }
+.stufen-status { list-style: none; margin: 0; padding: 0; display: grid; gap: 14px; }
+.stufen-zeile { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; align-items: stretch; }
+.stufen-zeile + .stufen-zeile { position: relative; }
+.stufen-zeile + .stufen-zeile::before { content: "↓"; position: absolute; top: -15px; left: 27px; color: var(--signal); font-weight: 600; font-size: 12px; line-height: 1; }
+.stufen-karte, .lauf-liste { background: var(--flaeche); border: 1px solid var(--rand); border-radius: 14px; padding: 14px 16px; min-width: 0; }
+.stufen-karte { display: grid; gap: 6px; border-left: 4px solid var(--geschuetzt); align-content: start; }
+.stufen-karte.status-gleich { border-left-color: var(--neu); }
+.stufen-karte.status-differenz { border-left-color: var(--geaendert); }
+.stufen-karte.status-fehler { border-left-color: var(--loeschen); }
+.stufen-kopf { display: flex; gap: 10px; align-items: center; }
+.stufen-kopf h3 { margin: 0; font-size: 15px; }
+.stufen-karte .stufe-weg { min-width: 0; max-width: none; overflow: visible; white-space: normal; }
+.stufen-karte .stufe-weg .pfad { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.stufen-karte p { margin: 0; }
+.stufen-stand .marke { color: var(--geschuetzt); }
+.status-gleich .stufen-stand .marke { color: var(--neu); }
+.status-differenz .stufen-stand .marke { color: var(--geaendert); }
+.stufen-karte .knoepfe { justify-content: flex-end; margin-top: 4px; }
+.lauf-liste { display: flex; flex-direction: column; max-height: 220px; }
+.lauf-liste h4 { margin: 0 0 6px; font-size: 12px; font-weight: 600; color: var(--text-leise); text-transform: uppercase; letter-spacing: .04em; }
+.lauf-liste > ul { list-style: none; margin: 0; padding: 0; overflow: auto; display: grid; gap: 2px; font-size: 13px; }
+.lauf-liste > p { margin: 0; }
+.lauf summary { cursor: pointer; padding: 2px 0; }
+.lauf .zeichen { display: inline-block; width: 1.2em; }
+.lauf.ok .zeichen { color: var(--neu); }
+.lauf.warnung .zeichen { color: var(--konflikt); }
+.lauf.fehler .zeichen { color: var(--loeschen); }
+.journal { margin: 4px 0 8px 1.2em; padding-left: 18px; font-size: 12px; display: grid; gap: 1px; }
+.journal code { font-size: 12px; }
+.journal .op { color: var(--text-leise); }
+.journal-status { color: var(--text-leise); }
+.journal-fehler .journal-status { color: var(--loeschen); }
+@media (max-width: 760px) { .stufen-zeile { grid-template-columns: minmax(0, 1fr); } }

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { Channel } from "@tauri-apps/api/core";
 
-import { api, fehlerText, type Fortschritt, type Strecke } from "./api";
+import { api, fehlerText, type ExecFortschritt, type Fortschritt, type Strecke } from "./api";
 import { rustAttrappe } from "./test/hilfen";
 
 /** Interne Rückrufe der Tauri-Attrappe (nicht typisiert in @tauri-apps/api). */
@@ -96,6 +96,34 @@ describe("api – jeder Befehl mit richtigem Namen und Parametern", () => {
     const aufrufe = rustAttrappe({ vergleich_schliessen: () => null });
     await api.vergleichSchliessen("v");
     expect(aufrufe).toEqual([{ cmd: "vergleich_schliessen", args: { vergleichId: "v" } }]);
+  });
+
+  it("planErstellen", async () => {
+    const aufrufe = rustAttrappe({ plan_erstellen: () => ({ loeschliste: [] }) });
+    await expect(api.planErstellen("v")).resolves.toEqual({ loeschliste: [] });
+    expect(aufrufe).toEqual([{ cmd: "plan_erstellen", args: { vergleichId: "v" } }]);
+  });
+
+  it("laufStarten übergibt Bestätigung, Schalter und einen Kanal", async () => {
+    const f: ExecFortschritt = { fertig: 1, gesamt: 2, bytes: 3, bytes_gesamt: 4, fehler: 0 };
+    const aufrufe = rustAttrappe({
+      lauf_starten: (args) => {
+        const kanal = (args as { fortschritt: Channel<ExecFortschritt> }).fortschritt;
+        tauriIntern().runCallback(kanal.id, { index: 0, message: f });
+        return { lauf_id: "l1" };
+      },
+    });
+    const meldungen: ExecFortschritt[] = [];
+    await expect(api.laufStarten("v", true, false, (m) => meldungen.push(m))).resolves.toEqual({ lauf_id: "l1" });
+    expect(meldungen).toEqual([f]);
+    expect(aufrufe[0].args).toMatchObject({ vergleichId: "v", loeschenBestaetigt: true, beiFehlerStoppen: false });
+    expect((aufrufe[0].args as { fortschritt: unknown }).fortschritt).toBeInstanceOf(Channel);
+  });
+
+  it("laufAbbrechen", async () => {
+    const aufrufe = rustAttrappe({ lauf_abbrechen: () => true });
+    await expect(api.laufAbbrechen("s", "a")).resolves.toBe(true);
+    expect(aufrufe).toEqual([{ cmd: "lauf_abbrechen", args: { strecke: "s", stufe: "a" } }]);
   });
 
   it("Fehler der Rust-Seite kommen als Ablehnung an", async () => {

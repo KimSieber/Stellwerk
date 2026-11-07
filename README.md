@@ -7,7 +7,7 @@
 
 ---
 
-> **Status:** v0.1 – Strecken erfassen und prüfen (Editor, Schlüsselbund, Regeln); Vergleich im Kern. Noch keine Übertragung.
+> **Status:** v0.3 – Strecken erfassen; je Strecke Status aller Stufen und Protokoll der Läufe; lokale Stufen vergleichen und **„Direkt“ übertragen** (Plan, Sammelbestätigung der Löschungen, Journal). FTPS und „Umschalten“ folgen.
 
 ## Worum geht es?
 
@@ -35,21 +35,24 @@ Tauri 2 · Rust (Logik) · React + TypeScript (Oberfläche) · SQLite (Journal, 
 
 ## Entwicklung
 
-Voraussetzungen: Rust (stable), Node.js ≥ 20, Xcode Command Line Tools.
+Voraussetzungen: Rust über rustup (stable, mit `llvm-tools`), `cargo-llvm-cov`, Node.js ≥ 24.15, Xcode Command Line Tools – Details in der [v0.2 Entwicklungsdoku](docs/v0.2%20Entwicklungsdoku.md), Kap. 2.
 
 ```bash
 npm install
 npm run tauri dev                 # App im Entwicklungsmodus
-cargo test -p stellwerk-core      # Tests des Kerns
+npm test                          # alle Tests (Frontend + Rust)
+npm run pruefen                   # Build + Tests mit Abdeckungsgrenze 100 % – vor jedem Commit
 ```
 
-Konfiguration: `~/Library/Application Support/de.sieber-bw.stellwerk/` (`config.toml`, `strecken/<id>.toml`).
+Konfiguration und Laufzeitdaten: `~/Library/Application Support/de.sieber-bw.stellwerk/` (`config.toml`, `strecken/<id>.toml`, `stellwerk.sqlite`).
 
 ## Dokumentation
 
 - [Konzept & Entscheidungen](docs/KONZEPT.md)
 - [Architektur](docs/ARCHITEKTUR.md)
-- [v0.1 Entwicklungsdoku](docs/v0.1%20Entwicklungsdoku.md)
+- [v0.1 Entwicklungsdoku](docs/v0.1%20Entwicklungsdoku.md) – Grundlagen
+- [v0.2 Entwicklungsdoku](docs/v0.2%20Entwicklungsdoku.md) – Vergleichsansicht
+- [v0.3 Entwicklungsdoku](docs/v0.3%20Entwicklungsdoku.md) – Übertragen „Direkt“, Journal, Protokoll, Streckenansicht
 - Interne Notizen: `docs/intern/`
 
 ## Lizenz

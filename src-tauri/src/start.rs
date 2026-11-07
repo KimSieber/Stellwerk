@@ -29,7 +29,7 @@ pub fn run() {
         .setup(|app| {
             // macOS: ~/Library/Application Support/de.sieber-bw.stellwerk/
             let wurzel = app.path().app_data_dir()?;
-            app.manage(AppState::new(ConfigStore::new(wurzel), tresor()));
+            app.manage(AppState::new(ConfigStore::new(wurzel), tresor())?);
             Ok(())
         })
         .run(tauri::generate_context!())

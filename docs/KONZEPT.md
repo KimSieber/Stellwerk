@@ -52,7 +52,7 @@ Weiche (Gleis teilt sich) + grünes Signal (Freigabe). Quelle: `assets/icon/stel
 | E5 | **Löschungen** werden rot markiert und **gesammelt** einmal bestätigt (nicht einzeln). | Sicherheit ohne Klick-Marathon. |
 | E6 | **FTP heißt mindestens explizites TLS (FTPS).** Klartext-FTP wird nicht angeboten. SFTP folgt später. | Zugangsdaten und Inhalte verschlüsselt. |
 | E7 | **Zugangsdaten im macOS-Schlüsselbund**, nie in Konfigurationsdateien. | Sicherheit. |
-| E8 | **Jede Aktion wird protokolliert** (SQLite). | Nachvollziehbarkeit. |
+| E8 | **Jede Aktion auf Laufwerken und Servern wird protokolliert** (SQLite): jeder Lauf mit jedem einzelnen Schritt. Einstellungen in Stellwerk selbst werden nicht protokolliert (entschieden 07.11.2026). | Nachvollziehbarkeit der Ergebnisse – nicht der Einstellungen. |
 | E9 | **Ausnahmen/Unterschiede nur bewusst gesetzt**, kein Automatismus, getrennt pro Stufe. | Volle Flexibilität, z. B. Server-Konfiguration bewusst im Spiegel. |
 | E10 | **Stufen werden nie in einem Zug ausgeführt**, immer einzeln. | Die Zwischenstufe dient dem Qualitäts-Check – sonst bräuchte es sie nicht. |
 | E11 | **Manifest nur für entfernte Ziele**, lokal immer direkter Vergleich. | Lokal lohnt es nicht und schränkt nur ein. |
@@ -92,7 +92,7 @@ Jede Regel zeigt in der Regelübersicht ihre **Herkunft** und ist per Schalter a
 
 ### 5.3 Globale Standard-Ausschlüsse (je Strecke/Stufe abschaltbar)
 
-`.DS_Store` (praktisch immer), `._*`, `Icon\r`, `Thumbs.db`, `desktop.ini`, `.git/`, `.svn/`, `.idea/`, `.vscode/`, `*.swp`, `*~`, `.dropbox`, `.dropbox.cache/`.
+`.DS_Store` (praktisch immer), `._*`, `Icon[\r]` (macOS-Ordnersymbol; Muster mit Wagenrücklauf, nicht `Icon?`), `Thumbs.db`, `desktop.ini`, `.git/`, `.svn/`, `.idea/`, `.vscode/`, `*.swp`, `*~`, `.dropbox`, `.dropbox.cache/`.
 Dropbox-Konfliktkopien werden nicht übertragen, sondern als **Warnung** angezeigt.
 
 ---

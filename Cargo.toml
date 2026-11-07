@@ -3,7 +3,7 @@ resolver = "2"
 members = ["crates/*", "src-tauri"]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.3.0"
 edition = "2021"
 license = "UNLICENSED"
 authors = ["Kim Sieber"]
@@ -20,4 +20,5 @@ ignore = "0.4"
 walkdir = "2"
 blake3 = "1"
 filetime = "0.2"
+rusqlite = { version = "0.41", features = ["bundled"] }
 stellwerk-core = { path = "crates/stellwerk-core" }

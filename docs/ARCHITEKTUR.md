@@ -1,6 +1,6 @@
 # Stellwerk – Architekturkonzept
 
-Stand: 06.11.2026 · Status: Entwurf · Bezug: [KONZEPT.md](KONZEPT.md) (Entscheidungen E1–E9)
+Stand: 06.11.2026 · Status: Entwurf · Bezug: [KONZEPT.md](KONZEPT.md) (Entscheidungen E1–E11) · Abweichungen der Umsetzung stehen in den Entwicklungsdokus je Version
 
 ---
 
@@ -151,7 +151,7 @@ CREATE TABLE stufen_status (
   PRIMARY KEY (strecke_id, stufe_id, schluessel)
 );
 
--- Protokoll: jede Aktion, auch Konfigurationsänderungen (E8)
+-- Protokoll: jede Aktion auf Laufwerken/Servern (E8); Einstellungen in Stellwerk nicht
 CREATE TABLE protokoll (
   id INTEGER PRIMARY KEY, zeit INTEGER, ebene TEXT,    -- info|warnung|fehler
   strecke_id TEXT, stufe_id TEXT, lauf_id TEXT,
@@ -235,7 +235,7 @@ pub trait TargetEndpoint: SourceEndpoint {
    oder manifest                                           └─ Löschungen? → Sammelbestätigung (E5)
 ```
 
-1. **Scan** – parallel für Quelle und Ziel. Ziel bei FTP standardmäßig aus dem **Manifest**; „Vollabgleich“ liest den Server. Pfade nach NFC normalisiert.
+1. **Scan** – Quelle und Ziel (lokal umgesetzt: nacheinander, s. v0.2-Doku Kap. 8). Ziel bei FTP standardmäßig aus dem **Manifest**; „Vollabgleich“ liest den Server. Pfade nach NFC normalisiert.
 2. **Diff** – Abgleich über Pfad; „geändert“ über Größe, dann Hash (lokal) bzw. Hash gegen Manifest (FTP). Regeln werden angewendet, Warnungen ergänzt (Groß/Klein-Kollision, Symlink, Konfliktkopie, nur online inkl. Volumen).
 3. **Plan** – aus ausgewählten Einträgen werden geordnete Operationen: Ordner anlegen (auch leere) → Dateien → Rechte → Löschungen (tiefste Pfade zuerst). Rechte nach Stufen-Einstellung (nicht setzen / fest / Muster); `777` erzeugt eine Warnung, kein Verbot. „Ersetzen durch“ tauscht die Quelldatei.
 4. **Exec** – Strategie je Modus (Kap. 8). Jeder Schritt wird vorher im Journal angelegt und nachher aktualisiert. Nach Erfolg: Manifest aktualisieren.
@@ -318,12 +318,13 @@ Große Diff-Listen werden **seitenweise** abgefragt (`diff_seite(vergleich_id, o
 - Typen für Commands/Events aus Rust generiert (`specta` + `tauri-specta`) → keine Abweichungen zwischen Backend und Frontend.
 
 Ansichten:
-1. **Startseite** – Strecken als Karten mit Stufen und letztem Lauf
+1. **Startseite** – Strecken als Karten mit Stufen; Klick öffnet die Strecke. Bewusst ohne Status (kein Vergleich aller Strecken beim Start)
+1a. **Strecke** (seit v0.3) – alle Stufen untereinander, beim Öffnen im Hintergrund verglichen: je Stufe Status (was zu tun ist) und Protokoll der Läufe bis zu jedem Schritt
 2. **Stufe** – Vergleichsansicht nach Farbschema aus KONZEPT Kap. 4 (🟢 neu · 🟡 geändert · 🔴 löschen · ⚪ geschützt/ignoriert, zeilengleich), Filter (nur Änderungen / alle / Warnungen), Aktionsleiste
 3. **Ausführung** – Phasen, Fortschritt, offene Dateien, Abbrechen/Rollback
 4. **Regeln** – Übersicht mit Herkunft und Schaltern
 5. **Strecke bearbeiten** – Stufen, Endpunkte, Modus, Rechte, Verbindungstest
-6. **Protokoll** – filterbar nach Strecke, Lauf, Ebene
+6. **Protokoll** – in der Streckenansicht je Stufe (seit v0.3)
 
 ---
 

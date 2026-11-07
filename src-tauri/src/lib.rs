@@ -35,6 +35,11 @@ pub fn befehle<R: Runtime>(builder: tauri::Builder<R>) -> tauri::Builder<R> {
         commands::regel_setzen,
         commands::regel_entfernen,
         commands::ersatz_vorschlaege,
+        commands::plan_erstellen,
+        commands::lauf_starten,
+        commands::lauf_abbrechen,
+        commands::laeufe,
+        commands::lauf_journal,
     ])
 }
 

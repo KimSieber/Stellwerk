@@ -1,10 +1,12 @@
 // Vergleichsansicht einer Stufe (KONZEPT Kap. 4, ARCHITEKTUR Kap. 10 Ansicht 2).
 // Öffnen heißt vergleichen – nie übertragen (E4, E10).
 //
-// Abbrechen und Freigeben des Vergleichs in Rust geschehen nur beim Verlassen
-// über „Zurück“ – nie beim Abbau der Komponente: React baut im StrictMode jede
-// Ansicht zur Probe ab und wieder auf, das würde den Vergleich zerstören.
-// Rust hält je Stufe ohnehin höchstens einen Vergleich.
+// Geöffnet wird sie aus der Streckenansicht: mit dem dort schon fertigen Ergebnis
+// (`start`) oder – wenn es noch keines gibt – sie vergleicht selbst. Der Vergleich
+// gehört danach der Streckenansicht: „Zurück“ gibt den aktuellen Stand zurück und
+// gibt ihn in Rust nicht frei. Abbrechen geschieht nur über „Zurück“ – nie beim
+// Abbau der Komponente: React baut im StrictMode jede Ansicht zur Probe ab und
+// wieder auf. Rust hält je Stufe ohnehin höchstens einen Vergleich.
 
 import { useEffect, useRef, useState } from "react";
 
@@ -21,6 +23,7 @@ import {
 } from "../api";
 import { fortschrittText, groesse } from "./format";
 import { ErsatzDialog, RegelMenue, type Ebene, type MenueAktion } from "./RegelMenue";
+import { UebertragenDialog } from "./UebertragenDialog";
 import { useZeilen } from "./useZeilen";
 import { ZeilenListe } from "./ZeilenListe";
 
@@ -29,7 +32,13 @@ type Props = {
   stufe: string;
   /** Anzeige, z. B. „Mailwerk Webseite · Entwicklung → Spiegel“. */
   titel: string;
-  onZurueck: () => void;
+  /** Schon fertiger Vergleich – dann wird beim Öffnen nicht neu verglichen. */
+  start?: VergleichStart;
+  /**
+   * Verlassen. `stand`: der zuletzt fertige Vergleich (in Rust noch offen) oder `null`;
+   * `uebertragen`: in dieser Ansicht wurde übertragen.
+   */
+  onZurueck: (stand: VergleichStart | null, uebertragen: boolean) => void;
 };
 
 /** Ein gestarteter Vergleich. Die Ansicht hängt sich an; der Auftrag an Rust geht nur einmal raus. */
@@ -40,14 +49,17 @@ type Zustand =
   | { art: "fehler"; fehler: unknown }
   | { art: "fertig"; v: VergleichStart };
 
-export function VergleichAnsicht({ strecke, stufe, titel, onZurueck }: Props) {
+export function VergleichAnsicht({ strecke, stufe, titel, start, onZurueck }: Props) {
   const [lauf, setLauf] = useState(0);
-  const [zustand, setZustand] = useState<Zustand>({ art: "laeuft", fortschritt: null });
+  const [zustand, setZustand] = useState<Zustand>(start ? { art: "fertig", v: start } : { art: "laeuft", fortschritt: null });
   // Bleiben beim Neu-Vergleichen erhalten (z. B. nach „Regel setzen“)
   const [filter, setFilter] = useState<Filter>("alle");
   const [zugeklappt, setZugeklappt] = useState<string[]>([]);
   const [regelFehler, setRegelFehler] = useState<string | null>(null);
-  const laufRef = useRef<Lauf | null>(null);
+  const [uebertragen, setUebertragen] = useState<string | null>(null);
+  const uebertragenWorden = useRef(false);
+  // Mit fertigem Ergebnis gilt Lauf 0 als schon erledigt – es wird nur angehängt
+  const laufRef = useRef<Lauf | null>(start ? { nummer: 0, ergebnis: Promise.resolve(start) } : null);
   /** Wohin Fortschritt gemeldet wird – immer die aktuell angehängte Ansicht. */
   const melden = useRef<((f: Fortschritt) => void) | null>(null);
   const verlassen = useRef(false);
@@ -81,8 +93,7 @@ export function VergleichAnsicht({ strecke, stufe, titel, onZurueck }: Props) {
   const zurueck = () => {
     verlassen.current = true;
     if (zustand.art === "laeuft") void api.vergleichAbbrechen(strecke, stufe);
-    if (zustand.art === "fertig") void api.vergleichSchliessen(zustand.v.vergleich_id);
-    onZurueck();
+    onZurueck(zustand.art === "fertig" ? zustand.v : null, uebertragenWorden.current);
   };
 
   return (
@@ -96,7 +107,12 @@ export function VergleichAnsicht({ strecke, stufe, titel, onZurueck }: Props) {
           ) : (
             <button onClick={neu}>Neu vergleichen</button>
           )}
-          <button className="primaer" disabled title="Übertragen folgt in Version 0.3">
+          <button
+            className="primaer"
+            disabled={zustand.art !== "fertig"}
+            title="Ausgewähltes ins Ziel übertragen – vorher wird der Plan zur Bestätigung gezeigt"
+            onClick={zustand.art === "fertig" ? () => setUebertragen(zustand.v.vergleich_id) : undefined}
+          >
             Übertragen …
           </button>
         </div>
@@ -119,6 +135,19 @@ export function VergleichAnsicht({ strecke, stufe, titel, onZurueck }: Props) {
             neu();
           }}
           onRegelFehler={setRegelFehler}
+        />
+      )}
+      {uebertragen && (
+        <UebertragenDialog
+          vergleichId={uebertragen}
+          strecke={strecke}
+          stufe={stufe}
+          onAbbrechen={() => setUebertragen(null)}
+          onFertig={() => {
+            uebertragenWorden.current = true;
+            setUebertragen(null);
+            neu();
+          }}
         />
       )}
     </section>
