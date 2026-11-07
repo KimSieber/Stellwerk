@@ -33,7 +33,7 @@ Einstieg für einen neuen Chat. Bitte zuerst dieses Dokument lesen, dann
 ### Technischer Ablauf mit Claude (bewährt in v0.1)
 
 - Claude arbeitet in einer Linux-Umgebung, baut und testet dort (`cargo test`, `cargo llvm-cov`, Vitest, Playwright-Screenshots mit nachgebildeter Rust-Seite).
-- Übertragung in Kims Ordner über die Claude-App: Archiv in den Ordner legen, mit `tar xzf … --overwrite` entpacken (Löschen ist im Ordner nicht erlaubt), danach Prüfsummen-Vergleich mit dem geprüften Stand. Das Archiv landet in `_to_delete/` – Kim löscht es.
+- Übertragung in Kims Ordner über die Claude-App: **geänderte Dateien einzeln an ihren Platz schreiben** (bis 50 Dateien je Übertragung), danach Prüfsummen-Vergleich mit dem geprüften Stand. **Keine Archive, kein Ordner `_to_delete/`** – es bleibt nichts im Projektordner zurück. Sind es ausnahmsweise mehr als 50 Dateien: vorher bei Kim melden.
 - **`npm install` immer auf dem Mac** ausführen (Kim), nie in der Linux-Umgebung – sonst landen Linux-Programme in `node_modules`.
 - macOS-spezifischer Code (`schluesselbund.rs`) wird zusätzlich gegen `aarch64-apple-darwin` geprüft (`cargo check --target …`).
 - Ist der Mac nicht verbunden: Archiv als Datei im Chat bereitstellen; Kim lädt herunter und entpackt.
