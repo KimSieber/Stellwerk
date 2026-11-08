@@ -472,6 +472,8 @@ fn umschalten_hash_im_journal_offener_lauf_und_manifest_sicherung() {
     for (phase, offen) in [(LaufPhase::Hochgeladen, true), (LaufPhase::Umgeschaltet, true), (LaufPhase::Zurueckgerollt, false)] {
         d.lauf_phase(&id, phase, T + 1, None).unwrap();
         assert_eq!(d.offener_lauf("web", "server").unwrap().map(|l| l.id), offen.then(|| id.clone()), "{phase:?}");
+        let alle: Vec<String> = d.offene_laeufe().unwrap().into_iter().map(|l| l.id).collect();
+        assert_eq!(alle, if offen { vec![id.clone()] } else { vec![] }, "{phase:?}");
         assert_eq!((phase.ist_offen(), phase.ist_beendet()), (offen, !offen));
     }
     assert!(Modus::UmschaltenManuell.schaltet_um() && Modus::Umschalten.schaltet_um() && !Modus::Direkt.schaltet_um());

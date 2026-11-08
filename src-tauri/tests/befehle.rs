@@ -1229,18 +1229,21 @@ fn journal_status(a: &Testapp, lauf: &Value) -> Vec<String> {
 }
 
 #[test]
-fn umschalten_automatisch_in_einem_zug() {
+fn umschalten_automatisch_stellt_bereit_der_dialog_fuehrt_weiter() {
     let a = app();
     mit_umschalten(&a, "umschalten");
     let (id, vorschau) = vergleichen_und_planen(&a);
     assert_eq!(vorschau["modus"], "umschalten");
+    // v0.6.1: Der Kern stellt nur bereit – Umschalten und Übernehmen löst der Dialog aus
     let r = uebertragen(&a, &id, true, false).unwrap();
-    assert_eq!(r["phase"], "fertig", "{r}");
+    assert_eq!(r["phase"], "hochgeladen", "{r}");
+    let lauf = r["lauf_id"].clone();
+    assert_eq!(weiter(&a, &lauf, "umschalten").unwrap()["phase"], "umgeschaltet");
+    assert_eq!(weiter(&a, &lauf, "uebernehmen").unwrap()["phase"], "fertig");
     assert_eq!(
         spiegel(&a),
         std::collections::BTreeMap::from([("css/".into(), String::new()), ("css/site.css".into(), "c".into()), ("index.php".into(), "neu".into())])
     );
-    let lauf = r["lauf_id"].clone();
     assert!(journal_status(&a, &lauf).iter().all(|s| s == "erledigt"), "{:?}", journal_status(&a, &lauf));
     let aktionen: Vec<String> = protokoll(&a, lauf.as_str().unwrap()).into_iter().map(|(akt, _)| akt).collect();
     assert_eq!(aktionen, ["lauf_gestartet", "hochgeladen", "umgeschaltet", "uebernommen"]);
@@ -1335,8 +1338,11 @@ fn umschalten_fehler_beim_hochladen_und_beim_umschalten() {
     std::fs::create_dir_all(a.wurzel.join("daten/spiegel/css")).unwrap();
     std::fs::write(a.wurzel.join("daten/spiegel/css/site.css"), "fremd").unwrap();
     let r = uebertragen(&a, &id, true, false).unwrap();
-    assert_eq!(r["phase"], "umgeschaltet", "{r}");
+    assert_eq!(r["phase"], "hochgeladen", "{r}");
     let lauf = r["lauf_id"].clone();
+    let s = weiter(&a, &lauf, "umschalten").unwrap();
+    assert_eq!(s["phase"], "umgeschaltet", "{s}");
+    assert_eq!(s["fehler"][0]["pfad"], "css/site.css", "{s}");
     assert!(weiter(&a, &lauf, "uebernehmen").unwrap_err()["meldung"].as_str().unwrap().contains("nicht möglich"));
     let s = weiter(&a, &lauf, "rollback").unwrap();
     assert_eq!(s["phase"], "zurueckgerollt");
@@ -1428,10 +1434,56 @@ fn umschalten_ftps_letzter_bekannter_stand() {
     a.aufruf("strecke_speichern", json!({ "strecke": st })).unwrap();
     let (id, _) = ftps_planen(&a, true);
     let r = uebertragen(&a, &id, true, false).unwrap();
-    assert_eq!(r["phase"], "fertig", "{r}");
+    assert_eq!(r["phase"], "hochgeladen", "{r}");
+    weiter(&a, &r["lauf_id"], "umschalten").unwrap();
+    assert_eq!(weiter(&a, &r["lauf_id"], "uebernehmen").unwrap()["phase"], "fertig");
     let nach = pfade(&a);
     assert!(!nach.iter().any(|p| p.starts_with("weg")), "{nach:?}");
     assert_eq!(std::fs::read_to_string(s.wurzel().join("index.php")).unwrap(), "neu");
+}
+
+#[test]
+fn lauf_aufgeben_markiert_unterbrochen_und_gibt_die_stufe_frei() {
+    let a = app();
+    mit_umschalten(&a, "umschalten_manuell");
+    let (id, _) = vergleichen_und_planen(&a);
+    let lauf = uebertragen(&a, &id, true, false).unwrap()["lauf_id"].clone();
+    let vorher = spiegel(&a);
+    assert_eq!(a.aufruf("lauf_aufgeben", json!({ "laufId": lauf })).unwrap(), Value::Null);
+    assert_eq!(spiegel(&a), vorher, "am Ziel bleibt alles liegen");
+    let l = a.aufruf("laeufe", json!({ "strecke": "mailwerk-web", "stufe": "spiegel", "limit": 1 })).unwrap();
+    assert_eq!(l[0]["phase"], "abgebrochen");
+    assert_eq!(l[0]["ergebnis"]["unterbrochen"], json!({ "grund": "aufgegeben", "phase": "hochgeladen" }));
+    assert_eq!(protokoll(&a, lauf.as_str().unwrap()).last().unwrap().0, "unterbrochen");
+    // Die Stufe ist frei; die Schattendatei zeigt der Vergleich als zu löschen
+    starten(&a);
+
+    let e = a.aufruf("lauf_aufgeben", json!({ "laufId": lauf })).unwrap_err();
+    assert_eq!(e["kategorie"], "nicht_unterstuetzt", "{e}");
+    assert_eq!(a.aufruf("lauf_aufgeben", json!({ "laufId": "gibtsnicht" })).unwrap_err()["kategorie"], "nicht_gefunden");
+    assert!(a.aufruf("lauf_aufgeben", json!({})).is_err(), "ohne Kennung");
+}
+
+#[test]
+fn offene_laeufe_gelten_nach_dem_neustart_als_unterbrochen() {
+    let a = app();
+    mit_umschalten(&a, "umschalten_manuell");
+    let (id, _) = vergleichen_und_planen(&a);
+    let lauf = uebertragen(&a, &id, true, false).unwrap()["lauf_id"].clone();
+    weiter(&a, &lauf, "umschalten").unwrap();
+    let e = a.aufruf("vergleich_starten", json!({ "strecke": "mailwerk-web", "stufe": "spiegel", "fortschritt": KANAL })).unwrap_err();
+    assert_eq!(e["kategorie"], "lauf_offen");
+
+    // „Neustart“: ein neuer Zustand über demselben Konfigurationsordner
+    let neu = AppState::new(ConfigStore::new(&a.wurzel), Box::new(SpeicherTresor::default())).unwrap();
+    let gefunden = neu.datenbank.lock().unwrap().lauf(lauf.as_str().unwrap()).unwrap().unwrap();
+    assert_eq!(gefunden.phase, stellwerk_core::store::LaufPhase::Abgebrochen);
+    assert_eq!(gefunden.ergebnis.unwrap()["unterbrochen"], json!({ "grund": "programm_beendet", "phase": "umgeschaltet" }));
+    assert!(neu.datenbank.lock().unwrap().offene_laeufe().unwrap().is_empty());
+    // Live ist der neue Stand, die Sicherung liegt noch da – der Vergleich zeigt sie
+    assert_eq!(spiegel(&a)["index.php"], "neu");
+    assert!(spiegel(&a).contains_key(&format!("index.php.bak-{}", lauf.as_str().unwrap())));
+    starten(&a);
 }
 
 #[test]

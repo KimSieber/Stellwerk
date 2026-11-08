@@ -12,6 +12,10 @@ use tauri::Runtime;
 /// Ereignis an das Frontend: Menübefehl „Über Stellwerk“ wurde gewählt.
 pub const EREIGNIS_UEBER: &str = "menue_ueber";
 
+/// Ereignis an das Frontend: Menübefehl „Stellwerk beenden“ (⌘Q) – das Frontend fragt
+/// nach, solange ein Lauf offen ist, und schließt dann das Fenster (v0.6.1).
+pub const EREIGNIS_BEENDEN: &str = "menue_beenden";
+
 /// Registriert alle Befehle. Getrennt von [`run`] (Datei `start.rs`), damit Tests dieselbe
 /// Registrierung mit der Mock-Laufzeit verwenden.
 pub fn befehle<R: Runtime>(builder: tauri::Builder<R>) -> tauri::Builder<R> {
@@ -43,6 +47,7 @@ pub fn befehle<R: Runtime>(builder: tauri::Builder<R>) -> tauri::Builder<R> {
         commands::laeufe,
         commands::lauf_journal,
         umschalten::lauf_weiter,
+        umschalten::lauf_aufgeben,
         commands::inhalte_pruefen,
     ])
 }

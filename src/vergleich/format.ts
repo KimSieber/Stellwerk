@@ -172,10 +172,16 @@ export function laufText(l: Lauf): { text: string; art: "ok" | "warnung" | "fehl
   const e = l.ergebnis;
   if (l.phase === "geplant" || l.phase === "laeuft" || e === null) return { text: "nicht abgeschlossen", art: "fehler" };
   const von = `${zahl.format(e.erledigt)} von ${anzahl(n, "Schritt", "Schritten")}`;
+  // v0.6.1: mitten im Ablauf verlassen – der Stand am Ziel ist der, den der Vergleich zeigt
+  if (e.unterbrochen) {
+    const wo = e.unterbrochen.phase === "umgeschaltet" ? "nach dem Umschalten" : "nach dem Bereitstellen";
+    const warum = e.unterbrochen.grund === "programm_beendet" ? "Programm beendet" : "Rollback gescheitert";
+    return { text: `unterbrochen ${wo} (${warum}) · Stand am Ziel prüfen`, art: "fehler" };
+  }
   // Umschalten: wartende und zurückgenommene Läufe
   if (l.phase === "hochgeladen") {
-    if (e.fehler.length > 0) return { text: `Hochladen unvollständig · ${anzahl(e.fehler.length, "Fehler", "Fehler")}`, art: "fehler" };
-    return { text: "hochgeladen · wartet auf Umschalten", art: "warnung" };
+    if (e.fehler.length > 0) return { text: `Bereitstellen unvollständig · ${anzahl(e.fehler.length, "Fehler", "Fehler")}`, art: "fehler" };
+    return { text: "bereitgestellt · wartet auf Umschalten", art: "warnung" };
   }
   if (l.phase === "umgeschaltet") {
     const f = e.umschalten?.fehler.length ?? 0;

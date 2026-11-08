@@ -3,6 +3,7 @@ import { listen } from "@tauri-apps/api/event";
 
 import { EREIGNIS_UEBER, type StreckeUebersicht } from "./api";
 import { APP_INFO } from "./appinfo";
+import { BeendenNachfrage } from "./beenden";
 import { StreckenListe } from "./components/StreckenListe";
 import { Ueber } from "./components/Ueber";
 import { StreckeEditor } from "./editor/StreckeEditor";
@@ -57,6 +58,7 @@ export default function App() {
         )}
       </main>
       {ueberOffen && <Ueber onSchliessen={() => setUeberOffen(false)} />}
+      <BeendenNachfrage />
     </div>
   );
 }

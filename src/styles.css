@@ -291,6 +291,29 @@ legend { font-weight: 600; padding: 0 6px; }
 .balken > div { height: 100%; background: var(--signal); transition: width .2s ease; }
 .lauf-fehler summary { cursor: pointer; }
 
+/* --- Ablauf „Umschalten“ im Dialog (v0.6.1) --- */
+.dialog.uebertragen.breit { width: 760px; }
+.ablauf { list-style: none; margin: 4px 0; padding: 0; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 28px; }
+.kachel { position: relative; border: 1px solid var(--rand); border-radius: 14px; padding: 12px 14px; display: grid; gap: 8px; align-content: start; opacity: .45; transition: opacity .2s ease, border-color .2s ease, box-shadow .2s ease; }
+.kachel .kachel-kopf { display: flex; gap: 8px; align-items: center; }
+.kachel .kachel-nr { width: 24px; height: 24px; border-radius: 50%; display: grid; place-items: center; font-size: 12px; font-weight: 600; background: var(--rand); color: var(--text-leise); flex: none; }
+.kachel button { justify-self: start; }
+.kachel-pfeil { position: absolute; left: -22px; top: 50%; transform: translateY(-50%); color: var(--text-leise); font-weight: 600; }
+.kachel.aktiv, .kachel.laeuft { opacity: 1; border-color: var(--blau); box-shadow: 0 0 0 2px rgba(31, 63, 115, .18); }
+.kachel.aktiv .kachel-nr, .kachel.laeuft .kachel-nr { background: var(--blau); color: #fff; }
+.kachel.erledigt { opacity: 1; border-color: var(--signal); }
+.kachel.erledigt .kachel-nr { background: var(--signal); color: #fff; }
+.kachel.fehler { opacity: 1; border-color: var(--loeschen); }
+.kachel.fehler .kachel-nr { background: var(--loeschen); color: #fff; }
+.dialog.uebertragen .knoepfe.unten { flex-wrap: wrap; }
+.knoepfe.unten button.rollback { flex: 1 0 100%; border-color: var(--loeschen); color: var(--loeschen); }
+.knoepfe.unten button.rollback:disabled { border-color: var(--rand); color: var(--text-leise); }
+.dialog-hintergrund.oben { z-index: 20; }
+.dialog.nachfrage { width: 460px; display: grid; gap: 12px; }
+.dialog.nachfrage h2 { margin: 0; font-size: 18px; }
+.dialog.nachfrage p { margin: 0; }
+.dialog.nachfrage .knoepfe { justify-content: flex-end; }
+
 /* --- Streckenansicht (v0.3) --- */
 .karte.klickbar { cursor: pointer; transition: border-color .15s ease, box-shadow .15s ease; }
 .karte.klickbar:hover, .karte.klickbar:focus-visible { border-color: var(--signal); box-shadow: 0 0 0 1px var(--signal); outline: none; }

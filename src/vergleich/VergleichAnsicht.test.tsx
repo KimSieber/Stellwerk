@@ -511,6 +511,7 @@ describe("Vergleichsansicht – Übertragen", () => {
     quelle: "/q",
     ziel: "/z",
     worker: 4,
+    modus: "direkt" as const,
   };
   const ergebnis = { erledigt: 1, fehler: [], uebersprungen: 0, abgebrochen: false, gestoppt: false, bytes: 1500, journal_fehler: null };
 
@@ -542,21 +543,19 @@ describe("Vergleichsansicht – Übertragen", () => {
     await userEvent.click(screen.getByRole("button", { name: "← Zurück" }));
     expect(zurueck).toHaveBeenCalledWith(start(), true);
   });
-  it("Umschalten manuell: nach dem Hochladen geht es in der Streckenansicht weiter", async () => {
+  it("Umschalten: der ganze Ablauf im Dialog, danach wird neu verglichen", async () => {
     const aufrufe = rust({
-      plan_erstellen: () => ({ ...vorschau, modus: "umschalten_manuell" }),
+      plan_erstellen: () => ({ ...vorschau, modus: "umschalten" }),
       lauf_starten: () => ({ lauf_id: "l1", ergebnis, phase: "hochgeladen" }),
-      vergleich_schliessen: () => null,
+      lauf_weiter: (a) => ({ lauf_id: "l1", phase: (a as { schritt: string }).schritt === "umschalten" ? "umgeschaltet" : "fertig", fehler: [] }),
     });
-    const zurueck = vi.fn();
-    ansicht(zurueck);
+    ansicht(vi.fn());
     await screen.findByText("/Users/kim/Dev/web");
     await userEvent.click(screen.getByRole("button", { name: "Übertragen …" }));
     await userEvent.click(await screen.findByRole("button", { name: "Übertragen" }));
-    await userEvent.click(await screen.findByRole("button", { name: "Weiter in der Streckenansicht" }));
-    expect(zurueck).toHaveBeenCalledWith(null, true);
-    expect(aufrufeVon(aufrufe, "vergleich_starten")).toHaveLength(1);
-    expect(aufrufeVon(aufrufe, "vergleich_schliessen")[0].args).toEqual({ vergleichId: "web/spiegel#1" });
+    await userEvent.click(await screen.findByRole("button", { name: "Fertig – neu vergleichen" }));
+    expect(screen.queryByRole("dialog", { name: "Übertragen" })).toBeNull();
+    await waitFor(() => expect(aufrufeVon(aufrufe, "vergleich_starten")).toHaveLength(2));
   });
 });
 

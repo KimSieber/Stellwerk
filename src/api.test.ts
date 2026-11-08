@@ -122,6 +122,12 @@ describe("api – jeder Befehl mit richtigem Namen und Parametern", () => {
     expect((aufrufe[0].args as { fortschritt: unknown }).fortschritt).toBeInstanceOf(Channel);
   });
 
+  it("laufAufgeben", async () => {
+    const aufrufe = rustAttrappe({ lauf_aufgeben: () => null });
+    await expect(api.laufAufgeben("L1")).resolves.toBeNull();
+    expect(aufrufe).toEqual([{ cmd: "lauf_aufgeben", args: { laufId: "L1" } }]);
+  });
+
   it("laufAbbrechen", async () => {
     const aufrufe = rustAttrappe({ lauf_abbrechen: () => true });
     await expect(api.laufAbbrechen("s", "a")).resolves.toBe(true);

@@ -1,14 +1,18 @@
-//! Modus „Umschalten“ in der Tauri-Hülle (v0.5): Lauf anlegen, Phasen ausführen,
-//! Journal, Protokoll und letzten bekannten Stand (Manifest) pflegen.
+//! Modus „Umschalten“ in der Tauri-Hülle (v0.5, Ablauf v0.6.1): Lauf anlegen, Phasen
+//! ausführen, Journal, Protokoll und letzten bekannten Stand (Manifest) pflegen.
 //!
-//! - **automatisch:** Hochladen → Umschalten → Übernehmen in einem Zug.
-//! - **manuell:** nach dem Hochladen wartet der Lauf (`hochgeladen`); die weiteren
-//!   Schritte kommen über [`lauf_weiter`].
-//! - **Fehler:** Beim Hochladen wird nie umgeschaltet – der Lauf bleibt `hochgeladen`
-//!   und bietet „Abbrechen“. Beim Umschalten stoppt er (`umgeschaltet`) und bietet
-//!   „Rollback“. Ein Abbruch durch den Nutzer beim Hochladen räumt sofort auf.
-//! - Solange ein Lauf `hochgeladen` oder `umgeschaltet` ist, ist die Stufe gesperrt
-//!   (kein Vergleich, keine Übertragung).
+//! - [`starten`] stellt nur bereit (Schattendateien) – in beiden Modi. Die weiteren
+//!   Schritte kommen über [`lauf_weiter`]; bei „automatisch“ löst sie der Dialog
+//!   selbst nacheinander aus, bei „manuell“ der Nutzer. So zeigt der Dialog jede
+//!   Phase als eigenen Schritt.
+//! - **Fehler:** Beim Bereitstellen wird nie umgeschaltet – der Lauf bleibt `hochgeladen`
+//!   und bietet nur „alles zurück“ (Abbrechen). Beim Umschalten stoppt er (`umgeschaltet`)
+//!   und bietet nur „alles zurück“ (Rollback). Ein Abbruch durch den Nutzer beim
+//!   Bereitstellen räumt sofort auf.
+//! - Solange ein Lauf `hochgeladen` oder `umgeschaltet` ist, ist die Stufe gesperrt.
+//!   Ein offener Lauf, den niemand mehr weiterführt (Programm beendet, Absturz, Rollback
+//!   gescheitert), wird **als unterbrochen markiert** ([`lauf_aufgeben`]) – kein
+//!   Fortsetzen; der Vergleich zeigt danach den echten Stand am Ziel.
 //! - **Manifest (FTPS):** wird beim Umschalten fortgeschrieben (vorher gesichert),
 //!   beim Rollback aus der Sicherung zurückgesetzt, beim Übernehmen bereinigt.
 
@@ -28,7 +32,7 @@ use stellwerk_core::exec::umschalten::{self as phasen, plan_aus_journal, PhasenE
 use stellwerk_core::exec::{ExecFortschritt, Optionen};
 use stellwerk_core::model::{Endpunkt, Modus};
 use stellwerk_core::plan::{OpArt, Plan};
-use stellwerk_core::store::{jetzt_ms, JournalStatus, JournalZeile, Lauf, LaufPhase, ManifestEintrag, ProtokollEbene};
+use stellwerk_core::store::{jetzt_ms, Datenbank, JournalStatus, JournalZeile, Lauf, LaufPhase, ManifestEintrag, ProtokollEbene};
 use stellwerk_core::StellwerkError;
 
 use crate::commands::{eintrag, manifest_fortschreiben, worker_fuer, Antwort, LaufAntwort, ZielEp};
@@ -61,8 +65,7 @@ pub struct LaufStand {
 
 type Ort<'a> = (&'a str, &'a str);
 
-/// Startet einen Lauf mit „Umschalten“: Phase 1, bei „automatisch“ und ohne Fehler
-/// gleich Umschalten und Übernehmen.
+/// Startet einen Lauf mit „Umschalten“: nur Phase 1 (Bereitstellen).
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn starten(
     state: &AppState,
@@ -124,20 +127,12 @@ pub(crate) fn starten(
         db.protokollieren(&eintrag(ort, ebene, "hochgeladen", None, json!(ergebnis)))?;
     }
 
-    let lauf = db.lock().unwrap().lauf(&lauf_id)?.expect("eben angelegt");
     let phase = if ergebnis.abgebrochen {
         // Abbruch durch den Nutzer: sofort aufräumen – die Live-Seite war nie berührt
+        let lauf = db.lock().unwrap().lauf(&lauf_id)?.expect("eben angelegt");
         schritt_ausfuehren(state, &lauf, Schritt::Abbrechen, &zep)?.0
-    } else if !ergebnis.vollstaendig() || modus == Modus::UmschaltenManuell {
-        LaufPhase::Hochgeladen
     } else {
-        let (phase, erg) = schritt_ausfuehren(state, &lauf, Schritt::Umschalten, &zep)?;
-        if erg.vollstaendig() {
-            let lauf = db.lock().unwrap().lauf(&lauf_id)?.expect("Lauf besteht");
-            schritt_ausfuehren(state, &lauf, Schritt::Uebernehmen, &zep)?.0
-        } else {
-            phase
-        }
+        LaufPhase::Hochgeladen
     };
     Ok(LaufAntwort { lauf_id, ergebnis, phase })
 }
@@ -163,6 +158,45 @@ pub async fn lauf_weiter(state: State<'_, AppState>, lauf_id: String, schritt: S
     let (phase, erg) = r?;
     let fehler = erg.fehler.into_iter().map(|(_, pfad, meldung)| SchrittFehler { pfad: pfad.to_string(), meldung }).collect();
     Ok(LaufStand { lauf_id, phase, fehler })
+}
+
+/// Gibt einen wartenden Lauf auf (v0.6.1), wenn „alles zurück“ selbst gescheitert ist:
+/// Er gilt als unterbrochen, die Stufe ist wieder frei. Am Ziel wird nichts verändert –
+/// was liegen geblieben ist, zeigt der nächste Vergleich.
+#[tauri::command]
+pub async fn lauf_aufgeben(state: State<'_, AppState>, lauf_id: String) -> Antwort<()> {
+    let db = state.datenbank.lock().unwrap();
+    let gefunden = db.lauf(&lauf_id)?;
+    let lauf = gefunden.ok_or_else(|| StellwerkError::NichtGefunden(format!("Lauf „{lauf_id}“")))?;
+    if !lauf.phase.ist_offen() {
+        return Err(StellwerkError::NichtUnterstuetzt("Der Lauf wartet auf keinen Schritt mehr".into()).into());
+    }
+    aufgeben(&db, &lauf, "aufgegeben")?;
+    Ok(())
+}
+
+/// Beim Start (v0.6.1): Läufe, die noch auf ihren nächsten Schritt warten, wurden durch
+/// Beenden oder Absturz mitten im Ablauf verlassen – sie werden als unterbrochen
+/// markiert, die Stufen sind wieder frei. Kein Fortsetzen.
+pub fn offene_aufgeben(db: &Datenbank) -> Result<(), StellwerkError> {
+    for lauf in db.offene_laeufe()? {
+        aufgeben(db, &lauf, "programm_beendet")?;
+    }
+    Ok(())
+}
+
+/// Markiert einen offenen Lauf als unterbrochen: Phase `abgebrochen` mit Vermerk
+/// `unterbrochen` (Grund, Phase) im Ergebnis, Sicherung des bekannten Stands verworfen,
+/// Warnung im Protokoll.
+fn aufgeben(db: &Datenbank, lauf: &Lauf, grund: &str) -> Result<(), StellwerkError> {
+    let ort = (lauf.strecke_id.as_str(), lauf.stufe_id.as_str(), lauf.id.as_str());
+    let vermerk = json!({ "grund": grund, "phase": lauf.phase });
+    let mut stand = lauf.ergebnis.clone().unwrap_or_default();
+    stand["unterbrochen"] = vermerk.clone();
+    db.lauf_phase(&lauf.id, LaufPhase::Abgebrochen, jetzt_ms(), Some(&stand))?;
+    db.manifest_sicherung_verwerfen(&lauf.id)?;
+    db.protokollieren(&eintrag(ort, ProtokollEbene::Warnung, "unterbrochen", None, vermerk))?;
+    Ok(())
 }
 
 /// Welcher Schritt in welcher Phase erlaubt ist, und ob das Journal ihn zulässt.
@@ -295,7 +329,7 @@ fn phase_json(e: &PhasenErgebnis) -> Value {
 
 /// Nach dem Umschalten einer Operation: Datei mit Hash und Zeit aus dem Hochladen,
 /// neuer Ordner, gelöschte Datei heraus.
-fn manifest_umgeschaltet(db: &stellwerk_core::store::Datenbank, ort: (&str, &str, &str), z: &JournalZeile) -> Result<(), StellwerkError> {
+fn manifest_umgeschaltet(db: &Datenbank, ort: (&str, &str, &str), z: &JournalZeile) -> Result<(), StellwerkError> {
     let (strecke, stufe, lauf_id) = ort;
     match z.op {
         OpArt::Kopieren | OpArt::Ueberschreiben => db.manifest_setzen(

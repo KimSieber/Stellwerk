@@ -20,9 +20,13 @@ pub struct AppState {
 }
 
 impl AppState {
-    /// Öffnet die Laufzeitdatenbank im Konfigurationsordner (legt sie beim ersten Mal an).
+    /// Öffnet die Laufzeitdatenbank im Konfigurationsordner (legt sie beim ersten Mal an)
+    /// und markiert dort offene Läufe als unterbrochen.
     pub fn new(store: ConfigStore, tresor: Box<dyn Tresor>) -> stellwerk_core::Result<Self> {
-        let datenbank = Mutex::new(Datenbank::im_ordner(store.wurzel())?);
+        let datenbank = Datenbank::im_ordner(store.wurzel())?;
+        // v0.6.1: Wer mitten im Umschalten beendet hat, findet den Lauf als unterbrochen vor
+        crate::umschalten::offene_aufgeben(&datenbank)?;
+        let datenbank = Mutex::new(datenbank);
         Ok(Self { store, tresor, vergleiche: Vergleiche::default(), laeufe: Laeufe::default(), datenbank })
     }
 }

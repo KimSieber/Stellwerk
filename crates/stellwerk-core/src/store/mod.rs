@@ -421,6 +421,17 @@ impl Datenbank {
             .map_err(db)
     }
 
+    /// Alle Läufe, die auf ihren nächsten Schritt warten – über alle Strecken (v0.6.1:
+    /// beim Start werden sie als unterbrochen markiert).
+    pub fn offene_laeufe(&self) -> Result<Vec<Lauf>> {
+        let mut stmt = self
+            .conn
+            .prepare(&format!("SELECT {LAUF_SPALTEN} FROM lauf WHERE phase IN ('hochgeladen', 'umgeschaltet') ORDER BY gestartet, id"))
+            .map_err(db)?;
+        let zeilen = stmt.query_map([], lauf_aus).map_err(db)?;
+        zeilen.collect::<rusqlite::Result<_>>().map_err(db)
+    }
+
     // --- Manifest -----------------------------------------------------------
 
     /// Sichert das Manifest einer Stufe für den Lauf (vor dem Umschalten).

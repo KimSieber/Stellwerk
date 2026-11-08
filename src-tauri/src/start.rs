@@ -9,11 +9,14 @@ use tauri::menu::{Menu, MenuBuilder, MenuItem, PredefinedMenuItem as P, SubmenuB
 use tauri::{AppHandle, Emitter, Manager, Runtime};
 
 use crate::state::AppState;
-use crate::{befehle, EREIGNIS_UEBER};
+use crate::{befehle, EREIGNIS_BEENDEN, EREIGNIS_UEBER};
 use stellwerk_core::config::ConfigStore;
 
 /// Kennung des Menübefehls „Über Stellwerk“.
 const MENUE_UEBER: &str = "ueber";
+/// Kennung des Menübefehls „Stellwerk beenden“ (eigener Eintrag statt des fertigen
+/// „Beenden“, damit das Frontend bei offenem Lauf nachfragen kann).
+const MENUE_BEENDEN: &str = "beenden";
 
 pub fn run() {
     befehle(tauri::Builder::default())
@@ -24,6 +27,9 @@ pub fn run() {
             if ereignis.id() == MENUE_UEBER {
                 // Wie bei Mailwerk: eigener Dialog statt des System-Infofensters
                 let _ = app.emit(EREIGNIS_UEBER, ());
+            } else if ereignis.id() == MENUE_BEENDEN {
+                // Das Frontend fragt bei offenem Lauf nach und schließt dann das Fenster
+                let _ = app.emit(EREIGNIS_BEENDEN, ());
             }
         })
         .setup(|app| {
@@ -49,6 +55,7 @@ fn tresor() -> Box<dyn stellwerk_core::secrets::Tresor> {
 /// in Eingabefeldern per Tastenkürzel funktioniert.
 fn menue<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
     let ueber = MenuItem::with_id(app, MENUE_UEBER, "Über Stellwerk", true, None::<&str>)?;
+    let beenden = MenuItem::with_id(app, MENUE_BEENDEN, "Stellwerk beenden", true, Some("CmdOrCtrl+Q"))?;
     let stellwerk = SubmenuBuilder::new(app, "Stellwerk")
         .item(&ueber)
         .separator()
@@ -58,7 +65,7 @@ fn menue<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
         .item(&P::hide_others(app, Some("Andere ausblenden"))?)
         .item(&P::show_all(app, Some("Alle einblenden"))?)
         .separator()
-        .item(&P::quit(app, Some("Stellwerk beenden"))?)
+        .item(&beenden)
         .build()?;
     let bearbeiten = SubmenuBuilder::new(app, "Bearbeiten")
         .item(&P::undo(app, Some("Widerrufen"))?)

@@ -294,6 +294,8 @@ export type LaufErgebnisGesamt = LaufErgebnis & {
   uebernehmen?: PhasenErgebnis;
   rollback?: PhasenErgebnis;
   abbrechen?: PhasenErgebnis;
+  /** v0.6.1: Lauf wurde mitten im Ablauf verlassen (Programm beendet bzw. aufgegeben). */
+  unterbrochen?: { grund: "programm_beendet" | "aufgegeben"; phase: LaufPhase };
 };
 
 /** Nächster Schritt eines wartenden Laufs. */
@@ -337,7 +339,7 @@ export interface JournalZeile {
 export interface LaufAntwort {
   lauf_id: string;
   ergebnis: LaufErgebnis;
-  /** Phase nach dem Start – bei „Umschalten manuell“ `hochgeladen`. */
+  /** Phase nach dem Start – bei „Umschalten“ `hochgeladen` (bereitgestellt) bzw. nach einem Abbruch `abgebrochen`. */
   phase: LaufPhase;
 }
 
@@ -397,6 +399,8 @@ export const api = {
   laufAbbrechen: (strecke: string, stufe: string) => invoke<boolean>("lauf_abbrechen", { strecke, stufe }),
   /** Nächster Schritt eines wartenden Laufs („Umschalten“). */
   laufWeiter: (laufId: string, schritt: Schritt) => invoke<LaufStand>("lauf_weiter", { laufId, schritt }),
+  /** Wartenden Lauf als unterbrochen markieren (wenn „alles zurück“ gescheitert ist) – verändert am Ziel nichts. */
+  laufAufgeben: (laufId: string) => invoke<null>("lauf_aufgeben", { laufId }),
   /** Läufe einer Stufe, neueste zuerst. */
   laeufe: (strecke: string, stufe: string, limit: number) => invoke<Lauf[]>("laeufe", { strecke, stufe, limit }),
   /** Jeder Schritt eines Laufs. */
@@ -405,6 +409,8 @@ export const api = {
 
 /** Ereignis vom App-Menü „Über Stellwerk“ (siehe src-tauri/src/lib.rs). */
 export const EREIGNIS_UEBER = "menue_ueber";
+/** Ereignis vom App-Menü „Stellwerk beenden“ (⌘Q) – das Frontend fragt bei offenem Lauf nach. */
+export const EREIGNIS_BEENDEN = "menue_beenden";
 
 /** Fehlertext aus einem abgelehnten invoke. */
 export function fehlerText(e: unknown): string {

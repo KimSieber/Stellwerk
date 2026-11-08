@@ -140,8 +140,8 @@ describe("Streckenansicht", () => {
     const e = { erledigt: 4, fehler: [], uebersprungen: 0, abgebrochen: false, gestoppt: false, bytes: 10, journal_fehler: null };
     const l: Lauf = { id: "l", strecke_id: "s", stufe_id: "t", modus: "umschalten_manuell", phase: "hochgeladen", gestartet: 0, beendet: null, zusammenfassung: z, ergebnis: e };
     const f = { nr: 1, pfad: "a", meldung: "m" };
-    expect(laufText(l)).toEqual({ text: "hochgeladen · wartet auf Umschalten", art: "warnung" });
-    expect(laufText({ ...l, ergebnis: { ...e, fehler: [{ ...f, art: "kopieren" }] } })).toEqual({ text: "Hochladen unvollständig · 1 Fehler", art: "fehler" });
+    expect(laufText(l)).toEqual({ text: "bereitgestellt · wartet auf Umschalten", art: "warnung" });
+    expect(laufText({ ...l, ergebnis: { ...e, fehler: [{ ...f, art: "kopieren" }] } })).toEqual({ text: "Bereitstellen unvollständig · 1 Fehler", art: "fehler" });
     expect(laufText({ ...l, phase: "umgeschaltet" })).toEqual({ text: "umgeschaltet · wartet auf Übernehmen", art: "warnung" });
     const angehalten = { ...e, umschalten: { erledigt: 1, fehler: [f, f], gestoppt: true } };
     expect(laufText({ ...l, phase: "umgeschaltet", ergebnis: angehalten })).toEqual({ text: "Umschalten angehalten · 2 Fehler", art: "fehler" });
@@ -149,6 +149,15 @@ describe("Streckenansicht", () => {
     const reste = { ...e, uebernehmen: { erledigt: 1, fehler: [f], gestoppt: false } };
     expect(laufText({ ...l, phase: "fertig", ergebnis: reste })).toEqual({ text: "übernommen · 1 Rest nicht entfernt", art: "warnung" });
     expect(laufText({ ...l, phase: "fertig", ergebnis: { ...e, uebernehmen: { erledigt: 3, fehler: [], gestoppt: false } } }).art).toBe("ok");
+  });
+
+  it("unterbrochene Läufe (v0.6.1): klar markiert, mit Phase und Grund", () => {
+    const z = { ordner_anlegen: 0, kopieren: 1, ueberschreiben: 0, rechte: 0, dateien_loeschen: 0, ordner_loeschen: 0, bytes: 1 };
+    const e = { erledigt: 1, fehler: [], uebersprungen: 0, abgebrochen: false, gestoppt: false, bytes: 1, journal_fehler: null };
+    const l: Lauf = { id: "l", strecke_id: "s", stufe_id: "t", modus: "umschalten", phase: "abgebrochen", gestartet: 0, beendet: 1, zusammenfassung: z, ergebnis: e };
+    const mit = (grund: "programm_beendet" | "aufgegeben", phase: "hochgeladen" | "umgeschaltet") => laufText({ ...l, ergebnis: { ...e, unterbrochen: { grund, phase } } });
+    expect(mit("programm_beendet", "umgeschaltet")).toEqual({ text: "unterbrochen nach dem Umschalten (Programm beendet) · Stand am Ziel prüfen", art: "fehler" });
+    expect(mit("aufgegeben", "hochgeladen").text).toBe("unterbrochen nach dem Bereitstellen (Rollback gescheitert) · Stand am Ziel prüfen");
   });
 
   it("Journal-Status", () => {
