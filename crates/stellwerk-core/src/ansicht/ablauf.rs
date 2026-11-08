@@ -125,28 +125,61 @@ pub fn stufe_vergleichen(
     abschliessen(stufe, quelle, ziel.clone(), q, z, &regeln, &inhalt, false, abbruch, fortschritt)
 }
 
-/// Vergleicht eine Stufe, deren Quelle ein FTPS-Server ist (v0.6.5), mit ihrem lokalen
-/// Ziel. Die Quelle wird vom Server eingelesen (Größe und Zeit aus `MLSD`), nie
-/// verändert und nie gelesen – „geändert“ entscheiden Größe und Zeit.
+/// Vergleicht eine Stufe, deren Quelle ein FTPS-Server ist (v0.6.5), mit ihrem Ziel:
+/// lokal gescannt oder – bei einem Server als Ziel (v0.6.5b) – aus dessen letztem
+/// bekanntem Stand bzw. vom Server (`ziel`). Die Quelle wird vom Server eingelesen
+/// (Größe und Zeit aus `MLSD`), nie verändert und nie gelesen – „geändert“ entscheiden
+/// Größe und Zeit.
 pub fn stufe_vergleichen_vom_server(
     strecke: &Strecke,
     stufe_id: &str,
     global: &GlobalConfig,
     ftps: &Ftps,
+    ziel: Option<EntfernterStand>,
     abbruch: &AtomicBool,
     fortschritt: &mut dyn FnMut(Fortschritt),
-) -> Result<StufenVergleich> {
+) -> Result<EntfernterVergleich> {
     let (stufe, quelle, regeln) = vorbereiten(strecke, stufe_id, global)?;
     let Quelle::Ftps(server) = &quelle else {
         return Err(StellwerkError::NichtUnterstuetzt("Quelle ist kein FTPS-Server".into()));
     };
-    // Ein FTPS-Ziel weist schon die Prüfung ab (Server → Server folgt) – hier zur Sicherheit
-    let Endpunkt::Lokal { pfad: ziel } = &stufe.ziel else { return Err(StellwerkError::NichtUnterstuetzt("Server → Server".into())) };
     let q = ftps.auflisten(&regeln, abbruch, &mut |anzahl| fortschritt(Fortschritt { phase: Phase::Quelle, anzahl }))?;
-    let z = scan_lokal(ziel, &regeln, abbruch, &mut |anzahl| fortschritt(Fortschritt { phase: Phase::Ziel, anzahl }))?;
+    let (zielort, z, neues_manifest) = match (&stufe.ziel, ziel) {
+        (Endpunkt::Lokal { pfad }, _) => {
+            let z = scan_lokal(pfad, &regeln, abbruch, &mut |anzahl| fortschritt(Fortschritt { phase: Phase::Ziel, anzahl }))?;
+            (pfad.clone(), z, None)
+        }
+        (Endpunkt::Ftps(_), Some(stand)) => {
+            let (z, neu) = entferntes_ziel(stand, &regeln, abbruch, fortschritt)?;
+            (ziel_kennung(&stufe.ziel), z, neu)
+        }
+        (Endpunkt::Ftps(_), None) => return Err(StellwerkError::NichtUnterstuetzt("Stand des Ziel-Servers fehlt".into())),
+    };
     // Wird bei entfernter Quelle nicht gefragt – gleiche Größe und Zeit oder eben nicht
-    let inhalt = LokalerInhalt::new(ziel, ziel);
-    abschliessen(stufe, ftps_kennung(server), ziel.clone(), q, z, &regeln, &inhalt, true, abbruch, fortschritt)
+    let inhalt = EntfernterInhalt::new(&zielort);
+    let vergleich = abschliessen(stufe, ftps_kennung(server), zielort, q, z, &regeln, &inhalt, true, abbruch, fortschritt)?;
+    Ok(EntfernterVergleich { vergleich, neues_manifest })
+}
+
+/// Stand eines Ziel-Servers: aus dem letzten bekannten Stand oder vom Server gelesen
+/// (dann zusätzlich das abgeglichene Manifest zum Speichern).
+fn entferntes_ziel(
+    stand: EntfernterStand,
+    regeln: &RegelWerk,
+    abbruch: &AtomicBool,
+    fortschritt: &mut dyn FnMut(Fortschritt),
+) -> Result<(ScanErgebnis, Option<Vec<ManifestEintrag>>)> {
+    let (manifest, server_fehler, neues_manifest) = match stand {
+        EntfernterStand::Manifest(m) => (m.to_vec(), vec![], None),
+        EntfernterStand::Server { ftps, manifest } => {
+            let server = ftps.auflisten(regeln, abbruch, &mut |anzahl| fortschritt(Fortschritt { phase: Phase::Ziel, anzahl }))?;
+            let neu = manifest_abgleichen(manifest, &server);
+            (neu.clone(), server.fehler, Some(neu))
+        }
+    };
+    let mut z = aus_liste(manifest.iter().map(ManifestEintrag::als_eintrag).collect(), regeln);
+    z.fehler.extend(server_fehler);
+    Ok((z, neues_manifest))
 }
 
 /// Woher der Stand eines entfernten Ziels (FTPS) kommt.
@@ -182,16 +215,7 @@ pub fn stufe_vergleichen_entfernt(
         return Err(StellwerkError::NichtUnterstuetzt("Stufe hat kein FTPS-Ziel".into()));
     };
     let q = scan_lokal(&quelle, &regeln, abbruch, &mut |anzahl| fortschritt(Fortschritt { phase: Phase::Quelle, anzahl }))?;
-    let (manifest, server_fehler, neues_manifest) = match stand {
-        EntfernterStand::Manifest(m) => (m.to_vec(), vec![], None),
-        EntfernterStand::Server { ftps, manifest } => {
-            let server = ftps.auflisten(&regeln, abbruch, &mut |anzahl| fortschritt(Fortschritt { phase: Phase::Ziel, anzahl }))?;
-            let neu = manifest_abgleichen(manifest, &server);
-            (neu.clone(), server.fehler, Some(neu))
-        }
-    };
-    let mut z = aus_liste(manifest.iter().map(ManifestEintrag::als_eintrag).collect(), &regeln);
-    z.fehler.extend(server_fehler);
+    let (z, neues_manifest) = entferntes_ziel(stand, &regeln, abbruch, fortschritt)?;
     let inhalt = EntfernterInhalt::new(&quelle);
     let ziel = ziel_kennung(&stufe.ziel);
     let vergleich = abschliessen(stufe, quelle, ziel, q, z, &regeln, &inhalt, false, abbruch, fortschritt)?;

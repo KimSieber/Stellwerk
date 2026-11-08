@@ -352,9 +352,10 @@ pub async fn vergleich_starten(
         _ => None,
     };
     let ergebnis = match (&quelle_server, &ftps) {
-        (Some(q), _) => vom_server(&state, &s, &stufe, &global, q, &abbruch, &mut melden).map(|v| (v, None)),
+        (Some(q), None) => vom_server(&state, &s, &stufe, &global, q, &abbruch, &mut melden).map(|v| (v, None)),
         (None, None) => stufe_vergleichen(&s, &stufe, &global, &abbruch, &mut melden).map(|v| (v, None)),
-        (None, Some(f)) => vergleichen_entfernt(&state, &s, &stufe, &global, f, server.unwrap_or(false), &abbruch, &mut melden)
+        // FTPS-Ziel – die Quelle lokal oder (v0.6.5b) ebenfalls ein Server
+        (q, Some(f)) => vergleichen_entfernt(&state, &s, &stufe, &global, f, q.as_ref(), server.unwrap_or(false), &abbruch, &mut melden)
             .map(|(v, mit_server)| (v, Some(if mit_server { "server" } else { "manifest" }))),
     };
     state.vergleiche.abmelden(&schluessel, &abbruch);
@@ -435,7 +436,23 @@ fn vom_server(
     melden: &mut dyn FnMut(Fortschritt),
 ) -> Result<StufenVergleich, StellwerkError> {
     let ftps = Ftps::new(quelle, &hinterlegtes_passwort(state, &quelle.konto_ref)?)?;
-    stufe_vergleichen_vom_server(s, stufe, global, &ftps, abbruch, melden)
+    Ok(stufe_vergleichen_vom_server(s, stufe, global, &ftps, None, abbruch, melden)?.vergleich)
+}
+
+/// Vergleich mit einem Ziel-Server – die Quelle lokal oder (v0.6.5b) ein Server.
+fn mit_stand(
+    s: &Strecke,
+    stufe: &str,
+    global: &GlobalConfig,
+    quelle: Option<&Ftps>,
+    stand: EntfernterStand,
+    abbruch: &AtomicBool,
+    melden: &mut dyn FnMut(Fortschritt),
+) -> Result<stellwerk_core::ansicht::EntfernterVergleich, StellwerkError> {
+    match quelle {
+        Some(q) => stufe_vergleichen_vom_server(s, stufe, global, q, Some(stand), abbruch, melden),
+        None => stufe_vergleichen_entfernt(s, stufe, global, stand, abbruch, melden),
+    }
 }
 
 /// FTPS-Stufe vergleichen. Die Datenbank ist nie während des Netzzugriffs gesperrt.
@@ -447,10 +464,16 @@ fn vergleichen_entfernt(
     stufe: &str,
     global: &GlobalConfig,
     ziel: &stellwerk_core::model::FtpsEndpunkt,
+    quelle: Option<&stellwerk_core::model::FtpsEndpunkt>,
     mit_server: bool,
     abbruch: &AtomicBool,
     melden: &mut dyn FnMut(Fortschritt),
 ) -> Result<(StufenVergleich, bool), StellwerkError> {
+    // Quelle auf einem Server: vom Server gelesen, mit eigenem Passwort
+    let quelle = match quelle {
+        Some(q) => Some(Ftps::new(q, &hinterlegtes_passwort(state, &q.konto_ref)?)?),
+        None => None,
+    };
     let (seit, manifest, lesen) = {
         let db = state.datenbank.lock().unwrap();
         (db.status(&s.id, stufe, MANIFEST_SEIT)?, db.manifest(&s.id, stufe)?, db.status(&s.id, stufe, SERVER_LESEN)?)
@@ -460,11 +483,11 @@ fn vergleichen_entfernt(
         if seit.is_none() {
             return Err(StellwerkError::KeinManifest);
         }
-        let v = stufe_vergleichen_entfernt(s, stufe, global, EntfernterStand::Manifest(&manifest), abbruch, melden)?;
+        let v = mit_stand(s, stufe, global, quelle.as_ref(), EntfernterStand::Manifest(&manifest), abbruch, melden)?;
         return Ok((v.vergleich, false));
     }
     let ftps = Ftps::new(ziel, &hinterlegtes_passwort(state, &ziel.konto_ref)?)?;
-    let v = stufe_vergleichen_entfernt(s, stufe, global, EntfernterStand::Server { ftps: &ftps, manifest: &manifest }, abbruch, melden)?;
+    let v = mit_stand(s, stufe, global, quelle.as_ref(), EntfernterStand::Server { ftps: &ftps, manifest: &manifest }, abbruch, melden)?;
     // Mit Server gibt es immer ein abgeglichenes Manifest
     let neu = v.neues_manifest.unwrap_or_default();
     let mut db = state.datenbank.lock().unwrap();

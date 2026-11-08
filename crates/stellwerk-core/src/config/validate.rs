@@ -107,13 +107,6 @@ pub fn validiere_strecke(s: &Strecke, global: &GlobalConfig) -> Vec<Problem> {
             Endpunkt::Lokal { pfad } => pruefe_lokal(pfad, &format!("{ort}.ziel.pfad"), &mut p),
             Endpunkt::Ftps(f) => pruefe_ftps(f, &format!("{ort}.ziel"), &mut p),
         }
-        // Server → Server folgt mit v0.6.5b (auch über „Ziel einer Vorstufe“)
-        if matches!(st.ziel, Endpunkt::Ftps(_)) && matches!(effektive_quelle(s, i), Some(Quelle::Ftps(_))) {
-            p.push(Problem::fehler(
-                format!("{ort}.ziel.typ"),
-                "Von einem FTPS-Server direkt zu einem FTPS-Server geht noch nicht – Ziel vorerst lokal",
-            ));
-        }
 
         // Einbahn (E3): Eine Stufe schreibt nie in ihre eigene Quelle und nie in die
         // Quelle einer früheren Stufe (z. B. zurück ins Entwicklungsverzeichnis).
@@ -138,6 +131,24 @@ pub fn validiere_strecke(s: &Strecke, global: &GlobalConfig) -> Vec<Problem> {
                         "Ziel überschneidet sich mit der Quelle der früheren Stufe '{}' – Quellen werden nie beschrieben",
                         s.stufen[j].id
                     )
+                };
+                p.push(Problem::fehler(format!("{ort}.ziel.pfad"), meldung));
+            }
+        }
+
+        // Dasselbe auf einem Server (v0.6.5b): gleicher Server, gleicher Benutzer (der
+        // Benutzer bestimmt bei vielen Hostern die Wurzel) und sich überschneidende Pfade.
+        if let Endpunkt::Ftps(ziel) = &st.ziel {
+            for j in (0..=i).rev() {
+                let Some(Quelle::Ftps(q)) = effektive_quelle(s, j) else { continue };
+                let gleicher_server = q.host.eq_ignore_ascii_case(&ziel.host) && q.port == ziel.port && q.benutzer == ziel.benutzer;
+                if !gleicher_server || !ueberlappen(Path::new(&q.pfad), Path::new(&ziel.pfad)) {
+                    continue;
+                }
+                let meldung = if j == i {
+                    format!("Ziel '{}' und Quelle '{}' überschneiden sich auf demselben Server", ziel.pfad, q.pfad)
+                } else {
+                    format!("Ziel überschneidet sich mit der Quelle der früheren Stufe '{}' – Quellen werden nie beschrieben", s.stufen[j].id)
                 };
                 p.push(Problem::fehler(format!("{ort}.ziel.pfad"), meldung));
             }

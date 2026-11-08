@@ -1591,6 +1591,43 @@ fn server_als_quelle_mit_umschalten_und_geaenderter_quelle() {
 }
 
 #[test]
+fn server_zu_server_vergleichen_uebertragen_danach_gleich() {
+    let a = app();
+    let quelle = stellwerk_testserver::starten(Default::default());
+    let ziel = stellwerk_testserver::starten(Default::default());
+    holen_strecke(&a, &quelle, "direkt");
+    // Ziel auf den zweiten Server umstellen
+    let mut st = a.aufruf("strecke_laden", json!({ "id": "holen" })).unwrap();
+    let mut z = ftps_ziel(ziel.port, Some(&ziel.fingerprint));
+    z["pfad"] = json!("/web");
+    z["konto_ref"] = json!("stellwerk:holen:s");
+    st["stufen"][0]["ziel"] = z;
+    a.aufruf("strecke_speichern", json!({ "strecke": st })).unwrap();
+    std::fs::create_dir_all(ziel.wurzel().join("web")).unwrap();
+    for konto in ["stellwerk:holen:s:quelle", "stellwerk:holen:s"] {
+        a.aufruf("passwort_speichern", json!({ "konto": konto, "passwort": stellwerk_testserver::PASSWORT })).unwrap();
+    }
+    let vergleich = |server: bool| a.aufruf("vergleich_starten", json!({ "strecke": "holen", "stufe": "s", "fortschritt": KANAL, "server": server }));
+
+    // Ziel-Server noch nie gelesen – erst mit Server
+    assert_eq!(vergleich(false).unwrap_err()["kategorie"], "kein_manifest");
+    let v = vergleich(true).unwrap();
+    assert_eq!((v["ziel_stand"].clone(), v["zusammenfassung"]["neu"].clone()), (json!("server"), json!(3)), "{v}");
+    let vorschau = a.aufruf("plan_erstellen", json!({ "vergleichId": v["vergleich_id"] })).unwrap();
+    assert_eq!(vorschau["worker"], 2);
+    let r = uebertragen(&a, &v["vergleich_id"], false, false).unwrap();
+    assert_eq!(r["phase"], "fertig", "{r}");
+    assert_eq!(std::fs::read_to_string(ziel.wurzel().join("web/a.log")).unwrap(), "eins");
+    assert_eq!(std::fs::read_to_string(ziel.wurzel().join("web/alt/b.log")).unwrap(), "zwei");
+
+    // Danach – ohne Kontakt zum Ziel-Server – alles gleich; die Quelle ist unverändert
+    let v = vergleich(false).unwrap();
+    assert_eq!(v["ziel_stand"], "manifest");
+    assert_eq!((v["zusammenfassung"]["gleich"].clone(), v["zusammenfassung"]["ausgewaehlt"].clone()), (json!(3), json!(0)), "{v}");
+    assert_eq!(std::fs::read_to_string(quelle.wurzel().join("logs/a.log")).unwrap(), "eins");
+}
+
+#[test]
 fn lauf_weiter_mit_unbekanntem_schritt_wird_abgewiesen() {
     let a = app();
     assert!(a.aufruf("lauf_weiter", json!({ "laufId": "x", "schritt": 5 })).is_err());

@@ -62,7 +62,9 @@ impl Fall {
     }
 
     fn vergleichen(&self, ftps: &Ftps) -> stellwerk_core::Result<StufenVergleich> {
-        stufe_vergleichen_vom_server(&self.strecke, "holen", &GlobalConfig::default(), ftps, &AtomicBool::new(false), &mut |_| {})
+        let v = stufe_vergleichen_vom_server(&self.strecke, "holen", &GlobalConfig::default(), ftps, None, &AtomicBool::new(false), &mut |_| {})?;
+        assert!(v.neues_manifest.is_none(), "lokales Ziel");
+        Ok(v.vergleich)
     }
 }
 
@@ -117,7 +119,7 @@ fn falsche_art_der_quelle_wird_abgewiesen() {
     let mut lokal = f.strecke.clone();
     lokal.stufen[0].quelle = Quelle::Lokal { pfad: f.z.clone() };
     lokal.stufen[0].ziel = stellwerk_core::model::Endpunkt::Lokal { pfad: f.q.clone() };
-    let e = stufe_vergleichen_vom_server(&lokal, "holen", &g, &f.ftps(), &nie, &mut |_| {}).unwrap_err();
+    let e = stufe_vergleichen_vom_server(&lokal, "holen", &g, &f.ftps(), None, &nie, &mut |_| {}).unwrap_err();
     assert!(matches!(e, StellwerkError::NichtUnterstuetzt(ref m) if m.contains("kein FTPS-Server")), "{e}");
 }
 
@@ -163,4 +165,66 @@ fn herunterladen_bis_ins_lokale_ziel_danach_gleich() {
     // Die Zeit des Servers wurde übernommen – der nächste Vergleich ist „gleich“
     let v = f.vergleichen(&ftps).unwrap();
     assert!(v.vergleich.eintraege.iter().all(|e| e.status == DiffStatus::Gleich), "{:?}", status(&v));
+}
+
+// --- Server → Server (v0.6.5b) ---------------------------------------------------
+
+/// Zweite Stufe „weiter“: Quelle derselbe Server wie „holen“, Ziel ein zweiter Server.
+fn mit_ziel_server(f: &Fall, ziel: &TestServer) -> Strecke {
+    let mut s = f.strecke.clone();
+    let mut st = s.stufen[0].clone();
+    st.id = "weiter".into();
+    st.ziel = stellwerk_core::model::Endpunkt::Ftps(stellwerk_core::model::FtpsEndpunkt {
+        host: "127.0.0.1".into(),
+        port: ziel.port,
+        pfad: "/web".into(),
+        benutzer: BENUTZER.into(),
+        tls: Default::default(),
+        konto_ref: "k2".into(),
+        zertifikat: Some(ziel.fingerprint.clone()),
+    });
+    s.stufen = vec![st];
+    s
+}
+
+#[test]
+fn server_zu_server_gegen_bekannten_stand_und_server() {
+    use stellwerk_core::ansicht::EntfernterVergleich;
+    use stellwerk_core::store::ManifestEintrag;
+    let f = fall();
+    let ziel = starten(Aufbau::default());
+    let web = ziel.ordner("web");
+    let s = mit_ziel_server(&f, &ziel);
+    datei(&f.q, "neu.html", "n", ZEIT);
+    datei(&f.q, "gleich.html", "abc", ZEIT);
+    datei(&f.q, "zeit.html", "abc", ZEIT + 60);
+    datei(&web, "weg.html", "w", ZEIT);
+    let ns = ZEIT * 1_000_000_000;
+    let m = |pfad: &str, groesse| ManifestEintrag { pfad: RelPath::new(pfad).unwrap(), ist_ordner: false, groesse, hash: None, mtime_ns: Some(ns), lauf_id: None };
+    let bekannt = vec![m("gleich.html", 3), m("weg.html", 1), m("zeit.html", 3)];
+    let g = GlobalConfig::default();
+    let nie = AtomicBool::new(false);
+    let vergleich = |stand| -> EntfernterVergleich { stufe_vergleichen_vom_server(&s, "weiter", &g, &f.ftps(), Some(stand), &nie, &mut |_| {}).unwrap() };
+
+    // Gegen den letzten bekannten Stand – ohne Kontakt zum Ziel-Server
+    let v = vergleich(EntfernterStand::Manifest(&bekannt));
+    assert_eq!(
+        status(&v.vergleich),
+        [("gleich.html".to_string(), DiffStatus::Gleich), ("neu.html".into(), DiffStatus::Neu), ("weg.html".into(), DiffStatus::Loeschen), ("zeit.html".into(), DiffStatus::Geaendert)]
+    );
+    assert!(v.neues_manifest.is_none());
+    assert_eq!(v.vergleich.ziel, PathBuf::from(format!("ftps://127.0.0.1:{}/web", ziel.port)));
+
+    // Vom Ziel-Server gelesen: abgeglichenes Manifest zum Speichern
+    let ziel_ftps = match &s.stufen[0].ziel {
+        stellwerk_core::model::Endpunkt::Ftps(z) => Ftps::new(z, PASSWORT).unwrap(),
+        _ => unreachable!(),
+    };
+    let v = vergleich(EntfernterStand::Server { ftps: &ziel_ftps, manifest: &bekannt });
+    let pfade: Vec<_> = v.neues_manifest.unwrap().into_iter().map(|e| e.pfad.as_str().to_string()).collect();
+    assert_eq!(pfade, ["weg.html"]);
+
+    // Ohne Stand des Ziel-Servers geht es nicht
+    let e = stufe_vergleichen_vom_server(&s, "weiter", &g, &f.ftps(), None, &nie, &mut |_| {}).unwrap_err();
+    assert!(matches!(e, StellwerkError::NichtUnterstuetzt(ref m) if m.contains("Ziel-Servers")), "{e}");
 }

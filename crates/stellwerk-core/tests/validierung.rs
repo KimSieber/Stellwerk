@@ -127,21 +127,38 @@ fn ftps_zertifikat_muss_ein_sha256_fingerprint_sein() {
 fn ftps_als_quelle_wird_wie_ein_ziel_geprueft() {
     // v0.6.5: Server als Quelle erlaubt, mit lokalem Ziel
     let mut s = beispiel();
-    s.stufen[0].quelle = Quelle::Ftps(gueltiges_ftps());
+    s.stufen[0].quelle = Quelle::Ftps(ftps("quelle.example.de", 21, "/logs", "kim", "stellwerk:x:y"));
     assert_eq!(fehler_orte(&s), Vec::<String>::new());
     s.stufen[0].quelle = Quelle::Ftps(ftps("", 0, "/x", "kim", "k"));
     assert_eq!(fehler_orte(&s), vec!["stufen[0].quelle.host", "stufen[0].quelle.port"]);
 }
 
 #[test]
-fn server_zu_server_geht_noch_nicht() {
-    // Stufe 2 hat ein FTPS-Ziel; ihre Quelle wird zum Server – direkt oder über die Vorstufe
+fn server_zu_server_nur_ohne_ueberschneidung() {
+    // v0.6.5b: erlaubt – anderer Server oder anderer Pfad
     let mut s = beispiel();
-    s.stufen[1].quelle = Quelle::Ftps(gueltiges_ftps());
-    assert_eq!(fehler_orte(&s), vec!["stufen[1].ziel.typ"]);
+    s.stufen[1].quelle = Quelle::Ftps(ftps("quelle.example.de", 21, "/logs", "kim", "k"));
+    assert_eq!(fehler_orte(&s), Vec::<String>::new());
+    let ziel = |s: &Strecke| match &s.stufen[1].ziel { Endpunkt::Ftps(f) => f.clone(), _ => unreachable!() };
+    // Gleicher Server, gleicher Benutzer, Pfade überschneiden sich (Groß/Klein beim Host egal)
+    let z = ziel(&s);
+    s.stufen[1].quelle = Quelle::Ftps(ftps(&z.host.to_uppercase(), z.port, &format!("{}/unter", z.pfad), &z.benutzer, "k"));
+    let p = validiere_strecke(&s, &GlobalConfig::default());
+    let f: Vec<_> = p.iter().filter(|p| p.ist_fehler()).collect();
+    assert_eq!(f.len(), 1, "{p:?}");
+    assert_eq!(f[0].ort, "stufen[1].ziel.pfad");
+    assert!(f[0].meldung.contains("auf demselben Server"), "{}", f[0].meldung);
+    // Anderer Benutzer (eigene Wurzel) oder anderer Port: keine Überschneidung
+    s.stufen[1].quelle = Quelle::Ftps(ftps(&z.host, z.port, &z.pfad, "anderer", "k"));
+    assert_eq!(fehler_orte(&s), Vec::<String>::new());
+    s.stufen[1].quelle = Quelle::Ftps(ftps(&z.host, 990, &z.pfad, &z.benutzer, "k"));
+    assert_eq!(fehler_orte(&s), Vec::<String>::new());
+    // Quelle einer früheren Stufe auf demselben Server
     let mut s = beispiel();
-    s.stufen[0].ziel = Endpunkt::Ftps(gueltiges_ftps());
-    assert!(fehler_orte(&s).contains(&"stufen[1].ziel.typ".to_string()), "{:?}", fehler_orte(&s));
+    let z = ziel(&s);
+    s.stufen[0].quelle = Quelle::Ftps(z.clone());
+    let p = validiere_strecke(&s, &GlobalConfig::default());
+    assert!(p.iter().any(|p| p.ort == "stufen[1].ziel.pfad" && p.meldung.contains("früheren Stufe 'spiegel'")), "{p:?}");
 }
 
 #[test]
