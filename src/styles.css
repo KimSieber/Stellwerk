@@ -331,3 +331,9 @@ legend { font-weight: 600; padding: 0 6px; }
 .stufen-karte.status-offen { border-left-color: var(--konflikt); }
 .stufen-karte.status-offen .marke { color: var(--konflikt); }
 @media (max-width: 760px) { .stufen-zeile { grid-template-columns: minmax(0, 1fr); } }
+
+/* „Inhalte prüfen“ – abgesetzter Sonderfall unter dem Stand des Servers */
+.inhalte-pruefen { border: 1px dashed var(--konflikt); border-radius: 8px; padding: 8px 12px; margin: 8px 0; display: grid; gap: 6px; }
+.inhalte-pruefen p { margin: 0; }
+.inhalte-pruefen .marke { color: var(--konflikt); }
+.inhalte-pruefen > button { justify-self: start; }

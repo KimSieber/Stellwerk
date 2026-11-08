@@ -73,6 +73,18 @@ fn mit_datenkanal<T>(mut befehl: impl FnMut() -> suppaftp::FtpResult<T>) -> supp
     }
 }
 
+/// Eine Datei herunterladen und dabei hashen; der Inhalt wird nirgends gespeichert.
+fn herunterladen_hash(ftp: &mut RustlsFtpStream, abs: &str, abbruch: &AtomicBool) -> Result<Geschrieben> {
+    let mut strom = mit_datenkanal(|| ftp.retr_as_stream(abs)).map_err(ftp_fehler)?;
+    match kopieren(&mut strom, &mut io::sink(), abbruch, Path::new(abs), Path::new("(Prüfsumme)")) {
+        Ok(g) => strom.finish().map_err(ftp_fehler).map(|()| g),
+        Err(e) => {
+            let _ = ftp.abort(strom);
+            Err(e)
+        }
+    }
+}
+
 /// Hinweis fürs Journal, wenn die Datenverbindung wiederholt werden musste.
 fn wiederholt_hinweis(n: usize) -> Option<String> {
     match n {
@@ -335,6 +347,34 @@ impl Ftps {
         }
         let mut erg = aus_liste(liste, regeln);
         erg.fehler.extend(fehler);
+        Ok(erg)
+    }
+
+    /// „Inhalte prüfen“: lädt die Dateien einmal herunter und bildet ihren BLAKE3-Hash –
+    /// für Dateien, deren Inhalt Stellwerk nicht kennt (nur die Größe). Liest nur, über
+    /// eine Verbindung. Fehler gelten je Datei (danach wird neu verbunden, die
+    /// Steuerverbindung könnte aus dem Takt sein); ein Abbruch beendet alles.
+    pub fn inhalte_hashen(
+        &self,
+        pfade: &[RelPath],
+        abbruch: &AtomicBool,
+        fortschritt: &mut dyn FnMut(usize),
+    ) -> Result<Vec<(RelPath, std::result::Result<Geschrieben, String>)>> {
+        let mut ftp = self.anmelden()?;
+        let mut erg = Vec::new();
+        for (i, p) in pfade.iter().enumerate() {
+            let abs = self.absolut(p.as_str());
+            match herunterladen_hash(&mut ftp, &abs, abbruch) {
+                Ok(g) => erg.push((p.clone(), Ok(g))),
+                Err(StellwerkError::Abbruch) => return Err(StellwerkError::Abbruch),
+                Err(e) => {
+                    erg.push((p.clone(), Err(e.to_string())));
+                    ftp = self.anmelden()?;
+                }
+            }
+            fortschritt(i + 1);
+        }
+        let _ = ftp.quit();
         Ok(erg)
     }
 

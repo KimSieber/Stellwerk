@@ -237,3 +237,25 @@ fn manifest_abgleichen_behaelt_hash_nur_bei_gleicher_groesse_und_art() {
     // Ohne Server: leeres Ergebnis
     assert!(manifest_abgleichen(&alt, &ScanErgebnis::default()).is_empty());
 }
+
+// --- Inhalte prüfen (v0.5) ---------------------------------------------------
+
+#[test]
+fn inhalte_hashen_laedt_herunter_und_verzeiht_einzelne_fehler() {
+    let f = fall(Aufbau::default());
+    datei(&f.z, "a.txt", "abc");
+    datei(&f.z, "web/b.css", "body{}");
+    let pfade = [RelPath::new("a.txt").unwrap(), RelPath::new("fehlt.txt").unwrap(), RelPath::new("web/b.css").unwrap()];
+    let mut stand = Vec::new();
+    let erg = f.ftps().inhalte_hashen(&pfade, &AtomicBool::new(false), &mut |n| stand.push(n)).unwrap();
+    assert_eq!(stand, [1, 2, 3]);
+    let a = erg[0].1.as_ref().unwrap();
+    assert_eq!((a.bytes, a.hash), (3, Hash(*blake3::hash(b"abc").as_bytes())));
+    assert!(erg[1].1.as_ref().unwrap_err().contains("550"), "{:?}", erg[1]);
+    assert_eq!(erg[2].1.as_ref().unwrap().hash, Hash(*blake3::hash(b"body{}").as_bytes()), "nach dem Fehler weiter");
+    assert_eq!(fs::read_to_string(f.z.join("a.txt")).unwrap(), "abc", "am Server unverändert");
+
+    // Abbruch: nichts wird mehr geprüft
+    let e = f.ftps().inhalte_hashen(&pfade, &AtomicBool::new(true), &mut |_| {}).unwrap_err();
+    assert!(matches!(e, StellwerkError::Abbruch));
+}

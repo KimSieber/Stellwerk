@@ -295,6 +295,15 @@ pub struct VergleichStart {
     pub lesefehler: Vec<Lesefehler>,
     /// Nur bei FTPS-Zielen: woher der Stand des Ziels kommt (`manifest` | `server`).
     pub ziel_stand: Option<&'static str>,
+    /// Dateien mit „Inhalt nicht geprüft“ – für „Inhalte prüfen“.
+    pub ungeprueft: Ungeprueft,
+}
+
+/// Anzahl und Größe der Dateien, deren Inhalt am Ziel unbekannt ist.
+#[derive(Debug, Default, Serialize)]
+pub struct Ungeprueft {
+    pub anzahl: usize,
+    pub bytes: u64,
 }
 
 /// Wann der Server zuletzt vollständig eingelesen wurde (`stufen_status`).
@@ -343,6 +352,8 @@ pub async fn vergleich_starten(
 
     let sitzung = VergleichsSitzung::neu(v.vergleich);
     let zusammenfassung = sitzung.zusammenfassung().clone();
+    let liste = sitzung.ungeprueft();
+    let ungeprueft = Ungeprueft { anzahl: liste.len(), bytes: liste.iter().map(|(_, b)| b).sum() };
     let zeilen = sitzung.anzahl();
     let (quelle, ziel) = (v.quelle.display().to_string(), v.ziel.display().to_string());
     let offen = OffenerVergleich { sitzung, strecke, stufe, quelle: v.quelle, ziel: v.ziel, plan: None };
@@ -354,7 +365,52 @@ pub async fn vergleich_starten(
         zeilen,
         lesefehler: v.lesefehler,
         ziel_stand,
+        ungeprueft,
     })
+}
+
+/// Ergebnis von „Inhalte prüfen“.
+#[derive(Debug, Serialize)]
+pub struct InhaltePruefung {
+    /// Dateien, deren Inhalt jetzt bekannt ist.
+    pub geprueft: usize,
+    pub fehler: Vec<crate::umschalten::SchrittFehler>,
+}
+
+/// „Inhalte prüfen“ (nur FTPS): Dateien mit unbekanntem Inhalt einmal herunterladen,
+/// hashen und den Hash im letzten bekannten Stand vermerken. Liest am Server nur.
+/// Danach vergleicht die Ansicht neu (ohne Serverkontakt). Abbrechen wie ein Vergleich.
+#[tauri::command]
+pub async fn inhalte_pruefen(state: State<'_, AppState>, vergleich_id: String, fortschritt: Channel<usize>) -> Antwort<InhaltePruefung> {
+    let (strecke, stufe, pfade) = mit_vergleich(&state, &vergleich_id, |o| {
+        Ok((o.strecke.clone(), o.stufe.clone(), o.sitzung.ungeprueft().into_iter().map(|(p, _)| p).collect::<Vec<_>>()))
+    })?;
+    let s = state.store.strecke_laden(&strecke)?;
+    let ziel = s.stufen.into_iter().find(|st| st.id == stufe).map(|st| st.ziel);
+    let Some(Endpunkt::Ftps(f)) = ziel else {
+        return Err(StellwerkError::NichtUnterstuetzt("„Inhalte prüfen“ gibt es nur für FTPS-Ziele – bitte neu vergleichen".into()).into());
+    };
+    let ftps = Ftps::new(&f, &hinterlegtes_passwort(&state, &f.konto_ref)?)?;
+    let schluessel = format!("{strecke}/{stufe}");
+    let abbruch = state.vergleiche.anmelden(&schluessel);
+    let r = ftps.inhalte_hashen(&pfade, &abbruch, &mut |n| drop(fortschritt.send(n)));
+    state.vergleiche.abmelden(&schluessel, &abbruch);
+    let db = state.datenbank.lock().unwrap();
+    let mut bekannt: std::collections::HashMap<RelPath, ManifestEintrag> =
+        db.manifest(&strecke, &stufe)?.into_iter().map(|e| (e.pfad.clone(), e)).collect();
+    let mut erg = InhaltePruefung { geprueft: 0, fehler: vec![] };
+    for (pfad, h) in r? {
+        match h {
+            Ok(g) => {
+                let leer = ManifestEintrag { pfad: pfad.clone(), ist_ordner: false, groesse: 0, hash: None, mtime_ns: None, lauf_id: None };
+                let alt = bekannt.remove(&pfad).unwrap_or(leer);
+                db.manifest_setzen(&strecke, &stufe, &ManifestEintrag { groesse: g.bytes, hash: Some(g.hash), ..alt })?;
+                erg.geprueft += 1;
+            }
+            Err(meldung) => erg.fehler.push(crate::umschalten::SchrittFehler { pfad: pfad.to_string(), meldung }),
+        }
+    }
+    Ok(erg)
 }
 
 /// FTPS-Stufe vergleichen. Die Datenbank ist nie während des Netzzugriffs gesperrt.

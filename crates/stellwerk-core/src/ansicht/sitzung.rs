@@ -133,6 +133,16 @@ impl VergleichsSitzung {
         &self.eintraege
     }
 
+    /// Dateien, deren Inhalt am Ziel unbekannt ist („Inhalt nicht geprüft“) – Pfad am
+    /// Ziel und Größe, für „Inhalte prüfen“.
+    pub fn ungeprueft(&self) -> Vec<(RelPath, u64)> {
+        self.eintraege
+            .iter()
+            .filter(|e| e.warnungen.contains(&crate::model::Warnung::InhaltNichtGeprueft))
+            .map(|e| (e.pfad.clone(), e.ziel.as_ref().map_or(0, |z| z.groesse)))
+            .collect()
+    }
+
     /// Sichtbare Zeilen ab `offset`, höchstens `limit`. Ein Eintrag ist sichtbar, wenn er
     /// zum Filter passt oder etwas Passendes enthält und kein Vorfahr zugeklappt ist.
     pub fn seite(&self, offset: usize, limit: usize, filter: Filter, zugeklappt: &HashSet<RelPath>) -> Seite {

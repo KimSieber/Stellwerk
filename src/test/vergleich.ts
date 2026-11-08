@@ -45,6 +45,7 @@ export function start(teil: Partial<VergleichStart> = {}): VergleichStart {
     zeilen: 2,
     lesefehler: [],
     ziel_stand: null,
+    ungeprueft: { anzahl: 0, bytes: 0 },
     ...teil,
   };
 }

@@ -565,6 +565,31 @@ describe("Vergleichsansicht – FTPS-Ziel", () => {
   const server = (aufrufe: ReturnType<typeof rust>) =>
     aufrufeVon(aufrufe, "vergleich_starten").map((a) => (a.args as { server: boolean }).server);
 
+  it("Inhalte prüfen: nur bei unbekanntem Inhalt; danach Meldung und neu verglichen ohne Server", async () => {
+    let n = 0;
+    const aufrufe = rust({
+      vergleich_starten: () => {
+        n += 1;
+        return n === 1 ? start({ ...ftps("server"), ungeprueft: { anzahl: 2, bytes: 6 } }) : ftps("manifest");
+      },
+      inhalte_pruefen: () => ({ geprueft: 2, fehler: [] }),
+    });
+    ansicht();
+    await screen.findByRole("region", { name: "Inhalte prüfen" });
+    await userEvent.click(screen.getByRole("button", { name: "Inhalte prüfen …" }));
+    await userEvent.click(screen.getByRole("button", { name: "Herunterladen und prüfen" }));
+    expect(await screen.findByText("Inhalt von 2 Dateien geprüft")).toHaveClass("pruef-meldung");
+    await waitFor(() => expect(server(aufrufe)).toEqual([false, false]));
+    await screen.findByText(/letzter bekannter Stand/);
+    expect(screen.queryByRole("region", { name: "Inhalte prüfen" })).toBeNull();
+    // Der nächste Vergleich per Knopf nimmt die Meldung weg
+    await userEvent.click(screen.getByRole("button", { name: "Schnell vergleichen" }));
+    expect(screen.queryByText("Inhalt von 2 Dateien geprüft")).toBeNull();
+    await screen.findByText(/letzter bekannter Stand/);
+    await userEvent.click(screen.getByRole("button", { name: "Mit Server vergleichen" }));
+    await waitFor(() => expect(server(aufrufe)).toEqual([false, false, false, true]));
+  });
+
   it("noch nie gelesen: „Mit Server vergleichen …“ liest den Server", async () => {
     const aufrufe = rust({
       vergleich_starten: (a) => {

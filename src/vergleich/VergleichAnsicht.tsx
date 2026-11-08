@@ -20,6 +20,7 @@ import {
   type BefehlsFehler,
   type Filter,
   type Fortschritt,
+  type InhaltePruefung,
   type RegelOrt,
   type VergleichStart,
   type Zeile,
@@ -28,6 +29,7 @@ import {
 import { fortschrittText, groesse } from "./format";
 import { ErsatzDialog, RegelMenue, type Ebene, type MenueAktion } from "./RegelMenue";
 import { UebertragenDialog } from "./UebertragenDialog";
+import { InhaltePruefen, pruefMeldung } from "./InhaltePruefen";
 import { useZeilen } from "./useZeilen";
 import { ZeilenListe } from "./ZeilenListe";
 
@@ -63,6 +65,8 @@ export function VergleichAnsicht({ strecke, stufe, titel, start, onZurueck }: Pr
   const [zugeklappt, setZugeklappt] = useState<string[]>([]);
   const [regelFehler, setRegelFehler] = useState<string | null>(null);
   const [uebertragen, setUebertragen] = useState<string | null>(null);
+  /** Rückmeldung nach „Inhalte prüfen“ – bis zum nächsten Vergleich per Knopf. */
+  const [pruefText, setPruefText] = useState<string | null>(null);
   const uebertragenWorden = useRef(false);
   // Mit fertigem Ergebnis gilt Lauf 0 als schon erledigt – es wird nur angehängt
   const laufRef = useRef<Lauf | null>(start ? { nummer: 0, ergebnis: Promise.resolve(start) } : null);
@@ -117,13 +121,22 @@ export function VergleichAnsicht({ strecke, stufe, titel, start, onZurueck }: Pr
           ) : (
             <>
               <button
-                onClick={() => neu()}
+                onClick={() => {
+                  setPruefText(null);
+                  neu();
+                }}
                 title={ftps ? "Ohne Serverkontakt – gegen den letzten bekannten Stand des Servers, wie Stellwerk ihn kennt" : undefined}
               >
                 {ftps ? "Schnell vergleichen" : "Neu vergleichen"}
               </button>
               {ftps && (
-                <button onClick={() => neu(true)} title="Liest den Server vollständig – verändert dort nichts">
+                <button
+                  onClick={() => {
+                    setPruefText(null);
+                    neu(true);
+                  }}
+                  title="Liest den Server vollständig – verändert dort nichts"
+                >
                   Mit Server vergleichen
                 </button>
               )}
@@ -142,6 +155,7 @@ export function VergleichAnsicht({ strecke, stufe, titel, start, onZurueck }: Pr
       {zustand.art === "laeuft" && <p className="hinweis fortschritt">{fortschrittText(zustand.fortschritt)}</p>}
       {zustand.art === "fehler" && <Fehler fehler={zustand.fehler} onMitServer={() => neu(true)} />}
       {regelFehler && <p className="meldung fehler">Regel nicht gespeichert: {regelFehler}</p>}
+      {pruefText && <p className="meldung ok pruef-meldung">{pruefText}</p>}
       {zustand.art === "fertig" && (
         <Ergebnis
           key={zustand.v.vergleich_id}
@@ -157,6 +171,10 @@ export function VergleichAnsicht({ strecke, stufe, titel, start, onZurueck }: Pr
             neu();
           }}
           onRegelFehler={setRegelFehler}
+          onGeprueft={(e) => {
+            setPruefText(pruefMeldung(e));
+            neu();
+          }}
         />
       )}
       {uebertragen && (
@@ -213,9 +231,11 @@ type ErgebnisProps = {
   /** Regel gespeichert → neu vergleichen. */
   onRegelGeaendert: () => void;
   onRegelFehler: (text: string) => void;
+  /** „Inhalte prüfen“ fertig → ohne Serverkontakt neu vergleichen. */
+  onGeprueft: (e: InhaltePruefung) => void;
 };
 
-function Ergebnis({ v, strecke, stufe, filter, setFilter, zugeklappt, setZugeklappt, onRegelGeaendert, onRegelFehler }: ErgebnisProps) {
+function Ergebnis({ v, strecke, stufe, filter, setFilter, zugeklappt, setZugeklappt, onRegelGeaendert, onRegelFehler, onGeprueft }: ErgebnisProps) {
   const [menue, setMenue] = useState<{ z: Zeile; x: number; y: number } | null>(null);
   const [ersatz, setErsatz] = useState<{ z: Zeile; ebene: Ebene; vorschlaege: string[] } | null>(null);
   const [summe, setSumme] = useState<Zusammenfassung>(v.zusammenfassung);
@@ -270,6 +290,9 @@ function Ergebnis({ v, strecke, stufe, filter, setFilter, zugeklappt, setZugekla
             ? "Stand des Servers: soeben vollständig gelesen."
             : "Stand des Servers: letzter bekannter Stand – der Server wurde nicht gelesen. „Mit Server vergleichen“ prüft ihn."}
         </p>
+      )}
+      {v.ziel_stand && v.ungeprueft.anzahl > 0 && (
+        <InhaltePruefen vergleichId={v.vergleich_id} strecke={strecke} stufe={stufe} ungeprueft={v.ungeprueft} onGeprueft={onGeprueft} />
       )}
       <Summen s={summe} />
       {v.lesefehler.length > 0 && (

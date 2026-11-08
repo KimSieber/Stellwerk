@@ -219,6 +219,14 @@ export interface VergleichStart {
   lesefehler: Lesefehler[];
   /** Nur bei FTPS-Zielen: Stand aus dem Manifest oder soeben vom Server gelesen. */
   ziel_stand: "manifest" | "server" | null;
+  /** Dateien mit „Inhalt nicht geprüft“ (nur Größe bekannt) – für „Inhalte prüfen“. */
+  ungeprueft: { anzahl: number; bytes: number };
+}
+
+/** Ergebnis von „Inhalte prüfen“. */
+export interface InhaltePruefung {
+  geprueft: number;
+  fehler: { pfad: string; meldung: string }[];
 }
 
 // --- Übertragen „Direkt“ (Spiegel von stellwerk_core::plan / ::exec) ---
@@ -356,6 +364,9 @@ export const api = {
   vergleichStarten: (strecke: string, stufe: string, beiFortschritt: (f: Fortschritt) => void, server = false) =>
     invoke<VergleichStart>("vergleich_starten", { strecke, stufe, fortschritt: new Channel(beiFortschritt), server }),
   vergleichAbbrechen: (strecke: string, stufe: string) => invoke<boolean>("vergleich_abbrechen", { strecke, stufe }),
+  /** FTPS: Dateien mit unbekanntem Inhalt herunterladen und hashen; abbrechen wie ein Vergleich. */
+  inhaltePruefen: (vergleichId: string, beiFortschritt: (n: number) => void) =>
+    invoke<InhaltePruefung>("inhalte_pruefen", { vergleichId, fortschritt: new Channel(beiFortschritt) }),
   diffSeite: (vergleichId: string, offset: number, limit: number, filter: Filter, zugeklappt: string[]) =>
     invoke<Seite>("diff_seite", { vergleichId, offset, limit, filter, zugeklappt }),
   auswahlSetzen: (vergleichId: string, pfade: string[], an: boolean) =>

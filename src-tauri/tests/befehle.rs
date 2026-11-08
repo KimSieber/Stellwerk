@@ -1439,3 +1439,41 @@ fn lauf_weiter_mit_unbekanntem_schritt_wird_abgewiesen() {
     let a = app();
     assert!(a.aufruf("lauf_weiter", json!({ "laufId": "x", "schritt": 5 })).is_err());
 }
+
+// --- Inhalte prüfen (v0.5) -----------------------------------------------------
+
+#[test]
+fn inhalte_pruefen_macht_den_inhalt_bekannt() {
+    let a = app();
+    let s = stellwerk_testserver::starten(Default::default());
+    ftps_strecke(&a, &s);
+    std::fs::write(s.wurzel().join("gleich2.css"), "aaa").unwrap();
+    std::fs::write(a.wurzel.join("daten/quelle/gleich2.css"), "bbb").unwrap();
+    passwort_hinterlegen(&a);
+    let v = ftps_vergleich(&a, Some(true)).unwrap();
+    assert_eq!((v["ungeprueft"]["anzahl"].clone(), v["ungeprueft"]["bytes"].clone()), (json!(2), json!(6)), "{v}");
+    let id = v["vergleich_id"].clone();
+    // Eine der beiden verschwindet vor dem Prüfen vom Server
+    std::fs::remove_file(s.wurzel().join("gleich2.css")).unwrap();
+    let r = a.aufruf("inhalte_pruefen", json!({ "vergleichId": id, "fortschritt": KANAL })).unwrap();
+    assert_eq!(r["geprueft"], 1, "{r}");
+    assert_eq!(r["fehler"][0]["pfad"], "gleich2.css");
+    assert_eq!(std::fs::read_to_string(s.wurzel().join("gleich.css")).unwrap(), "xyz", "am Server nichts verändert");
+
+    // Ohne Serverkontakt neu vergleichen: der Inhalt ist jetzt bekannt – und verschieden
+    let v = ftps_vergleich(&a, Some(false)).unwrap();
+    assert_eq!(v["ungeprueft"]["anzahl"], 1, "nur noch die nicht geprüfte");
+    let zeile = seite(&a, &v["vergleich_id"]).into_iter().find(|z| z["pfad"] == "gleich.css").unwrap();
+    assert_eq!(zeile["status"], "geaendert", "{zeile}");
+}
+
+#[test]
+fn inhalte_pruefen_nur_fuer_ftps() {
+    let a = app();
+    mit_vergleichsdaten(&a);
+    let id = starten(&a)["vergleich_id"].clone();
+    let e = a.aufruf("inhalte_pruefen", json!({ "vergleichId": id, "fortschritt": KANAL })).unwrap_err();
+    assert_eq!(e["kategorie"], "nicht_unterstuetzt");
+    assert_eq!(a.aufruf("inhalte_pruefen", json!({ "vergleichId": "x", "fortschritt": KANAL })).unwrap_err()["kategorie"], "nicht_gefunden");
+    assert!(a.aufruf("inhalte_pruefen", json!({ "vergleichId": id })).is_err(), "ohne Kanal");
+}

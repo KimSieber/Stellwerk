@@ -43,6 +43,7 @@ pub fn befehle<R: Runtime>(builder: tauri::Builder<R>) -> tauri::Builder<R> {
         commands::laeufe,
         commands::lauf_journal,
         umschalten::lauf_weiter,
+        commands::inhalte_pruefen,
     ])
 }
 
