@@ -33,6 +33,9 @@ pub enum Warnung {
     Lesefehler { meldung: String },
     /// Ordner bleibt bestehen, weil darin Geschütztes oder Ignoriertes liegt.
     EnthaeltBleibendes,
+    /// Entferntes Ziel: gleiche Größe, Inhalt aber nicht verglichen (noch kein Hash im
+    /// Manifest, z. B. nach dem ersten Einlesen des Servers).
+    InhaltNichtGeprueft,
 }
 
 /// BLAKE3-Hash eines Dateiinhalts, als Hex-Text dargestellt.

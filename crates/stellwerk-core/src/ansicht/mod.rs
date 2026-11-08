@@ -5,6 +5,9 @@ mod ablauf;
 mod sitzung;
 mod sortierung;
 
-pub use ablauf::{stufe_vergleichen, Drossel, Fortschritt, Lesefehler, Phase, Seitenname, StufenVergleich};
+pub use ablauf::{
+    manifest_abgleichen, stufe_vergleichen, stufe_vergleichen_entfernt, Drossel, EntfernterStand, EntfernterVergleich, Fortschritt,
+    Lesefehler, Phase, Seitenname, StufenVergleich,
+};
 pub use sitzung::{Filter, Seite, VergleichsSitzung, Zeile};
 pub use sortierung::{namen_vergleichen, pfade_vergleichen};

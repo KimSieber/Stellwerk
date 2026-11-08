@@ -7,7 +7,10 @@
 //! - **Protokoll:** jede Aktion auf Laufwerken und Servern (E8) – Beginn, Fehler und Ende
 //!   der Läufe. Einstellungen in Stellwerk selbst werden bewusst nicht protokolliert.
 //!
-//! `manifest` und `stufen_status` folgen mit FTPS (v0.4).
+//! - **Manifest** (seit Schema 2, v0.4): Stand des zuletzt übertragenen Inhalts je
+//!   entfernter Stufe (E11) – Vergleichsbasis statt Server-Zeitstempeln.
+//! - **Stufen-Status** (seit Schema 2): Gelerntes je Stufe, z. B. ob der Server beim
+//!   Umbenennen überschreibt oder wie viele Verbindungen er verträgt.
 //!
 //! Zeiten in Millisekunden seit 1970; sie werden übergeben, damit Tests sie festlegen können.
 
@@ -20,14 +23,14 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::error::{Result, StellwerkError};
-use crate::model::{Modus, RelPath};
+use crate::model::{Eintrag, EintragArt, Hash, Modus, RelPath};
 use crate::plan::{OpArt, Plan, PlanZusammenfassung};
 
 /// Dateiname im App-Ordner (neben `config.toml`).
 pub const DATEINAME: &str = "stellwerk.sqlite";
 
 /// Stand des Schemas (`PRAGMA user_version`).
-const SCHEMA_VERSION: i64 = 1;
+const SCHEMA_VERSION: i64 = 3;
 
 const SCHEMA: &str = "
 CREATE TABLE lauf (
@@ -73,6 +76,49 @@ CREATE TABLE protokoll (
 CREATE INDEX protokoll_stufe ON protokoll (strecke_id, stufe_id, id);
 CREATE INDEX protokoll_lauf ON protokoll (lauf_id, id);
 ";
+
+/// Ergänzung in Schema 2 (v0.4); vorhandene Datenbanken werden beim Öffnen hochgestuft.
+const SCHEMA_2: &str = "
+CREATE TABLE manifest (
+  strecke_id TEXT NOT NULL,
+  stufe_id TEXT NOT NULL,
+  pfad TEXT NOT NULL,
+  ist_ordner INTEGER NOT NULL,
+  groesse INTEGER NOT NULL,
+  hash BLOB,
+  mtime_ms INTEGER,
+  lauf_id TEXT,
+  PRIMARY KEY (strecke_id, stufe_id, pfad)
+);
+
+CREATE TABLE stufen_status (
+  strecke_id TEXT NOT NULL,
+  stufe_id TEXT NOT NULL,
+  schluessel TEXT NOT NULL,
+  wert TEXT NOT NULL,
+  aktualisiert INTEGER NOT NULL,
+  PRIMARY KEY (strecke_id, stufe_id, schluessel)
+);
+";
+
+/// Schema 3 (v0.4): Zeit der Quelle in Nanosekunden wie beim Scan – sonst gälte eine
+/// unveränderte Datei nie als „gleiche Zeit“ und müsste bei jedem Vergleich gelesen werden.
+const SCHEMA_3: &str = "ALTER TABLE manifest RENAME COLUMN mtime_ms TO mtime_ns;";
+
+/// Ein Eintrag im Manifest: so liegt der Pfad nach Stellwerks letztem Lauf am Ziel.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ManifestEintrag {
+    pub pfad: RelPath,
+    pub ist_ordner: bool,
+    pub groesse: u64,
+    /// BLAKE3 des übertragenen Inhalts; fehlt, wenn nur die Größe bekannt ist
+    /// (Erstvergleich ohne Herunterladen).
+    pub hash: Option<Hash>,
+    /// Änderungszeit der Quelle beim Übertragen (ns) – gleiche Zeit und Größe heißt
+    /// „unverändert“, ohne die Quelle zu lesen.
+    pub mtime_ns: Option<i64>,
+    pub lauf_id: Option<String>,
+}
 
 /// Phase eines Laufs. „Direkt“ kennt geplant → läuft → fertig/abgebrochen;
 /// die Phasen von „Umschalten“ kommen mit v0.5 hinzu.
@@ -214,8 +260,11 @@ impl Datenbank {
             conn.pragma_update(None, "synchronous", "NORMAL")?;
             conn.pragma_update(None, "foreign_keys", true)?;
             let version: i64 = conn.pragma_query_value(None, "user_version", |r| r.get(0))?;
-            if version == 0 {
-                conn.execute_batch(&format!("BEGIN; {SCHEMA} PRAGMA user_version = {SCHEMA_VERSION}; COMMIT;"))?;
+            if version < SCHEMA_VERSION {
+                // Fehlende Stufen nacheinander; vorhandene Daten bleiben erhalten
+                let schritte = [SCHEMA, SCHEMA_2, SCHEMA_3];
+                let fehlend = schritte[version.max(0) as usize..].concat();
+                conn.execute_batch(&format!("BEGIN; {fehlend} PRAGMA user_version = {SCHEMA_VERSION}; COMMIT;"))?;
             }
             Ok((conn, version))
         };
@@ -297,6 +346,73 @@ impl Datenbank {
             )
             .map_err(db)?;
         gefunden(n, || format!("Journal-Eintrag {nr} von Lauf „{lauf_id}“"))
+    }
+
+    // --- Manifest -----------------------------------------------------------
+
+    /// Trägt einen Pfad ein oder ersetzt ihn.
+    pub fn manifest_setzen(&self, strecke_id: &str, stufe_id: &str, e: &ManifestEintrag) -> Result<()> {
+        manifest_einfuegen(&self.conn, strecke_id, stufe_id, e).map_err(db)
+    }
+
+    /// Entfernt einen Pfad samt allem darunter (gelöschter Ordner).
+    pub fn manifest_entfernen(&self, strecke_id: &str, stufe_id: &str, pfad: &RelPath) -> Result<()> {
+        // Exakter Präfix (LIKE wäre in SQLite unabhängig von Groß/Klein)
+        let unter = format!("{}/", pfad.as_str());
+        self.conn
+            .execute(
+                "DELETE FROM manifest WHERE strecke_id = ?1 AND stufe_id = ?2 AND (pfad = ?3 OR substr(pfad, 1, ?5) = ?4)",
+                params![strecke_id, stufe_id, pfad.as_str(), unter, unter.chars().count() as i64],
+            )
+            .map(drop)
+            .map_err(db)
+    }
+
+    /// Ersetzt das ganze Manifest einer Stufe (Erstvergleich, Vollabgleich) – in einem Schritt.
+    pub fn manifest_ersetzen(&mut self, strecke_id: &str, stufe_id: &str, eintraege: &[ManifestEintrag]) -> Result<()> {
+        let tx = self.conn.transaction().map_err(db)?;
+        tx.execute("DELETE FROM manifest WHERE strecke_id = ?1 AND stufe_id = ?2", params![strecke_id, stufe_id]).map_err(db)?;
+        for e in eintraege {
+            manifest_einfuegen(&tx, strecke_id, stufe_id, e).map_err(db)?;
+        }
+        tx.commit().map_err(db)
+    }
+
+    /// Manifest einer Stufe, nach Pfad sortiert. Leer, wenn noch nie übertragen.
+    pub fn manifest(&self, strecke_id: &str, stufe_id: &str) -> Result<Vec<ManifestEintrag>> {
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT pfad, ist_ordner, groesse, hash, mtime_ns, lauf_id FROM manifest
+                 WHERE strecke_id = ?1 AND stufe_id = ?2 ORDER BY pfad",
+            )
+            .map_err(db)?;
+        let zeilen = stmt.query_map(params![strecke_id, stufe_id], manifest_aus).map_err(db)?;
+        zeilen.collect::<rusqlite::Result<_>>().map_err(db)
+    }
+
+    // --- Stufen-Status (Gelerntes) ------------------------------------------
+
+    pub fn status_setzen(&self, strecke_id: &str, stufe_id: &str, schluessel: &str, wert: &str, zeit: i64) -> Result<()> {
+        self.conn
+            .execute(
+                "INSERT OR REPLACE INTO stufen_status (strecke_id, stufe_id, schluessel, wert, aktualisiert)
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![strecke_id, stufe_id, schluessel, wert, zeit],
+            )
+            .map(drop)
+            .map_err(db)
+    }
+
+    pub fn status(&self, strecke_id: &str, stufe_id: &str, schluessel: &str) -> Result<Option<String>> {
+        self.conn
+            .query_row(
+                "SELECT wert FROM stufen_status WHERE strecke_id = ?1 AND stufe_id = ?2 AND schluessel = ?3",
+                params![strecke_id, stufe_id, schluessel],
+                |r| r.get(0),
+            )
+            .optional()
+            .map_err(db)
     }
 
     pub fn lauf(&self, id: &str) -> Result<Option<Lauf>> {
@@ -405,6 +521,43 @@ impl Datenbank {
 }
 
 const LAUF_SPALTEN: &str = "id, strecke_id, stufe_id, modus, phase, gestartet, beendet, zusammenfassung, ergebnis";
+
+impl ManifestEintrag {
+    /// Als Eintrag der Zielseite für den Vergleich (Hash und Zeit aus dem Manifest).
+    pub fn als_eintrag(&self) -> Eintrag {
+        Eintrag {
+            pfad: self.pfad.clone(),
+            art: if self.ist_ordner { EintragArt::Ordner } else { EintragArt::Datei },
+            groesse: self.groesse,
+            mtime_ns: self.mtime_ns,
+            nur_online: false,
+            hash: self.hash,
+            warnungen: vec![],
+        }
+    }
+}
+
+fn manifest_einfuegen(conn: &Connection, strecke_id: &str, stufe_id: &str, e: &ManifestEintrag) -> rusqlite::Result<()> {
+    conn.execute(
+        "INSERT OR REPLACE INTO manifest (strecke_id, stufe_id, pfad, ist_ordner, groesse, hash, mtime_ns, lauf_id)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+        params![strecke_id, stufe_id, e.pfad.as_str(), e.ist_ordner, e.groesse as i64, e.hash.map(|h| h.0.to_vec()), e.mtime_ns, e.lauf_id],
+    )
+    .map(drop)
+}
+
+fn manifest_aus(r: &Row) -> rusqlite::Result<ManifestEintrag> {
+    let hash: Option<Vec<u8>> = r.get(3)?;
+    let hash = hash.map(|h| <[u8; 32]>::try_from(h.as_slice()).map(Hash).map_err(|e| umwandlung(3, e))).transpose()?;
+    Ok(ManifestEintrag {
+        pfad: pfad_aus(r, 0)?,
+        ist_ordner: r.get(1)?,
+        groesse: r.get::<_, i64>(2)? as u64,
+        hash,
+        mtime_ns: r.get(4)?,
+        lauf_id: r.get(5)?,
+    })
+}
 
 fn lauf_aus(r: &Row) -> rusqlite::Result<Lauf> {
     Ok(Lauf {

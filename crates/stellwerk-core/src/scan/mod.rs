@@ -7,7 +7,7 @@
 //! - Lesefehler einzelner Einträge brechen den Scan nicht ab, sie werden gesammelt.
 //! - Der Scan liest nur – er verändert nichts (E3).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -21,7 +21,7 @@ use crate::model::{Eintrag, EintragArt, Hash, RegelTyp, RelPath, Warnung};
 use crate::rules::{RegelTreffer, RegelWerk};
 
 /// Ergebnis eines Scans.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Default, Serialize)]
 pub struct ScanErgebnis {
     /// Erfasste Einträge, sortiert nach Pfad.
     pub eintraege: Vec<Eintrag>,
@@ -103,6 +103,34 @@ pub fn scan_lokal(
     Ok(ScanErgebnis { eintraege, ignoriert, fehler })
 }
 
+/// Wie der lokale Scan, aber aus einer fertigen Liste (Manifest oder Server-Listing):
+/// „Ignorieren“ wirkt gleich (Inhalt ignorierter Ordner entfällt), doppelte Pfade
+/// werden gemeldet, Groß/Klein markiert. Die Reihenfolge der Liste ist egal.
+pub fn aus_liste(mut liste: Vec<Eintrag>, regeln: &RegelWerk) -> ScanErgebnis {
+    liste.sort_by(|a, b| a.pfad.cmp(&b.pfad));
+    let mut eintraege = Vec::new();
+    let mut ignoriert: Vec<Ignoriert> = Vec::new();
+    let mut ignorierte_ordner: HashSet<RelPath> = HashSet::new();
+    for eintrag in liste {
+        // Eltern stehen in sortierter Reihenfolge immer vor ihrem Inhalt
+        if std::iter::successors(eintrag.pfad.parent(), RelPath::parent).any(|v| ignorierte_ordner.contains(&v)) {
+            continue;
+        }
+        match regeln.treffer(&eintrag.pfad, eintrag.ist_ordner()).filter(|t| t.typ == RegelTyp::Ignorieren) {
+            Some(regel) => {
+                if eintrag.ist_ordner() {
+                    ignorierte_ordner.insert(eintrag.pfad.clone());
+                }
+                ignoriert.push(Ignoriert { eintrag, regel: regel.clone() });
+            }
+            None => eintraege.push(eintrag),
+        }
+    }
+    let (mut eintraege, fehler) = doppelte_entfernen(eintraege);
+    gross_klein_markieren(&mut eintraege);
+    ScanErgebnis { eintraege, ignoriert, fehler }
+}
+
 /// Liest einen Eintrag des Durchlaufs.
 fn lesen(roh: walkdir::Result<DirEntry>, wurzel: &Path) -> std::result::Result<Eintrag, ScanFehler> {
     let e = roh.map_err(walk_fehler)?;
@@ -175,7 +203,7 @@ pub fn ist_konfliktkopie(name: &str) -> bool {
 
 /// Zeitstempel in Nanosekunden seit 1970; vor 1970 negativ.
 /// `None`, falls außerhalb des darstellbaren Bereichs (ca. 1678–2262).
-fn zeit_ns(t: SystemTime) -> Option<i64> {
+pub fn zeit_ns(t: SystemTime) -> Option<i64> {
     match t.duration_since(UNIX_EPOCH) {
         Ok(d) => i64::try_from(d.as_nanos()).ok(),
         Err(e) => i64::try_from(e.duration().as_nanos()).ok().map(|n| -n),

@@ -13,7 +13,7 @@ use std::sync::atomic::AtomicBool;
 
 use filetime::FileTime;
 
-use super::{kopieren, temp_name, QuellDatei, QuellEndpunkt, ZielEndpunkt, ZielVerbindung};
+use super::{kopieren, temp_name, Geschrieben, QuellDatei, QuellEndpunkt, ZielEndpunkt, ZielVerbindung};
 use crate::error::{Result, StellwerkError};
 use crate::model::RelPath;
 
@@ -79,7 +79,7 @@ impl ZielVerbindung for LokaleVerbindung<'_> {
         }
     }
 
-    fn datei_schreiben(&mut self, p: &RelPath, q: QuellDatei, neu: bool, lauf_id: &str, abbruch: &AtomicBool) -> Result<u64> {
+    fn datei_schreiben(&mut self, p: &RelPath, q: QuellDatei, neu: bool, lauf_id: &str, abbruch: &AtomicBool) -> Result<Geschrieben> {
         let z = self.ziel.pfad(p);
         let bisher = fs::symlink_metadata(&z).ok();
         if neu && bisher.is_some() {
@@ -92,14 +92,14 @@ impl ZielVerbindung for LokaleVerbindung<'_> {
         let quelle_ort = Path::new(p.as_str());
 
         let ergebnis = (|| {
-            let bytes = kopieren(&mut inhalt, &mut aus, abbruch, quelle_ort, &tmp)?;
+            let geschrieben = kopieren(&mut inhalt, &mut aus, abbruch, quelle_ort, &tmp)?;
             aus.sync_all().map_err(io(&tmp))?;
             // Neu: Rechte der Quelle; überschrieben: bisherige Rechte am Ziel
             let bits = bisher.as_ref().filter(|m| m.is_file()).and_then(modus_von).or(modus);
             bits.map(|b| rechte(&tmp, b)).transpose()?;
             filetime::set_file_mtime(&tmp, FileTime::from_system_time(geaendert)).map_err(io(&tmp))?;
             fs::rename(&tmp, &z).map_err(io(&z))?;
-            Ok(bytes)
+            Ok(geschrieben)
         })();
         if ergebnis.is_err() {
             let _ = fs::remove_file(&tmp);

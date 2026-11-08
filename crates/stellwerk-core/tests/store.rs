@@ -6,8 +6,9 @@ use serde_json::json;
 use stellwerk_core::diff::{DiffEintrag, DiffStatus};
 use stellwerk_core::model::{Dateimodus, Eintrag, EintragArt, Modus, Rechte, RelPath};
 use stellwerk_core::plan::{plan_erstellen, OpArt, Plan, PlanZusammenfassung};
+use stellwerk_core::model::Hash;
 use stellwerk_core::store::{
-    basis36, jetzt_ms, Datenbank, JournalStatus, LaufPhase, ProtokollEbene, ProtokollFilter, Protokollieren,
+    basis36, jetzt_ms, Datenbank, JournalStatus, LaufPhase, ManifestEintrag, ProtokollEbene, ProtokollFilter, Protokollieren,
     DATEINAME,
 };
 
@@ -61,7 +62,7 @@ fn neueres_schema_wird_nicht_angefasst() {
     Datenbank::oeffnen(&datei).unwrap().verbindung().pragma_update(None, "user_version", 99).unwrap();
     let e = Datenbank::oeffnen(&datei).err().unwrap();
     assert_eq!(e.kategorie(), "datenbank");
-    assert!(e.to_string().contains("Schema 99, diese Version kennt nur bis 1"), "{e}");
+    assert!(e.to_string().contains("Schema 99, diese Version kennt nur bis 3"), "{e}");
     assert!(e.to_string().contains("x.sqlite"), "{e}");
 }
 
@@ -319,4 +320,120 @@ fn lauf_als_json() {
     assert_eq!((l["phase"].clone(), l["modus"].clone()), (json!("geplant"), json!("direkt")));
     let j = serde_json::to_value(&d.journal(&id).unwrap()[1]).unwrap();
     assert_eq!((j["op"].clone(), j["status"].clone()), (json!("kopieren"), json!("offen")));
+}
+
+// --- Schema 2: Manifest und Gelerntes (v0.4) ------------------------------------
+
+#[test]
+fn datenbank_aus_v0_3_wird_hochgestuft_laeufe_bleiben() {
+    let tmp = tempfile::tempdir().unwrap();
+    let datei = tmp.path().join("alt.sqlite");
+    let id = {
+        let mut d = Datenbank::oeffnen(&datei).unwrap();
+        let id = d.lauf_anlegen("web", "spiegel", Modus::Direkt, &plan(), T).unwrap();
+        // Zustand wie v0.3: Schema 1 ohne die neuen Tabellen
+        d.verbindung().execute_batch("DROP TABLE manifest; DROP TABLE stufen_status; PRAGMA user_version = 1;").unwrap();
+        id
+    };
+    let d = Datenbank::oeffnen(&datei).unwrap();
+    let v: i64 = d.verbindung().pragma_query_value(None, "user_version", |r| r.get(0)).unwrap();
+    assert_eq!(v, 3);
+    assert_eq!(d.journal(&id).unwrap().len(), 4, "Läufe bleiben erhalten");
+    assert!(d.manifest("web", "server").unwrap().is_empty());
+    d.status_setzen("web", "server", "k", "v", T).unwrap();
+}
+
+fn m(pfad: &str, groesse: u64) -> ManifestEintrag {
+    ManifestEintrag {
+        pfad: p(pfad),
+        ist_ordner: groesse == 0,
+        groesse,
+        hash: (groesse > 0).then(|| Hash([groesse as u8; 32])),
+        mtime_ns: Some(T),
+        lauf_id: Some("l1".into()),
+    }
+}
+
+#[test]
+fn datenbank_mit_schema_2_wird_hochgestuft_manifest_bleibt() {
+    let tmp = tempfile::tempdir().unwrap();
+    let datei = tmp.path().join("v2.sqlite");
+    {
+        let d = Datenbank::oeffnen(&datei).unwrap();
+        // Zustand nach Paket 3: Spalte hieß mtime_ms
+        d.verbindung()
+            .execute_batch(
+                "ALTER TABLE manifest RENAME COLUMN mtime_ns TO mtime_ms; PRAGMA user_version = 2;
+                 INSERT INTO manifest VALUES ('s', 'server', 'a', 0, 1, NULL, 5, NULL);",
+            )
+            .unwrap();
+    }
+    let d = Datenbank::oeffnen(&datei).unwrap();
+    assert_eq!(d.manifest("s", "server").unwrap()[0].mtime_ns, Some(5));
+}
+
+#[test]
+fn manifest_setzen_ersetzen_entfernen() {
+    let mut d = db();
+    for e in [m("web", 0), m("web/a.php", 12), m("web/_x", 3), m("Web/b.txt", 4), m("web2/c", 5), m("alt.txt", 7)] {
+        d.manifest_setzen("s", "server", &e).unwrap();
+    }
+    d.manifest_setzen("s", "andere", &m("web/a.php", 1)).unwrap();
+    // Ersetzen eines Pfads
+    d.manifest_setzen("s", "server", &ManifestEintrag { hash: None, mtime_ns: None, lauf_id: None, ..m("alt.txt", 8) }).unwrap();
+    let pfade = |d: &Datenbank, st: &str| d.manifest("s", st).unwrap().into_iter().map(|e| e.pfad.as_str().to_string()).collect::<Vec<_>>();
+    assert_eq!(pfade(&d, "server"), ["Web/b.txt", "alt.txt", "web", "web/_x", "web/a.php", "web2/c"]);
+    let alt = d.manifest("s", "server").unwrap().into_iter().find(|e| e.pfad.as_str() == "alt.txt").unwrap();
+    assert_eq!(alt, ManifestEintrag { hash: None, mtime_ns: None, lauf_id: None, ..m("alt.txt", 8) });
+    assert_eq!(d.manifest("s", "server").unwrap()[4], m("web/a.php", 12), "Hash kommt unverändert zurück");
+
+    // Ordner entfernen: nur er und sein Inhalt – nicht „Web/“ (Groß/Klein) und nicht „web2“
+    d.manifest_entfernen("s", "server", &p("web")).unwrap();
+    assert_eq!(pfade(&d, "server"), ["Web/b.txt", "alt.txt", "web2/c"]);
+    d.manifest_entfernen("s", "server", &p("alt.txt")).unwrap();
+    assert_eq!(pfade(&d, "server"), ["Web/b.txt", "web2/c"]);
+
+    d.manifest_ersetzen("s", "server", &[m("neu.txt", 1)]).unwrap();
+    assert_eq!(pfade(&d, "server"), ["neu.txt"]);
+    assert_eq!(pfade(&d, "andere"), ["web/a.php"], "andere Stufen bleiben unberührt");
+}
+
+#[test]
+fn manifest_ersetzen_ist_ganz_oder_gar_nicht() {
+    let mut d = db();
+    d.manifest_setzen("s", "server", &m("bleibt.txt", 1)).unwrap();
+    // Tabelle so ändern, dass das Einfügen scheitert
+    d.verbindung().execute_batch("CREATE TRIGGER nein BEFORE INSERT ON manifest WHEN NEW.pfad = 'kaputt' BEGIN SELECT RAISE(ABORT, 'nein'); END;").unwrap();
+    let e = d.manifest_ersetzen("s", "server", &[m("a", 1), m("kaputt", 1)]).unwrap_err();
+    assert_eq!(e.kategorie(), "datenbank");
+    let pfade: Vec<_> = d.manifest("s", "server").unwrap().into_iter().map(|e| e.pfad.as_str().to_string()).collect();
+    assert_eq!(pfade, ["bleibt.txt"]);
+    assert_eq!(d.manifest_setzen("s", "server", &m("kaputt", 1)).unwrap_err().kategorie(), "datenbank");
+}
+
+#[test]
+fn beschaedigtes_manifest_wird_gemeldet() {
+    let d = db();
+    d.manifest_setzen("s", "server", &m("a", 1)).unwrap();
+    d.verbindung().execute("UPDATE manifest SET hash = x'0102'", []).unwrap();
+    assert_eq!(d.manifest("s", "server").unwrap_err().kategorie(), "datenbank");
+    d.verbindung().execute("UPDATE manifest SET hash = NULL, pfad = '../raus'", []).unwrap();
+    assert_eq!(d.manifest("s", "server").unwrap_err().kategorie(), "datenbank");
+    d.verbindung().execute_batch("DROP TABLE manifest").unwrap();
+    for e in [d.manifest("s", "x").unwrap_err(), d.manifest_entfernen("s", "x", &p("a")).unwrap_err()] {
+        assert_eq!(e.kategorie(), "datenbank");
+    }
+}
+
+#[test]
+fn gelerntes_je_stufe() {
+    let d = db();
+    assert_eq!(d.status("s", "server", "umbenennen_ueberschreibt").unwrap(), None);
+    d.status_setzen("s", "server", "umbenennen_ueberschreibt", "nein", T).unwrap();
+    d.status_setzen("s", "server", "umbenennen_ueberschreibt", "ja", T + 1).unwrap();
+    d.status_setzen("s", "andere", "umbenennen_ueberschreibt", "nein", T).unwrap();
+    assert_eq!(d.status("s", "server", "umbenennen_ueberschreibt").unwrap().as_deref(), Some("ja"));
+    d.verbindung().execute_batch("DROP TABLE stufen_status").unwrap();
+    assert_eq!(d.status("s", "server", "x").unwrap_err().kategorie(), "datenbank");
+    assert_eq!(d.status_setzen("s", "server", "x", "y", T).unwrap_err().kategorie(), "datenbank");
 }

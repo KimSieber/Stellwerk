@@ -357,9 +357,9 @@ impl InhaltPruefer for Attrappe {
             Ok(Hash([1; 32]))
         }
     }
-    fn hash_ziel(&self, _p: &RelPath) -> Result<Hash> {
+    fn hash_ziel(&self, _p: &RelPath) -> Result<Option<Hash>> {
         self.aufrufe.set(self.aufrufe.get() + 1);
-        Ok(Hash([2; 32]))
+        Ok(Some(Hash([2; 32])))
     }
 }
 
@@ -450,6 +450,6 @@ fn lokaler_inhalt_liest_beide_seiten() {
     datei(&s.z, "a.txt", "abc", 1);
     let p = LokalerInhalt::new(&s.q, &s.z);
     let r = RelPath::new("a.txt").unwrap();
-    assert_eq!(p.hash_quelle(&r).unwrap(), p.hash_ziel(&r).unwrap());
+    assert_eq!(Some(p.hash_quelle(&r).unwrap()), p.hash_ziel(&r).unwrap());
     assert!(p.hash_ziel(&RelPath::new("fehlt").unwrap()).is_err());
 }

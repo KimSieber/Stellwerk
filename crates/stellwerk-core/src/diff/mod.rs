@@ -92,10 +92,13 @@ pub struct DiffOptionen {
     pub inhalt_immer_pruefen: bool,
 }
 
-/// Liefert Inhalts-Hashes beider Seiten – lokal aus Dateien, später aus dem Manifest.
+/// Liefert Inhalts-Hashes beider Seiten – lokal aus Dateien, bei entfernten Zielen
+/// aus dem Manifest (dort steht der Hash schon im Eintrag des Ziels).
 pub trait InhaltPruefer {
     fn hash_quelle(&self, pfad: &RelPath) -> Result<Hash>;
-    fn hash_ziel(&self, pfad: &RelPath) -> Result<Hash>;
+    /// `None`: Inhalt des Ziels nicht bekannt – gleiche Größe gilt dann als gleich,
+    /// mit Hinweis [`Warnung::InhaltNichtGeprueft`].
+    fn hash_ziel(&self, pfad: &RelPath) -> Result<Option<Hash>>;
 }
 
 /// Inhalt zweier lokaler Verzeichnisse.
@@ -114,8 +117,29 @@ impl InhaltPruefer for LokalerInhalt {
     fn hash_quelle(&self, pfad: &RelPath) -> Result<Hash> {
         hash_datei(&self.quelle.join(pfad.as_str()))
     }
-    fn hash_ziel(&self, pfad: &RelPath) -> Result<Hash> {
-        hash_datei(&self.ziel.join(pfad.as_str()))
+    fn hash_ziel(&self, pfad: &RelPath) -> Result<Option<Hash>> {
+        hash_datei(&self.ziel.join(pfad.as_str())).map(Some)
+    }
+}
+
+/// Entferntes Ziel (FTPS): Die Quelle wird gelesen, das Ziel nie – sein Hash steht,
+/// soweit bekannt, im Manifest und damit schon im Eintrag.
+pub struct EntfernterInhalt {
+    quelle: PathBuf,
+}
+
+impl EntfernterInhalt {
+    pub fn new(quelle: &Path) -> Self {
+        Self { quelle: quelle.to_path_buf() }
+    }
+}
+
+impl InhaltPruefer for EntfernterInhalt {
+    fn hash_quelle(&self, pfad: &RelPath) -> Result<Hash> {
+        hash_datei(&self.quelle.join(pfad.as_str()))
+    }
+    fn hash_ziel(&self, _pfad: &RelPath) -> Result<Option<Hash>> {
+        Ok(None)
     }
 }
 
@@ -293,8 +317,21 @@ fn beide_seiten(
     if zeit_gleich && !opt.inhalt_immer_pruefen {
         return DiffStatus::Gleich;
     }
-    match inhalt.hash_quelle(&q.pfad).and_then(|hq| Ok((hq, inhalt.hash_ziel(&z.pfad)?))) {
-        Ok((hq, hz)) => {
+    // Bekannter Hash des Ziels (Manifest) zuerst – dann wird nichts am Ziel gelesen
+    let hz = match z.hash {
+        Some(h) => Ok(Some(h)),
+        None => inhalt.hash_ziel(&z.pfad),
+    };
+    let paar = hz.and_then(|hz| match hz {
+        Some(hz) => Ok(Some((inhalt.hash_quelle(&q.pfad)?, hz))),
+        None => Ok(None),
+    });
+    match paar {
+        Ok(None) => {
+            warnungen.push(Warnung::InhaltNichtGeprueft);
+            DiffStatus::Gleich
+        }
+        Ok(Some((hq, hz))) => {
             q.hash = Some(hq);
             z.hash = Some(hz);
             if hq == hz {

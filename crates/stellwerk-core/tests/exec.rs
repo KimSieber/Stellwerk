@@ -16,7 +16,7 @@ use stellwerk_core::config::{strecke_aus_toml, GlobalConfig};
 use stellwerk_core::diff::Zusammenfassung;
 use stellwerk_core::endpoint::{Lokal, ZielEndpunkt, ZielVerbindung};
 use stellwerk_core::exec::{
-    direkt_ausfuehren, standard_worker, ExecFortschritt, LaufErgebnis, Optionen, MAX_WORKER,
+    direkt_ausfuehren, standard_worker, ExecFortschritt, LaufErgebnis, Optionen, Uebertragen, MAX_WORKER,
 };
 use stellwerk_core::model::{Dateimodus, Rechte};
 use stellwerk_core::plan::{plan_erstellen, OpArt, Plan};
@@ -98,6 +98,8 @@ struct Lauf {
     /// Journal-Meldungen in Reihenfolge: (nr, Status, Meldung)
     journal: Vec<(usize, JournalStatus, Option<String>)>,
     fortschritt: Vec<ExecFortschritt>,
+    /// Je geschriebener Datei: Bytes, Hash, Zeit der Quelle
+    uebertragen: BTreeMap<usize, Uebertragen>,
 }
 
 impl Lauf {
@@ -119,6 +121,7 @@ fn laufen_mit(
 ) -> Lauf {
     let mut journal = Vec::new();
     let mut fortschritt = Vec::new();
+    let mut uebertragen = BTreeMap::new();
     let erg = direkt_ausfuehren(
         plan,
         &Lokal::new(&a.q),
@@ -126,8 +129,11 @@ fn laufen_mit(
         LAUF,
         o,
         abbruch,
-        &mut |op, st, m| {
+        &mut |op, st, m, u| {
             journal.push((op.nr, st, m.map(String::from)));
+            if let Some(u) = u {
+                uebertragen.insert(op.nr, *u);
+            }
             zusatz(op.nr, st)
         },
         &mut |f| fortschritt.push(f),
@@ -136,7 +142,7 @@ fn laufen_mit(
     let mut nrn: Vec<usize> = journal.iter().map(|j| j.0).collect();
     nrn.sort_unstable();
     assert_eq!(nrn, (0..plan.operationen.len()).collect::<Vec<_>>());
-    Lauf { erg, journal, fortschritt }
+    Lauf { erg, journal, fortschritt, uebertragen }
 }
 
 /// Inhalt, Änderungszeit und Rechte aller Einträge unter `wurzel`.
@@ -554,7 +560,7 @@ impl ZielEndpunkt for ZaehlendesZiel {
 }
 
 fn mit_ziel(a: &Aufbau, plan: &Plan, worker: usize, ziel: &ZaehlendesZiel) -> LaufErgebnis {
-    direkt_ausfuehren(plan, &Lokal::new(&a.q), ziel, LAUF, &opt(worker), &AtomicBool::new(false), &mut |_, _, _| Ok(()), &mut |_| {})
+    direkt_ausfuehren(plan, &Lokal::new(&a.q), ziel, LAUF, &opt(worker), &AtomicBool::new(false), &mut |_, _, _, _| Ok(()), &mut |_| {})
 }
 
 #[test]
@@ -584,4 +590,19 @@ fn verbindungsfehler_trifft_nur_den_auftrag_der_naechste_versucht_es_neu() {
     assert_eq!(erg.fehler.len(), 1);
     assert!(erg.fehler[0].meldung.contains("Server nicht erreichbar"), "{erg:?}");
     assert_eq!(ziel.versuche.load(Ordering::SeqCst), 2, "eine erfolgreiche Verbindung wird weiterverwendet");
+}
+
+#[test]
+fn je_datei_werden_hash_und_zeit_der_quelle_gemeldet() {
+    let a = aufbau();
+    datei(&a.q, "web/a.txt", "abc");
+    let plan = a.plan();
+    let l = laufen(&a, &plan, &opt(2));
+    assert!(l.erg.vollstaendig());
+    let datei_op = plan.operationen.iter().find(|o| o.art == OpArt::Kopieren).unwrap().nr;
+    let u = l.uebertragen[&datei_op];
+    assert_eq!(u.geschrieben.bytes, 3);
+    assert_eq!(u.geschrieben.hash.0, *blake3::hash(b"abc").as_bytes());
+    assert_eq!(u.quelle_mtime_ns, Some(1_700_000_000_123_456_789));
+    assert_eq!(l.uebertragen.len(), 1, "nur Dateien – nicht der Ordner");
 }

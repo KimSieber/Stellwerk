@@ -517,7 +517,7 @@ fn uebertragen(
         &lauf_id,
         &opt,
         abbruch,
-        &mut |op, status, meldung| {
+        &mut |op, status, meldung, _| {
             let db = db.lock().unwrap();
             db.journal_setzen(&lauf_id, op.nr, status, meldung, jetzt_ms())?;
             if status == JournalStatus::Fehler {

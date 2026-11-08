@@ -23,7 +23,7 @@ pub use ftps::Ftps;
 pub use lokal::Lokal;
 
 use crate::error::{Result, StellwerkError};
-use crate::model::RelPath;
+use crate::model::{Hash, RelPath};
 
 /// Größe eines Kopierblocks; zwischen zwei Blöcken wird der Abbruch geprüft.
 pub const BLOCK: usize = 1 << 20;
@@ -36,6 +36,14 @@ pub struct QuellDatei {
     pub geaendert: SystemTime,
     /// Unix-Rechte der Quelle (für neue Dateien in lokalen Zielen).
     pub modus: Option<u32>,
+}
+
+/// Ergebnis einer geschriebenen Datei: übertragene Bytes und BLAKE3-Hash des Inhalts
+/// (für das Manifest entfernter Ziele, E11) – beim Kopieren mitgerechnet, ohne zweites Lesen.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Geschrieben {
+    pub bytes: u64,
+    pub hash: Hash,
 }
 
 /// Quelle einer Stufe – nur lesend (A4).
@@ -55,8 +63,8 @@ pub trait ZielVerbindung: Send {
     fn ordner_anlegen(&mut self, p: &RelPath) -> Result<()>;
     /// Schreibt die Quelldatei nach `p` – nie als halbe Datei: erst als
     /// Temporärdatei ([`temp_name`]), dann umbenannt. `neu`: Am Ziel darf
-    /// noch nichts liegen. Liefert die übertragenen Bytes.
-    fn datei_schreiben(&mut self, p: &RelPath, q: QuellDatei, neu: bool, lauf_id: &str, abbruch: &AtomicBool) -> Result<u64>;
+    /// noch nichts liegen. Liefert Bytes und Hash des Inhalts.
+    fn datei_schreiben(&mut self, p: &RelPath, q: QuellDatei, neu: bool, lauf_id: &str, abbruch: &AtomicBool) -> Result<Geschrieben>;
     fn rechte_setzen(&mut self, p: &RelPath, bits: u32) -> Result<()>;
     /// Löscht eine Datei (nie einen Ordner). Schon weg ist in Ordnung.
     fn datei_loeschen(&mut self, p: &RelPath) -> Result<()>;
@@ -69,20 +77,22 @@ pub fn temp_name(name: &str, lauf_id: &str) -> String {
     format!(".{name}.stw-{lauf_id}")
 }
 
-/// Kopiert blockweise von `ein` nach `aus` und prüft vor jedem Block den Abbruch.
-/// `ein_ort`/`aus_ort` benennen die Seiten in Fehlermeldungen.
-pub fn kopieren(ein: &mut dyn Read, aus: &mut dyn Write, abbruch: &AtomicBool, ein_ort: &Path, aus_ort: &Path) -> Result<u64> {
+/// Kopiert blockweise von `ein` nach `aus`, prüft vor jedem Block den Abbruch und
+/// rechnet dabei den Hash mit. `ein_ort`/`aus_ort` benennen die Seiten in Fehlermeldungen.
+pub fn kopieren(ein: &mut dyn Read, aus: &mut dyn Write, abbruch: &AtomicBool, ein_ort: &Path, aus_ort: &Path) -> Result<Geschrieben> {
     let mut puffer = vec![0u8; BLOCK];
     let mut bytes = 0u64;
+    let mut h = blake3::Hasher::new();
     loop {
         if abbruch.load(Ordering::Relaxed) {
             return Err(StellwerkError::Abbruch);
         }
         let k = ein.read(&mut puffer).map_err(|e| StellwerkError::io(ein_ort, e))?;
         if k == 0 {
-            return Ok(bytes);
+            return Ok(Geschrieben { bytes, hash: Hash(*h.finalize().as_bytes()) });
         }
         aus.write_all(&puffer[..k]).map_err(|e| StellwerkError::io(aus_ort, e))?;
+        h.update(&puffer[..k]);
         bytes += k as u64;
     }
 }
@@ -117,8 +127,10 @@ mod tests {
         let nein = AtomicBool::new(false);
         let (q, z) = (Path::new("/q"), Path::new("/z"));
         let mut aus = Vec::new();
-        assert_eq!(kopieren(&mut Cursor::new(vec![7u8; BLOCK + 3]), &mut aus, &nein, q, z).unwrap(), BLOCK as u64 + 3);
-        assert_eq!(aus.len(), BLOCK + 3);
+        let inhalt = vec![7u8; BLOCK + 3];
+        let g = kopieren(&mut Cursor::new(inhalt.clone()), &mut aus, &nein, q, z).unwrap();
+        assert_eq!(g, Geschrieben { bytes: BLOCK as u64 + 3, hash: Hash(*blake3::hash(&inhalt).as_bytes()) });
+        assert_eq!(aus, inhalt);
         let e = kopieren(&mut Kaputt, &mut Vec::new(), &nein, q, z).unwrap_err();
         assert!(matches!(e, StellwerkError::Io { ref pfad, .. } if pfad == q), "{e}");
         let e = kopieren(&mut Cursor::new(vec![1u8]), &mut Kaputt, &nein, q, z).unwrap_err();

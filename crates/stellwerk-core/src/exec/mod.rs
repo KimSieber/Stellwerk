@@ -27,7 +27,8 @@ use std::time::{Duration, Instant};
 
 use serde::Serialize;
 
-use crate::endpoint::{QuellEndpunkt, ZielEndpunkt, ZielVerbindung};
+use crate::endpoint::{Geschrieben, QuellEndpunkt, ZielEndpunkt, ZielVerbindung};
+use crate::scan::zeit_ns;
 use crate::error::{Result, StellwerkError};
 use crate::model::RelPath;
 use crate::plan::{OpArt, Operation, Plan};
@@ -93,8 +94,17 @@ impl LaufErgebnis {
     }
 }
 
-/// Rückmeldung an das Journal: Operation, neuer Status, ggf. Meldung.
-pub type JournalMelden<'a> = dyn FnMut(&Operation, JournalStatus, Option<&str>) -> Result<()> + 'a;
+/// Eine geschriebene Datei: Bytes und Hash des Inhalts, Änderungszeit der Quelle beim
+/// Lesen – Grundlage für das Manifest entfernter Ziele.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Uebertragen {
+    pub geschrieben: Geschrieben,
+    pub quelle_mtime_ns: Option<i64>,
+}
+
+/// Rückmeldung an das Journal: Operation, neuer Status, ggf. Meldung und – bei
+/// erledigten Dateien – was übertragen wurde.
+pub type JournalMelden<'a> = dyn FnMut(&Operation, JournalStatus, Option<&str>, Option<&Uebertragen>) -> Result<()> + 'a;
 
 /// Führt einen Plan im Modus „Direkt“ aus: liest aus `quelle`, schreibt nach `ziel`.
 /// `lauf_id` macht die Namen der Temporärdateien eindeutig. Jeder Worker öffnet
@@ -136,7 +146,7 @@ pub fn direkt_ausfuehren(
 
     let (auftrag_tx, auftrag_rx) = mpsc::channel::<usize>();
     let auftrag_rx = Mutex::new(auftrag_rx);
-    let (fertig_tx, fertig_rx) = mpsc::channel::<(usize, Result<u64>)>();
+    let (fertig_tx, fertig_rx) = mpsc::channel::<(usize, Result<Option<Uebertragen>>)>();
     std::thread::scope(|s| {
         for _ in 0..worker {
             let (rx, tx) = (&auftrag_rx, fertig_tx.clone());
@@ -171,8 +181,11 @@ pub fn direkt_ausfuehren(
             let (nr, r) = fertig_rx.recv().expect("Ein Worker meldet jeden Auftrag zurück");
             laufend -= 1;
             let o = &ops[nr];
+            let mut uebertragen = None;
             let (st, meldung) = match r {
-                Ok(bytes) => {
+                Ok(u) => {
+                    uebertragen = u;
+                    let bytes = u.map_or(0, |u| u.geschrieben.bytes);
                     erg.erledigt += 1;
                     erg.bytes += bytes;
                     stand.bytes += bytes;
@@ -201,7 +214,7 @@ pub fn direkt_ausfuehren(
             if st != JournalStatus::Uebersprungen {
                 stand.fertig += 1;
             }
-            if let Err(e) = journal(o, st, meldung.as_deref()) {
+            if let Err(e) = journal(o, st, meldung.as_deref(), uebertragen.as_ref()) {
                 erg.journal_fehler.get_or_insert(e.to_string());
             }
             if zuletzt.elapsed() >= opt.fortschritt_abstand {
@@ -227,7 +240,7 @@ pub fn direkt_ausfuehren(
         };
         status[o.nr] = Some(JournalStatus::Uebersprungen);
         erg.uebersprungen += 1;
-        if let Err(e) = journal(o, JournalStatus::Uebersprungen, Some(grund)) {
+        if let Err(e) = journal(o, JournalStatus::Uebersprungen, Some(grund), None) {
             erg.journal_fehler.get_or_insert(e.to_string());
         }
     }
@@ -235,16 +248,19 @@ pub fn direkt_ausfuehren(
     erg
 }
 
-/// Führt eine Operation über die Verbindung des Workers aus und liefert die übertragenen Bytes.
-fn ausfuehren(o: &Operation, quelle: &dyn QuellEndpunkt, v: &mut dyn ZielVerbindung, lauf_id: &str, abbruch: &AtomicBool) -> Result<u64> {
+/// Führt eine Operation über die Verbindung des Workers aus; bei Dateien mit dem,
+/// was übertragen wurde.
+fn ausfuehren(o: &Operation, quelle: &dyn QuellEndpunkt, v: &mut dyn ZielVerbindung, lauf_id: &str, abbruch: &AtomicBool) -> Result<Option<Uebertragen>> {
     match o.art {
-        OpArt::OrdnerAnlegen => v.ordner_anlegen(&o.pfad).map(|()| 0),
+        OpArt::OrdnerAnlegen => v.ordner_anlegen(&o.pfad).map(|()| None),
         OpArt::Kopieren | OpArt::Ueberschreiben => {
             let q = quelle.oeffnen(o.quelle.as_ref().expect("Kopieren hat immer eine Quelle"))?;
-            v.datei_schreiben(&o.pfad, q, o.art == OpArt::Kopieren, lauf_id, abbruch)
+            let quelle_mtime_ns = zeit_ns(q.geaendert);
+            let geschrieben = v.datei_schreiben(&o.pfad, q, o.art == OpArt::Kopieren, lauf_id, abbruch)?;
+            Ok(Some(Uebertragen { geschrieben, quelle_mtime_ns }))
         }
-        OpArt::RechteSetzen => v.rechte_setzen(&o.pfad, o.modus.expect("Rechte setzen hat immer einen Modus").bits()).map(|()| 0),
-        OpArt::DateiLoeschen => v.datei_loeschen(&o.pfad).map(|()| 0),
-        OpArt::OrdnerLoeschen => v.ordner_loeschen(&o.pfad).map(|()| 0),
+        OpArt::RechteSetzen => v.rechte_setzen(&o.pfad, o.modus.expect("Rechte setzen hat immer einen Modus").bits()).map(|()| None),
+        OpArt::DateiLoeschen => v.datei_loeschen(&o.pfad).map(|()| None),
+        OpArt::OrdnerLoeschen => v.ordner_loeschen(&o.pfad).map(|()| None),
     }
 }

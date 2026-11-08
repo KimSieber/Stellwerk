@@ -15,6 +15,8 @@
 //! - Das Passwort kommt vom Aufrufer (Schlüsselbund) und wird nirgends ausgegeben.
 
 use std::io;
+use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::net::{SocketAddr, TcpStream, ToSocketAddrs};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -28,8 +30,11 @@ use sha2::{Digest, Sha256};
 use suppaftp::types::FileType;
 use suppaftp::{FtpError, RustlsConnector, RustlsFtpStream, Status};
 
+use super::{kopieren, temp_name, Geschrieben, QuellDatei, ZielEndpunkt, ZielVerbindung};
 use crate::error::{Result, StellwerkError};
-use crate::model::FtpsEndpunkt;
+use crate::model::{Eintrag, EintragArt, FtpsEndpunkt, RegelTyp, RelPath, Warnung};
+use crate::rules::RegelWerk;
+use crate::scan::{aus_liste, ist_konfliktkopie, ScanErgebnis, ScanFehler};
 
 /// Zeitlimit für Verbindungsaufbau und jede Antwort des Servers.
 pub const ZEITLIMIT: Duration = Duration::from_secs(30);
@@ -158,6 +163,13 @@ pub struct Ftps {
     tls: Arc<ClientConfig>,
     gesehen: Arc<Mutex<Gesehen>>,
     zeitlimit: Duration,
+    /// Gelernt: Überschreibt `RNTO` eine vorhandene Datei? (`None`: noch nicht bekannt.)
+    /// Gemeinsam für alle Verbindungen dieses Ziels.
+    umbenennen_ueberschreibt: Arc<Mutex<Option<bool>>>,
+    /// `MFMT` auch versuchen, wenn `FEAT` es nicht nennt (Tests).
+    mfmt_erzwingen: bool,
+    /// Verzeichnisse nur mit `LIST` lesen, auch wenn der Server `MLSD` kann (Tests).
+    nur_list: bool,
 }
 
 fn tls_einrichtung(e: rustls::Error) -> StellwerkError {
@@ -192,13 +204,96 @@ impl Ftps {
             .dangerous()
             .with_custom_certificate_verifier(Arc::new(pruefer))
             .with_no_client_auth();
-        Ok(Self { ziel: ziel.clone(), passwort: passwort.to_string(), tls: Arc::new(tls), gesehen, zeitlimit: ZEITLIMIT })
+        Ok(Self {
+            ziel: ziel.clone(),
+            passwort: passwort.to_string(),
+            tls: Arc::new(tls),
+            gesehen,
+            zeitlimit: ZEITLIMIT,
+            umbenennen_ueberschreibt: Arc::new(Mutex::new(None)),
+            mfmt_erzwingen: false,
+            nur_list: false,
+        })
     }
 
     /// Anderes Zeitlimit (Tests).
     pub fn zeitlimit(mut self, t: Duration) -> Self {
         self.zeitlimit = t;
         self
+    }
+
+    /// Bereits gelernt, ob `RNTO` überschreibt (aus `stufen_status`).
+    pub fn mit_umbenennen_ueberschreibt(self, wert: Option<bool>) -> Self {
+        *self.umbenennen_ueberschreibt.lock().expect("Gelerntes") = wert;
+        self
+    }
+
+    /// Was in den Läufen über `RNTO` gelernt wurde – zum Speichern in `stufen_status`.
+    pub fn umbenennen_ueberschreibt(&self) -> Option<bool> {
+        *self.umbenennen_ueberschreibt.lock().expect("Gelerntes")
+    }
+
+    /// `MFMT` versuchen, auch wenn der Server es in `FEAT` nicht nennt – nur für Tests
+    /// gegen Server ohne `MFMT` (der Fehler wird dann wie vorgesehen übergangen).
+    pub fn mfmt_erzwingen(mut self) -> Self {
+        self.mfmt_erzwingen = true;
+        self
+    }
+
+    /// Verzeichnisse mit `LIST` statt `MLSD` lesen – nur für Tests des Rückfalls.
+    pub fn nur_list(mut self) -> Self {
+        self.nur_list = true;
+        self
+    }
+
+    /// Liest den Serverpfad der Stufe vollständig ein (Erstvergleich, Vollabgleich).
+    /// Liest nur. „Ignorieren“ wirkt wie beim lokalen Scan; ignorierte Ordner werden
+    /// nicht betreten. Ist die Wurzel nicht lesbar, ist das ein Fehler (sonst sähe
+    /// alles „neu“ aus); nicht lesbare Unterordner und Zeilen erscheinen als Lesefehler.
+    pub fn auflisten(&self, regeln: &RegelWerk, abbruch: &AtomicBool, fortschritt: &mut dyn FnMut(usize)) -> Result<ScanErgebnis> {
+        let mut ftp = self.anmelden()?;
+        let mlsd = !self.nur_list && faehigkeiten_aus(&ftp.feat().unwrap_or_default(), None).mlsd;
+        let mut liste = Vec::new();
+        let mut fehler = Vec::new();
+        let mut offen = vec![RelPath::wurzel()];
+        while let Some(ordner) = offen.pop() {
+            if abbruch.load(Ordering::Relaxed) {
+                return Err(StellwerkError::Abbruch);
+            }
+            let abs = self.absolut(ordner.as_str());
+            let zeilen = match if mlsd { ftp.mlsd(Some(&abs)) } else { ftp.list(Some(&abs)) } {
+                Ok(z) => z,
+                Err(e) if ordner.ist_wurzel() => return Err(StellwerkError::NichtGefunden(format!("Serverpfad {abs} nicht lesbar: {e}"))),
+                Err(e) => {
+                    fehler.push(ScanFehler { pfad: ordner.to_string(), meldung: format!("Ordner nicht lesbar: {e}") });
+                    continue;
+                }
+            };
+            for zeile in zeilen {
+                let eintrag = match eintrag_aus(&ordner, &zeile, mlsd) {
+                    Ok(e) => e,
+                    Err(meldung) => {
+                        fehler.push(ScanFehler { pfad: format!("{abs}: {zeile}"), meldung });
+                        None
+                    }
+                };
+                let Some(eintrag) = eintrag else { continue };
+                let ignoriert = regeln.treffer(&eintrag.pfad, true).is_some_and(|t| t.typ == RegelTyp::Ignorieren);
+                if eintrag.art == EintragArt::Ordner && !ignoriert {
+                    offen.push(eintrag.pfad.clone());
+                }
+                liste.push(eintrag);
+                fortschritt(liste.len());
+            }
+        }
+        let mut erg = aus_liste(liste, regeln);
+        erg.fehler.extend(fehler);
+        Ok(erg)
+    }
+
+    /// Absoluter Serverpfad zu einem Pfad relativ zur Stufenwurzel.
+    fn absolut(&self, p: &str) -> String {
+        format!("{}/{p}", self.ziel.pfad.trim_end_matches('/'))
     }
 
     fn ort(&self) -> String {
@@ -278,6 +373,254 @@ impl Ftps {
     }
 }
 
+impl ZielEndpunkt for Ftps {
+    /// Eigene Server-Verbindung je Worker; `MFMT` wird je Verbindung aus `FEAT` bestimmt.
+    fn verbinden(&self) -> Result<Box<dyn ZielVerbindung + '_>> {
+        let mut ftp = self.anmelden()?;
+        let mfmt = self.mfmt_erzwingen || faehigkeiten_aus(&ftp.feat().unwrap_or_default(), None).mfmt;
+        Ok(Box::new(FtpsVerbindung { ziel: self, ftp, mfmt, aus_dem_takt: false }))
+    }
+}
+
+struct FtpsVerbindung<'a> {
+    ziel: &'a Ftps,
+    ftp: RustlsFtpStream,
+    mfmt: bool,
+    /// Nach `ABOR` senden viele Server zwei Antworten (426, 226) – die Steuerverbindung
+    /// ist dann nicht mehr verlässlich und wird vor dem nächsten Befehl ersetzt.
+    aus_dem_takt: bool,
+}
+
+impl FtpsVerbindung<'_> {
+    /// Ersetzt eine aus dem Takt geratene Verbindung durch eine neue. Gelingt das nicht,
+    /// bleibt die alte – das Aufräumen kann dann scheitern; eine liegen gebliebene
+    /// Temporärdatei zeigt der nächste Vergleich.
+    fn wieder_im_takt(&mut self) {
+        if std::mem::take(&mut self.aus_dem_takt) {
+            if let Ok(neu) = self.ziel.anmelden() {
+                self.ftp = neu;
+            }
+        }
+    }
+
+    /// Ordner? (`CWD` gelingt) – alle Pfade sind absolut, das Arbeitsverzeichnis spielt keine Rolle.
+    fn ist_ordner(&mut self, abs: &str) -> bool {
+        self.ftp.cwd(abs).is_ok()
+    }
+
+    /// Datei vorhanden? (`SIZE` gelingt)
+    fn ist_datei(&mut self, abs: &str) -> bool {
+        self.ftp.size(abs).is_ok()
+    }
+
+    /// Hochladen nach `tmp`, Zeit setzen, umbenennen – ohne Aufräumen (macht der Aufrufer).
+    fn hochladen(&mut self, q: QuellDatei, tmp: &str, ziel: &str, neu: bool, ort: &RelPath, abbruch: &AtomicBool) -> Result<Geschrieben> {
+        let QuellDatei { mut inhalt, geaendert, .. } = q;
+        let mut strom = self.ftp.put_with_stream(tmp).map_err(ftp_fehler)?;
+        let geschrieben = match kopieren(&mut inhalt, &mut strom, abbruch, Path::new(ort.as_str()), Path::new(tmp)) {
+            Ok(g) => g,
+            Err(e) => {
+                let _ = self.ftp.abort(strom);
+                self.aus_dem_takt = true;
+                return Err(e);
+            }
+        };
+        strom.finish().map_err(ftp_fehler)?;
+        if self.mfmt {
+            // Ohne Erfolg bleibt die Zeit des Servers – das Manifest kennt die richtige
+            let _ = self.ftp.custom_command(format!("MFMT {} {tmp}", mfmt_zeit(geaendert)), &[Status::File]);
+        }
+        self.umbenennen(tmp, ziel, neu)?;
+        Ok(geschrieben)
+    }
+
+    /// `RNFR/RNTO`. Beim Ersetzen: Überschreibt der Server nicht, wird die alte Datei
+    /// gelöscht und sofort umbenannt; das Ergebnis wird für die Stufe gelernt.
+    fn umbenennen(&mut self, tmp: &str, ziel: &str, neu: bool) -> Result<()> {
+        let gelernt = &self.ziel.umbenennen_ueberschreibt;
+        let bekannt = *gelernt.lock().expect("Gelerntes");
+        if !neu && bekannt == Some(false) {
+            self.ftp.rm(ziel).map_err(ftp_fehler)?;
+            return self.ftp.rename(tmp, ziel).map_err(ftp_fehler);
+        }
+        match self.ftp.rename(tmp, ziel) {
+            Ok(()) => {
+                if !neu {
+                    *gelernt.lock().expect("Gelerntes") = Some(true);
+                }
+                Ok(())
+            }
+            Err(_) if !neu && self.ist_datei(ziel) => {
+                self.ftp.rm(ziel).map_err(ftp_fehler)?;
+                self.ftp.rename(tmp, ziel).map_err(ftp_fehler)?;
+                *gelernt.lock().expect("Gelerntes") = Some(false);
+                Ok(())
+            }
+            Err(e) => Err(ftp_fehler(e)),
+        }
+    }
+}
+
+impl ZielVerbindung for FtpsVerbindung<'_> {
+    fn ordner_anlegen(&mut self, p: &RelPath) -> Result<()> {
+        let abs = self.ziel.absolut(p.as_str());
+        match self.ftp.mkdir(&abs) {
+            Err(_) if self.ist_ordner(&abs) => Ok(()),
+            r => r.map_err(ftp_fehler),
+        }
+    }
+
+    fn datei_schreiben(&mut self, p: &RelPath, q: QuellDatei, neu: bool, lauf_id: &str, abbruch: &AtomicBool) -> Result<Geschrieben> {
+        let ziel = self.ziel.absolut(p.as_str());
+        if neu && self.ist_datei(&ziel) {
+            return Err(StellwerkError::Vorhanden(format!("{ziel} – am Server inzwischen vorhanden, bitte neu vergleichen")));
+        }
+        let (ordner, name) = ziel.rsplit_once('/').expect("absoluter Pfad");
+        let tmp = format!("{ordner}/{}", temp_name(name, lauf_id));
+        let ergebnis = self.hochladen(q, &tmp, &ziel, neu, p, abbruch);
+        if ergebnis.is_err() {
+            self.wieder_im_takt();
+            let _ = self.ftp.rm(&tmp);
+        }
+        ergebnis
+    }
+
+    fn rechte_setzen(&mut self, p: &RelPath, bits: u32) -> Result<()> {
+        let abs = self.ziel.absolut(p.as_str());
+        self.ftp.site(format!("CHMOD {bits:o} {abs}")).map(drop).map_err(ftp_fehler)
+    }
+
+    fn datei_loeschen(&mut self, p: &RelPath) -> Result<()> {
+        let abs = self.ziel.absolut(p.as_str());
+        match self.ftp.rm(&abs) {
+            Ok(()) => Ok(()),
+            Err(_) if self.ist_ordner(&abs) => {
+                Err(StellwerkError::NichtUnterstuetzt(format!("{abs} ist inzwischen ein Ordner – bitte neu vergleichen")))
+            }
+            Err(_) if !self.ist_datei(&abs) => Ok(()),
+            Err(e) => Err(ftp_fehler(e)),
+        }
+    }
+
+    fn ordner_loeschen(&mut self, p: &RelPath) -> Result<()> {
+        let abs = self.ziel.absolut(p.as_str());
+        match self.ftp.rmdir(&abs) {
+            Err(_) if !self.ist_ordner(&abs) => Ok(()),
+            r => r.map_err(ftp_fehler),
+        }
+    }
+}
+
+/// Eintrag aus einer Zeile des Listings im Ordner `ordner`. `Ok(None)`: Zeile ohne
+/// Eintrag (`.`, `..`, `total`). Namen mit `/` oder `..` (fehlerhafter Server) sind Fehler.
+fn eintrag_aus(ordner: &RelPath, zeile: &str, mlsd: bool) -> std::result::Result<Option<Eintrag>, String> {
+    let roh = if mlsd { mlsd_zeile(zeile)? } else { list_zeile(zeile)? };
+    let Some((name, art, groesse, mtime_ns)) = roh else { return Ok(None) };
+    let pfad = match ordner.join(&name) {
+        Ok(p) if !name.contains('/') => p,
+        _ => return Err(format!("Name „{name}“ ist als Pfad ungültig")),
+    };
+    let warnungen = ist_konfliktkopie(&name).then_some(Warnung::Konfliktkopie).into_iter().collect();
+    Ok(Some(Eintrag { pfad, art, groesse, mtime_ns, nur_online: false, hash: None, warnungen }))
+}
+
+/// Eine Zeile aus `MLSD` (RFC 3659): `fakt=wert;fakt=wert; name`.
+/// `Ok(None)` für `cdir`/`pdir`; Ergebnis: (Name, Art, Größe, Zeit in ns).
+type Zeile = (String, EintragArt, u64, Option<i64>);
+
+fn mlsd_zeile(zeile: &str) -> std::result::Result<Option<Zeile>, String> {
+    let (fakten, name) = zeile.split_once(' ').ok_or_else(|| "MLSD-Zeile ohne Namen".to_string())?;
+    let mut art = None;
+    let mut groesse = 0;
+    let mut mtime_ns = None;
+    for fakt in fakten.split(';').filter(|f| !f.is_empty()) {
+        let (k, v) = fakt.split_once('=').unwrap_or((fakt, ""));
+        match k.to_ascii_lowercase().as_str() {
+            "type" => art = Some(v.to_ascii_lowercase()),
+            "size" | "sizd" => groesse = v.parse().map_err(|_| format!("Größe „{v}“ nicht lesbar"))?,
+            "modify" => mtime_ns = mlsd_zeit(v),
+            _ => {}
+        }
+    }
+    let art = match art.as_deref() {
+        Some("file") => EintragArt::Datei,
+        Some("dir") => EintragArt::Ordner,
+        Some("cdir" | "pdir") => return Ok(None),
+        Some(t) if t.contains("link") => EintragArt::Symlink,
+        _ => return Err("MLSD-Zeile ohne bekannten Typ".into()),
+    };
+    let groesse = if art == EintragArt::Datei { groesse } else { 0 };
+    Ok(Some((name.to_string(), art, groesse, mtime_ns)))
+}
+
+/// Eine Zeile aus `LIST` im Unix-Format (`-rw-r--r-- 1 u g 123 Nov 14 22:13 name`).
+/// Die Zeit ist dort ungenau und wird nicht verwendet.
+fn list_zeile(zeile: &str) -> std::result::Result<Option<Zeile>, String> {
+    let unlesbar = || format!("LIST-Zeile nicht lesbar: {zeile}");
+    if zeile.starts_with("total ") {
+        return Ok(None);
+    }
+    let art = match zeile.chars().next() {
+        Some('-') => EintragArt::Datei,
+        Some('d') => EintragArt::Ordner,
+        Some('l') => EintragArt::Symlink,
+        _ => return Err(unlesbar()),
+    };
+    // Rechte, Links, Benutzer, Gruppe, Größe, 3 × Datum – dann der Name (darf Leerzeichen enthalten)
+    let mut rest = zeile;
+    let mut felder = Vec::new();
+    for _ in 0..8 {
+        let t = rest.trim_start();
+        let ende = t.find(' ').ok_or_else(unlesbar)?;
+        felder.push(&t[..ende]);
+        rest = &t[ende..];
+    }
+    let name = rest.trim_start_matches(' ');
+    let name = if art == EintragArt::Symlink { name.split(" -> ").next().unwrap_or(name) } else { name };
+    if matches!(name, "" | "." | "..") {
+        return Ok(None);
+    }
+    let groesse = if art == EintragArt::Datei { felder[4].parse().map_err(|_| unlesbar())? } else { 0 };
+    Ok(Some((name.to_string(), art, groesse, None)))
+}
+
+/// `JJJJMMTTHHMMSS[.sss]` (UTC) in Nanosekunden seit 1970.
+fn mlsd_zeit(v: &str) -> Option<i64> {
+    let (haupt, bruch) = v.split_once('.').unwrap_or((v, ""));
+    if haupt.len() != 14 || !haupt.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    let n = |a: usize, b: usize| haupt[a..b].parse::<i64>().expect("nur Ziffern");
+    let (y, m, d) = (n(0, 4), n(4, 6), n(6, 8));
+    // Tage seit 1970 aus dem Kalenderdatum (Verfahren nach H. Hinnant)
+    let y = y - i64::from(m <= 2);
+    let era = y.div_euclid(400);
+    let yoe = y - era * 400;
+    let doy = (153 * (if m > 2 { m - 3 } else { m + 9 }) + 2) / 5 + d - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    let tage = era * 146_097 + doe - 719_468;
+    let sek = tage * 86_400 + n(8, 10) * 3600 + n(10, 12) * 60 + n(12, 14);
+    let ns: i64 = format!("{bruch:0<9}")[..9].parse().unwrap_or(0);
+    Some(sek * 1_000_000_000 + ns)
+}
+
+/// Zeit für `MFMT` in UTC: `JJJJMMTTHHMMSS` (vor 1970: 1970).
+fn mfmt_zeit(t: std::time::SystemTime) -> String {
+    let s = t.duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs());
+    let (tag, rest) = ((s / 86_400) as i64, s % 86_400);
+    // Kalenderdatum aus Tagen seit 1970 (Verfahren nach H. Hinnant)
+    let z = tag + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = yoe + era * 400 + i64::from(m <= 2);
+    format!("{y:04}{m:02}{d:02}{:02}{:02}{:02}", rest / 3600, rest % 3600 / 60, rest % 60)
+}
+
 /// Fähigkeiten aus der `FEAT`-Antwort. `MLST` schließt `MLSD` ein (RFC 3659) –
 /// ProFTPD z. B. meldet nur `MLST`.
 fn faehigkeiten_aus(feat: &suppaftp::types::Features, chmod: Option<bool>) -> Faehigkeiten {
@@ -346,7 +689,11 @@ fn anmeldefehler(e: FtpError) -> StellwerkError {
 }
 
 fn antwort(r: &suppaftp::types::Response) -> String {
-    format!("{} {}", r.status.code(), String::from_utf8_lossy(&r.body).trim())
+    let code = r.status.code().to_string();
+    let text = String::from_utf8_lossy(&r.body);
+    let text = text.trim();
+    // Manche Antworten enthalten den Code schon am Anfang
+    if text.starts_with(&code) { text.to_string() } else { format!("{code} {text}") }
 }
 
 /// `.` und `..` zählen nicht als Einträge.
@@ -393,6 +740,8 @@ mod tests {
         assert_eq!(anmeldefehler(FtpError::UnexpectedResponse(nein)).kategorie(), "anmeldung");
         let abgelehnt = suppaftp::types::Response::new(Status::FileUnavailable, b"Keine Berechtigung".to_vec());
         assert_eq!(ftp_fehler(FtpError::UnexpectedResponse(abgelehnt)).to_string(), "Verbindung: Server antwortet 550 Keine Berechtigung");
+        let mit_code = suppaftp::types::Response::new(Status::FileUnavailable, b"550 Keine Berechtigung\r\n".to_vec());
+        assert_eq!(ftp_fehler(FtpError::UnexpectedResponse(mit_code)).to_string(), "Verbindung: Server antwortet 550 Keine Berechtigung");
     }
 
     #[test]
@@ -422,6 +771,72 @@ mod tests {
     fn begruessung_ohne_antwortcode() {
         assert_eq!(begruessung_text("220-Willkommen\r\n220 bei Kim\r\n"), "Willkommen\nbei Kim");
         assert_eq!(begruessung_text("Hallo"), "Hallo");
+    }
+
+    #[test]
+    fn mfmt_zeit_in_utc() {
+        use std::time::{Duration, UNIX_EPOCH};
+        assert_eq!(mfmt_zeit(UNIX_EPOCH), "19700101000000");
+        assert_eq!(mfmt_zeit(UNIX_EPOCH + Duration::from_secs(1_700_000_000)), "20231114221320");
+        assert_eq!(mfmt_zeit(UNIX_EPOCH + Duration::from_secs(951_782_400)), "20000229000000", "Schalttag");
+        assert_eq!(mfmt_zeit(UNIX_EPOCH + Duration::from_secs(4_107_542_399)), "21000228235959");
+        assert_eq!(mfmt_zeit(UNIX_EPOCH - Duration::from_secs(5)), "19700101000000");
+    }
+
+    #[test]
+    fn eintrag_aus_zeilen() {
+        let o = RelPath::new("web").unwrap();
+        let e = eintrag_aus(&o, "type=file;size=3; a (conflicted copy).txt", true).unwrap().unwrap();
+        assert_eq!(e.pfad.as_str(), "web/a (conflicted copy).txt");
+        assert_eq!((e.art, e.groesse), (EintragArt::Datei, 3));
+        assert_eq!(e.warnungen, vec![Warnung::Konfliktkopie]);
+        let e = eintrag_aus(&RelPath::wurzel(), "drwxr-xr-x 2 u g 4096 Jan 1 2024 css", false).unwrap().unwrap();
+        assert_eq!((e.pfad.as_str(), e.art, e.warnungen.len()), ("css", EintragArt::Ordner, 0));
+        assert_eq!(eintrag_aus(&o, "type=cdir; .", true), Ok(None));
+        assert!(eintrag_aus(&o, "kaputt", true).is_err());
+        assert!(eintrag_aus(&o, "kaputt", false).is_err());
+        assert!(eintrag_aus(&o, "type=file;size=1; ..", true).unwrap_err().contains("ungültig"));
+        assert!(eintrag_aus(&o, "type=file;size=1; a/b", true).unwrap_err().contains("ungültig"));
+    }
+
+    #[test]
+    fn mlsd_zeilen() {
+        let z = |s| mlsd_zeile(s).unwrap();
+        assert_eq!(
+            z("type=file;size=1234;modify=20231114221320;perm=r; index.php"),
+            Some(("index.php".into(), EintragArt::Datei, 1234, Some(1_700_000_000_000_000_000)))
+        );
+        assert_eq!(z("Type=dir;Size=4096;Modify=20231114221320.5; mit Leer zeichen"), Some(("mit Leer zeichen".into(), EintragArt::Ordner, 0, Some(1_700_000_000_500_000_000))));
+        assert_eq!(z("type=cdir; ."), None);
+        assert_eq!(z("type=pdir; .."), None);
+        assert_eq!(z("type=OS.unix=slink:/x;modify=kaputt; link"), Some(("link".into(), EintragArt::Symlink, 0, None)));
+        assert_eq!(z("type=file;x;sizd=7; a"), Some(("a".into(), EintragArt::Datei, 7, None)));
+        assert!(mlsd_zeile("ohneleerzeichen").is_err());
+        assert!(mlsd_zeile("size=1; a").is_err());
+        assert!(mlsd_zeile("type=file;size=x; a").is_err());
+    }
+
+    #[test]
+    fn mlsd_zeit_auch_vor_maerz_und_schaltjahr() {
+        assert_eq!(mlsd_zeit("19700101000000"), Some(0));
+        assert_eq!(mlsd_zeit("20000229000000"), Some(951_782_400_000_000_000));
+        assert_eq!(mlsd_zeit("20240115120000.123"), Some(1_705_320_000_123_000_000));
+        assert_eq!(mlsd_zeit("2024011512000"), None);
+        assert_eq!(mlsd_zeit("2024011512000x"), None);
+    }
+
+    #[test]
+    fn list_zeilen() {
+        let z = |s| list_zeile(s).unwrap();
+        assert_eq!(z("-rw-r--r--   1 kim  www      1234 Nov 14 22:13 index.php"), Some(("index.php".into(), EintragArt::Datei, 1234, None)));
+        assert_eq!(z("drwxr-xr-x 2 kim www 4096 Jan  1  2024 mit  zwei Leer"), Some(("mit  zwei Leer".into(), EintragArt::Ordner, 0, None)));
+        assert_eq!(z("lrwxrwxrwx 1 kim www 7 Jan 1 2024 link -> ziel"), Some(("link".into(), EintragArt::Symlink, 0, None)));
+        assert_eq!(z("total 12"), None);
+        assert_eq!(z("drwxr-xr-x 2 kim www 4096 Jan 1 2024 ."), None);
+        assert!(list_zeile("01-01-24  10:00AM <DIR> windows").is_err());
+        assert!(list_zeile("-rw-r--r-- 1 kim").is_err());
+        assert!(list_zeile("-rw-r--r-- 1 kim www gross Nov 14 22:13 a").is_err());
+        assert!(list_zeile("").is_err());
     }
 
     #[test]
