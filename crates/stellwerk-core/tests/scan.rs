@@ -290,4 +290,6 @@ fn kategorien_aller_fehler() {
     assert_eq!(io.kategorie(), "io");
     let s = StellwerkError::Schluesselbund("gesperrt".into());
     assert_eq!((s.kategorie(), s.to_string().as_str()), ("schluesselbund", "Schlüsselbund: gesperrt"));
+    let r = StellwerkError::KeineRechte("Keine Schreibrechte in /web".into());
+    assert_eq!((r.kategorie(), r.to_string().as_str()), ("keine_rechte", "Keine Schreibrechte in /web"));
 }

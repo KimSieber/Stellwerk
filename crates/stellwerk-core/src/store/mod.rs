@@ -30,7 +30,7 @@ use crate::plan::{OpArt, Plan, PlanZusammenfassung};
 pub const DATEINAME: &str = "stellwerk.sqlite";
 
 /// Stand des Schemas (`PRAGMA user_version`).
-const SCHEMA_VERSION: i64 = 3;
+const SCHEMA_VERSION: i64 = 4;
 
 const SCHEMA: &str = "
 CREATE TABLE lauf (
@@ -104,6 +104,9 @@ CREATE TABLE stufen_status (
 /// Schema 3 (v0.4): Zeit der Quelle in Nanosekunden wie beim Scan – sonst gälte eine
 /// unveränderte Datei nie als „gleiche Zeit“ und müsste bei jedem Vergleich gelesen werden.
 const SCHEMA_3: &str = "ALTER TABLE manifest RENAME COLUMN mtime_ms TO mtime_ns;";
+
+/// Schema 4 (v0.5): Hinweis je Operation im Journal (z. B. wiederholte Datenverbindung).
+const SCHEMA_4: &str = "ALTER TABLE journal ADD COLUMN hinweis TEXT;";
 
 /// Ein Eintrag im Manifest: so liegt der Pfad nach Stellwerks letztem Lauf am Ziel.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -181,6 +184,8 @@ pub struct JournalZeile {
     pub groesse: u64,
     pub status: JournalStatus,
     pub fehler: Option<String>,
+    /// Bemerkenswertes ohne Fehler, z. B. „Datenverbindung 1-mal mit neuem Port wiederholt“.
+    pub hinweis: Option<String>,
     pub aktualisiert: i64,
 }
 
@@ -262,7 +267,7 @@ impl Datenbank {
             let version: i64 = conn.pragma_query_value(None, "user_version", |r| r.get(0))?;
             if version < SCHEMA_VERSION {
                 // Fehlende Stufen nacheinander; vorhandene Daten bleiben erhalten
-                let schritte = [SCHEMA, SCHEMA_2, SCHEMA_3];
+                let schritte = [SCHEMA, SCHEMA_2, SCHEMA_3, SCHEMA_4];
                 let fehlend = schritte[version.max(0) as usize..].concat();
                 conn.execute_batch(&format!("BEGIN; {fehlend} PRAGMA user_version = {SCHEMA_VERSION}; COMMIT;"))?;
             }
@@ -337,12 +342,12 @@ impl Datenbank {
         gefunden(n, || format!("Lauf „{id}“"))
     }
 
-    pub fn journal_setzen(&self, lauf_id: &str, nr: usize, status: JournalStatus, fehler: Option<&str>, zeit: i64) -> Result<()> {
+    pub fn journal_setzen(&self, lauf_id: &str, nr: usize, status: JournalStatus, fehler: Option<&str>, hinweis: Option<&str>, zeit: i64) -> Result<()> {
         let n = self
             .conn
             .execute(
-                "UPDATE journal SET status = ?3, fehler = ?4, aktualisiert = ?5 WHERE lauf_id = ?1 AND nr = ?2",
-                params![lauf_id, nr as i64, text(&status), fehler, zeit],
+                "UPDATE journal SET status = ?3, fehler = ?4, hinweis = ?5, aktualisiert = ?6 WHERE lauf_id = ?1 AND nr = ?2",
+                params![lauf_id, nr as i64, text(&status), fehler, hinweis, zeit],
             )
             .map_err(db)?;
         gefunden(n, || format!("Journal-Eintrag {nr} von Lauf „{lauf_id}“"))
@@ -440,7 +445,7 @@ impl Datenbank {
         let mut stmt = self
             .conn
             .prepare(
-                "SELECT nr, op, pfad, quelle, modus, groesse, status, fehler, aktualisiert
+                "SELECT nr, op, pfad, quelle, modus, groesse, status, fehler, hinweis, aktualisiert
                  FROM journal WHERE lauf_id = ?1 ORDER BY nr",
             )
             .map_err(db)?;
@@ -455,7 +460,8 @@ impl Datenbank {
                     groesse: r.get::<_, i64>(5)? as u64,
                     status: aus_text(r, 6)?,
                     fehler: r.get(7)?,
-                    aktualisiert: r.get(8)?,
+                    hinweis: r.get(8)?,
+                    aktualisiert: r.get(9)?,
                 })
             })
             .map_err(db)?;

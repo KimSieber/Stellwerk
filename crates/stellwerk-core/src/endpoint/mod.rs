@@ -70,6 +70,11 @@ pub trait ZielVerbindung: Send {
     fn datei_loeschen(&mut self, p: &RelPath) -> Result<()>;
     /// Löscht einen Ordner nur, wenn er leer ist. Schon weg ist in Ordnung.
     fn ordner_loeschen(&mut self, p: &RelPath) -> Result<()>;
+    /// Bemerkenswertes seit dem letzten Abruf, fürs Journal – z. B. dass die
+    /// Datenverbindung wiederholt werden musste. Die Ausführung fragt nach jeder Operation.
+    fn hinweis(&mut self) -> Option<String> {
+        None
+    }
 }
 
 /// Name der Temporärdatei im selben Ordner: `.<name>.stw-<lauf>`.

@@ -51,6 +51,9 @@ thread_local! {
     /// Ob im laufenden Versuch die Datenverbindung gescheitert ist. Die Verbindung
     /// wird auf dem Thread des Befehls aufgebaut, daher genügt ein Wert je Thread.
     static DATENKANAL_GESCHEITERT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// Wie oft die Datenverbindung seit dem letzten Abruf wiederholt wurde (für das
+    /// Journal, [`ZielVerbindung::hinweis`]). Jeder Worker hat seinen eigenen Thread.
+    static DATEN_WIEDERHOLT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 /// Führt einen Befehl mit Datenverbindung aus. Kam nur die Datenverbindung nicht
@@ -66,6 +69,16 @@ fn mit_datenkanal<T>(mut befehl: impl FnMut() -> suppaftp::FtpResult<T>) -> supp
             return r;
         }
         versuch += 1;
+        DATEN_WIEDERHOLT.set(DATEN_WIEDERHOLT.get() + 1);
+    }
+}
+
+/// Hinweis fürs Journal, wenn die Datenverbindung wiederholt werden musste.
+fn wiederholt_hinweis(n: usize) -> Option<String> {
+    match n {
+        0 => None,
+        1 => Some("Datenverbindung 1-mal mit neuem Port wiederholt".to_string()),
+        n => Some(format!("Datenverbindung {n}-mal mit neuem Port wiederholt")),
     }
 }
 
@@ -411,6 +424,7 @@ impl ZielEndpunkt for Ftps {
     /// Eigene Server-Verbindung je Worker; `MFMT` wird je Verbindung aus `FEAT` bestimmt.
     fn verbinden(&self) -> Result<Box<dyn ZielVerbindung + '_>> {
         let mut ftp = self.anmelden()?;
+        DATEN_WIEDERHOLT.set(0);
         let mfmt = self.mfmt_erzwingen || faehigkeiten_aus(&ftp.feat().unwrap_or_default(), None).mfmt;
         Ok(Box::new(FtpsVerbindung { ziel: self, ftp, mfmt, aus_dem_takt: false }))
     }
@@ -450,7 +464,7 @@ impl FtpsVerbindung<'_> {
     /// Hochladen nach `tmp`, Zeit setzen, umbenennen – ohne Aufräumen (macht der Aufrufer).
     fn hochladen(&mut self, q: QuellDatei, tmp: &str, ziel: &str, neu: bool, ort: &RelPath, abbruch: &AtomicBool) -> Result<Geschrieben> {
         let QuellDatei { mut inhalt, geaendert, .. } = q;
-        let mut strom = mit_datenkanal(|| self.ftp.put_with_stream(tmp)).map_err(ftp_fehler)?;
+        let mut strom = mit_datenkanal(|| self.ftp.put_with_stream(tmp)).am(tmp)?;
         let geschrieben = match kopieren(&mut inhalt, &mut strom, abbruch, Path::new(ort.as_str()), Path::new(tmp)) {
             Ok(g) => g,
             Err(e) => {
@@ -459,7 +473,7 @@ impl FtpsVerbindung<'_> {
                 return Err(e);
             }
         };
-        strom.finish().map_err(ftp_fehler)?;
+        strom.finish().am(tmp)?;
         if self.mfmt {
             // Ohne Erfolg bleibt die Zeit des Servers – das Manifest kennt die richtige
             let _ = self.ftp.custom_command(format!("MFMT {} {tmp}", mfmt_zeit(geaendert)), &[Status::File]);
@@ -474,8 +488,8 @@ impl FtpsVerbindung<'_> {
         let gelernt = &self.ziel.umbenennen_ueberschreibt;
         let bekannt = *gelernt.lock().expect("Gelerntes");
         if !neu && bekannt == Some(false) {
-            self.ftp.rm(ziel).map_err(ftp_fehler)?;
-            return self.ftp.rename(tmp, ziel).map_err(ftp_fehler);
+            self.ftp.rm(ziel).am(ziel)?;
+            return self.ftp.rename(tmp, ziel).am(ziel);
         }
         match self.ftp.rename(tmp, ziel) {
             Ok(()) => {
@@ -485,12 +499,12 @@ impl FtpsVerbindung<'_> {
                 Ok(())
             }
             Err(_) if !neu && self.ist_datei(ziel) => {
-                self.ftp.rm(ziel).map_err(ftp_fehler)?;
-                self.ftp.rename(tmp, ziel).map_err(ftp_fehler)?;
+                self.ftp.rm(ziel).am(ziel)?;
+                self.ftp.rename(tmp, ziel).am(ziel)?;
                 *gelernt.lock().expect("Gelerntes") = Some(false);
                 Ok(())
             }
-            Err(e) => Err(ftp_fehler(e)),
+            Err(e) => Err(schreibfehler(e, ziel)),
         }
     }
 }
@@ -500,7 +514,7 @@ impl ZielVerbindung for FtpsVerbindung<'_> {
         let abs = self.ziel.absolut(p.as_str());
         match self.ftp.mkdir(&abs) {
             Err(_) if self.ist_ordner(&abs) => Ok(()),
-            r => r.map_err(ftp_fehler),
+            r => r.am(&abs),
         }
     }
 
@@ -521,7 +535,7 @@ impl ZielVerbindung for FtpsVerbindung<'_> {
 
     fn rechte_setzen(&mut self, p: &RelPath, bits: u32) -> Result<()> {
         let abs = self.ziel.absolut(p.as_str());
-        self.ftp.site(format!("CHMOD {bits:o} {abs}")).map(drop).map_err(ftp_fehler)
+        self.ftp.site(format!("CHMOD {bits:o} {abs}")).map(drop).am(&abs)
     }
 
     fn datei_loeschen(&mut self, p: &RelPath) -> Result<()> {
@@ -532,7 +546,7 @@ impl ZielVerbindung for FtpsVerbindung<'_> {
                 Err(StellwerkError::NichtUnterstuetzt(format!("{abs} ist inzwischen ein Ordner – bitte neu vergleichen")))
             }
             Err(_) if !self.ist_datei(&abs) => Ok(()),
-            Err(e) => Err(ftp_fehler(e)),
+            Err(e) => Err(schreibfehler(e, &abs)),
         }
     }
 
@@ -540,8 +554,12 @@ impl ZielVerbindung for FtpsVerbindung<'_> {
         let abs = self.ziel.absolut(p.as_str());
         match self.ftp.rmdir(&abs) {
             Err(_) if !self.ist_ordner(&abs) => Ok(()),
-            r => r.map_err(ftp_fehler),
+            r => r.am(&abs),
         }
+    }
+
+    fn hinweis(&mut self) -> Option<String> {
+        wiederholt_hinweis(DATEN_WIEDERHOLT.replace(0))
     }
 }
 
@@ -719,6 +737,42 @@ fn ftp_fehler(e: FtpError) -> StellwerkError {
     })
 }
 
+/// Fehler einer schreibenden Aktion an `abs`. Verweigert der Server das Schreiben
+/// (`550`/`553` mit „denied“), nennt die Meldung den Ordner und was zu prüfen ist –
+/// so geschehen bei manitu, als der FTP-Unterbenutzer keine Schreibrechte hatte.
+fn schreibfehler(e: FtpError, abs: &str) -> StellwerkError {
+    match e {
+        FtpError::UnexpectedResponse(r) if verweigert(&r) => {
+            let ordner = abs.rsplit_once('/').map_or("", |(o, _)| o);
+            let ordner = if ordner.is_empty() { "/" } else { ordner };
+            StellwerkError::KeineRechte(format!(
+                "Keine Schreibrechte in {ordner} – Serverpfad der Stufe bzw. Rechte am Server prüfen (Server antwortet {})",
+                antwort(&r)
+            ))
+        }
+        e => ftp_fehler(e),
+    }
+}
+
+/// Lehnt der Server mangels Rechten ab?
+fn verweigert(r: &suppaftp::types::Response) -> bool {
+    matches!(r.status.code(), 550 | 553) && String::from_utf8_lossy(&r.body).to_ascii_lowercase().contains("denied")
+}
+
+/// Fehler schreibender Befehle mit dem Ort, an dem geschrieben werden sollte.
+trait AmOrt<T> {
+    fn am(self, abs: &str) -> Result<T>;
+}
+
+impl<T> AmOrt<T> for suppaftp::FtpResult<T> {
+    fn am(self, abs: &str) -> Result<T> {
+        match self {
+            Ok(v) => Ok(v),
+            Err(e) => Err(schreibfehler(e, abs)),
+        }
+    }
+}
+
 /// `530` bei der Anmeldung heißt: Benutzer oder Passwort abgelehnt.
 fn anmeldefehler(e: FtpError) -> StellwerkError {
     match e {
@@ -811,6 +865,37 @@ mod tests {
         assert_eq!(fingerprint_bytes("AB:CD"), None);
         assert_eq!(fingerprint_bytes(&"g0".repeat(32)), None);
         assert_eq!(fingerprint_bytes(&format!("a{}a", "ä".repeat(31))), None, "Paar ist kein UTF-8");
+    }
+
+    #[test]
+    fn wiederholungen_der_datenverbindung_werden_gezaehlt() {
+        DATEN_WIEDERHOLT.set(0);
+        let mut n = 0;
+        mit_datenkanal(|| befehl(&mut n, 2, false)).unwrap();
+        assert_eq!(DATEN_WIEDERHOLT.replace(0), 2);
+        assert_eq!(wiederholt_hinweis(0), None);
+        assert_eq!(wiederholt_hinweis(1).unwrap(), "Datenverbindung 1-mal mit neuem Port wiederholt");
+        assert_eq!(wiederholt_hinweis(2).unwrap(), "Datenverbindung 2-mal mit neuem Port wiederholt");
+    }
+
+    #[test]
+    fn verweigertes_schreiben_nennt_ordner_und_abhilfe() {
+        let r = |status, text: &[u8]| FtpError::UnexpectedResponse(suppaftp::types::Response::new(status, text.to_vec()));
+        let e = schreibfehler(r(Status::FileUnavailable, b"550 .a.php.stw-x: Permission denied\r\n"), "/web/test/.a.php.stw-x");
+        assert_eq!(e.kategorie(), "keine_rechte");
+        assert_eq!(
+            e.to_string(),
+            "Keine Schreibrechte in /web/test – Serverpfad der Stufe bzw. Rechte am Server prüfen (Server antwortet 550 .a.php.stw-x: Permission denied)"
+        );
+        // Datei direkt im Serverpfad „/“, 553 und andere Schreibweise
+        let e = schreibfehler(r(Status::BadFilename, b"Access DENIED"), "/a.php");
+        assert!(e.to_string().starts_with("Keine Schreibrechte in / – "), "{e}");
+        let e = schreibfehler(r(Status::FileUnavailable, b"Permission denied"), "ohne-schraegstrich");
+        assert!(e.to_string().starts_with("Keine Schreibrechte in / – "), "{e}");
+        // 550 aus anderem Grund und andere Codes bleiben, wie sie sind
+        assert_eq!(schreibfehler(r(Status::FileUnavailable, b"No such file"), "/a").kategorie(), "verbindung");
+        assert_eq!(schreibfehler(r(Status::NotLoggedIn, b"denied"), "/a").kategorie(), "verbindung");
+        assert_eq!(schreibfehler(FtpError::BadResponse, "/a").kategorie(), "verbindung");
     }
 
     #[test]

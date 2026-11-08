@@ -47,6 +47,10 @@ pub struct Aufbau {
     /// Namen (exakt), die weder gelöscht (`DELE`/`RMD`), Ziel einer Umbenennung
     /// (`RNTO`) noch als Ordner gelistet werden dürfen.
     pub gesperrt: &'static [&'static str],
+    /// Ordnernamen (exakt), in denen weder Dateien hochgeladen (`STOR`) noch
+    /// Ordner angelegt (`MKD`) werden dürfen – „550 Permission denied“ wie bei
+    /// einem FTP-Benutzer ohne Schreibrechte.
+    pub schreibgeschuetzt: &'static [&'static str],
 }
 
 /// Ein laufender Server; endet mit dem Test (Laufzeit wird verworfen).
@@ -166,10 +170,10 @@ pub fn starten(a: Aufbau) -> TestServer {
     let port = TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
     let laufzeit = tokio::runtime::Builder::new_multi_thread().worker_threads(2).enable_all().build().unwrap();
     let root = wurzel.path().canonicalize().unwrap();
-    let (streng, verweigert) = (a.umbenennen_ueberschreibt_nicht, a.gesperrt);
+    let (streng, verweigert, geschuetzt) = (a.umbenennen_ueberschreibt_nicht, a.gesperrt, a.schreibgeschuetzt);
     let backend_root = root.clone();
     let mut b = ServerBuilder::with_authenticator(
-        Box::new(move || Backend { fs: Filesystem::new(backend_root.clone()).unwrap(), root: backend_root.clone(), streng, verweigert }),
+        Box::new(move || Backend { fs: Filesystem::new(backend_root.clone()).unwrap(), root: backend_root.clone(), streng, verweigert, geschuetzt }),
         Arc::new(Zugang),
     )
         .greeting("Stellwerk-Testserver")
@@ -220,9 +224,19 @@ struct Backend {
     root: PathBuf,
     streng: bool,
     verweigert: &'static [&'static str],
+    geschuetzt: &'static [&'static str],
 }
 
 impl Backend {
+    /// Schreiben im Ordner von `p` erlaubt?
+    fn darf_schreiben(&self, p: &Path) -> SResult<()> {
+        let ordner = p.parent().and_then(Path::file_name).map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+        if self.geschuetzt.contains(&ordner.as_str()) {
+            return Err(SError::from(SErrorKind::PermissionDenied));
+        }
+        Ok(())
+    }
+
     fn darf_loeschen(&self, p: &Path) -> SResult<()> {
         let name = p.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
         if self.verweigert.contains(&name.as_str()) {
@@ -257,6 +271,7 @@ impl<U: unftp_core::auth::UserDetail> StorageBackend<U> for Backend {
         self.fs.get(u, p, start).await
     }
     async fn put<P: AsRef<Path> + Send + Debug, R: tokio::io::AsyncRead + Send + Sync + Unpin + 'static>(&self, u: &U, r: R, p: P, start: u64) -> SResult<u64> {
+        self.darf_schreiben(p.as_ref())?;
         self.fs.put(u, r, p, start).await
     }
     async fn del<P: AsRef<Path> + Send + Debug>(&self, u: &U, p: P) -> SResult<()> {
@@ -264,6 +279,7 @@ impl<U: unftp_core::auth::UserDetail> StorageBackend<U> for Backend {
         self.fs.del(u, p).await
     }
     async fn mkd<P: AsRef<Path> + Send + Debug>(&self, u: &U, p: P) -> SResult<()> {
+        self.darf_schreiben(p.as_ref())?;
         self.fs.mkd(u, p).await
     }
     async fn rename<P: AsRef<Path> + Send + Debug>(&self, u: &U, von: P, nach: P) -> SResult<()> {

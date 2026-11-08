@@ -11,6 +11,11 @@
 // Serverkontakt). Wurde der Server noch nie gelesen, bietet die Karte
 // „Mit Server vergleichen …“ an.
 //
+// Kommt Stellwerk in den Vordergrund (z. B. nach dem Bearbeiten der Dateien im
+// Editor), werden Stufen neu verglichen, deren Vergleich älter als eine Minute ist –
+// nur in dieser Übersicht, nicht in der geöffneten Vergleichsansicht, und nie
+// während schon verglichen wird. FTPS auch hier nur gegen den letzten bekannten Stand.
+//
 // Die Vergleiche gehören dieser Ansicht: Sie gibt sie beim Verlassen in Rust frei.
 // Wie in der Vergleichsansicht startet je Auftrag genau ein Durchlauf, auch wenn
 // React im StrictMode Effekte doppelt ausführt.
@@ -24,6 +29,9 @@ import { VergleichAnsicht } from "../vergleich/VergleichAnsicht";
 
 /** So viele Läufe je Stufe werden gezeigt. */
 export const LAEUFE_LIMIT = 50;
+
+/** Ab diesem Alter wird ein Vergleich bei Rückkehr ins Fenster erneuert. */
+export const NEU_VERGLEICHEN_NACH_MS = 60_000;
 
 type Props = {
   strecke: StreckeUebersicht;
@@ -57,6 +65,8 @@ export function StreckeAnsicht({ strecke, onZurueck, onBearbeiten }: Props) {
   const verlassen = useRef(false);
   const statusRef = useRef(status);
   statusRef.current = status;
+  const geoeffnetRef = useRef(geoeffnet);
+  geoeffnetRef.current = geoeffnet;
   const queryClient = useQueryClient();
 
   const setze = (stufe: string, s: StufenStatus) => setStatus((alt) => ({ ...alt, [stufe]: s }));
@@ -93,6 +103,26 @@ export function StreckeAnsicht({ strecke, onZurueck, onBearbeiten }: Props) {
     begonnen.current = true;
     vergleichen(alle);
     // Nur beim Öffnen; die Strecke wechselt nie innerhalb einer Ansicht (key in App)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Zurück im Vordergrund: veraltete Vergleiche erneuern
+  useEffect(() => {
+    const zurueckImFenster = () => {
+      if (document.visibilityState === "hidden" || geoeffnetRef.current || arbeitet.current) return;
+      const grenze = Date.now() - NEU_VERGLEICHEN_NACH_MS;
+      const alt = Object.entries(statusRef.current)
+        .filter(([, s]) => s.art === "fertig" && s.zeit.getTime() < grenze)
+        .map(([stufe]) => stufe);
+      if (alt.length > 0) vergleichen(alt);
+    };
+    window.addEventListener("focus", zurueckImFenster);
+    document.addEventListener("visibilitychange", zurueckImFenster);
+    return () => {
+      window.removeEventListener("focus", zurueckImFenster);
+      document.removeEventListener("visibilitychange", zurueckImFenster);
+    };
+    // vergleichen arbeitet nur mit Refs und Setzern – einmal anmelden genügt
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -277,6 +307,7 @@ function Journal({ laufId }: { laufId: string }) {
           {z.modus && <span className="hinweis"> {z.modus}</span>}
           <span className="journal-status"> {JOURNAL_TEXT[z.status]}</span>
           {z.fehler && <span className="meldung fehler"> – {z.fehler}</span>}
+          {z.hinweis && <span className="journal-hinweis"> · ⚠ {z.hinweis}</span>}
         </li>
       ))}
     </ol>

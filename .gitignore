@@ -47,3 +47,6 @@ src-tauri/gen/schemas/
 *.db
 logs/
 *.log
+
+# Interne Arbeitsunterlagen (Übergaben für neue Chats) – nicht ins Repository
+docs/intern/

@@ -27,6 +27,7 @@ export interface BefehlsFehler {
     | "datenbank"
     | "verbindung"
     | "anmeldung"
+    | "keine_rechte"
     | "zertifikat"
     | "io";
   meldung: string;
@@ -291,6 +292,8 @@ export interface JournalZeile {
   groesse: number;
   status: JournalStatus;
   fehler: string | null;
+  /** Bemerkenswertes ohne Fehler, z. B. eine wiederholte Datenverbindung. */
+  hinweis: string | null;
   aktualisiert: number;
 }
 

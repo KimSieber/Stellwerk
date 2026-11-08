@@ -7,7 +7,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { JournalZeile, Lauf, StreckeUebersicht, VergleichStart } from "../api";
 import { aufrufeVon, rustAttrappe, type Antworten } from "../test/hilfen";
 import { kanalSenden, start, summe } from "../test/vergleich";
-import { StreckeAnsicht } from "./StreckeAnsicht";
+import { NEU_VERGLEICHEN_NACH_MS, StreckeAnsicht } from "./StreckeAnsicht";
 
 // Die Vergleichsansicht ist eigens getestet; hier zählt nur, was sie zurückmeldet.
 vi.mock("../vergleich/VergleichAnsicht", () => ({
@@ -189,6 +189,87 @@ describe("Streckenansicht – Status je Stufe", () => {
   });
 });
 
+describe("Streckenansicht – zurück im Vordergrund", () => {
+  const spaeter = (ms: number) => {
+    const echt = Date.now;
+    const jetzt = echt();
+    return vi.spyOn(Date, "now").mockImplementation(() => jetzt + ms);
+  };
+  const sichtbar = (zustand: "visible" | "hidden") => {
+    Object.defineProperty(document, "visibilityState", { configurable: true, get: () => zustand });
+    act(() => {
+      document.dispatchEvent(new Event("visibilitychange"));
+    });
+  };
+  const fokus = () =>
+    act(() => {
+      window.dispatchEvent(new Event("focus"));
+    });
+
+  async function geladen() {
+    const aufrufe = rust();
+    const r = ansicht();
+    await waitFor(() => expect(screen.getAllByRole("button", { name: "Ansehen & übertragen …" })).toHaveLength(2));
+    await waitFor(() => expect(within(zeile("Test 2 → Server")).getByText(NIE)).toBeInTheDocument());
+    return { aufrufe, ...r };
+  }
+
+  it("vergleicht Stufen neu, deren Vergleich älter als eine Minute ist – FTPS ohne Server", async () => {
+    const { aufrufe } = await geladen();
+    const uhr = spaeter(NEU_VERGLEICHEN_NACH_MS + 1000);
+    fokus();
+    // Die nie gelesene FTPS-Stufe hat keinen Vergleich – sie bleibt, wie sie ist
+    await waitFor(() => expect(gestartet(aufrufe)).toEqual(["eins", "zwei", "server", "eins", "zwei"]));
+    await waitFor(() => expect(screen.getAllByRole("button", { name: "Ansehen & übertragen …" })).toHaveLength(2));
+    expect(aufrufeVon(aufrufe, "vergleich_starten").every((a) => (a.args as { server: boolean }).server === false)).toBe(true);
+    // Sichtbar werden wirkt genauso; die Vergleiche sind jetzt frisch
+    uhr.mockRestore();
+    sichtbar("visible");
+    fokus();
+    expect(gestartet(aufrufe)).toHaveLength(5);
+  });
+
+  it("frische Vergleiche, verdecktes Fenster, geöffnete Stufe: nichts", async () => {
+    const { aufrufe } = await geladen();
+    fokus();
+    expect(gestartet(aufrufe)).toHaveLength(3);
+    const uhr = spaeter(NEU_VERGLEICHEN_NACH_MS + 1000);
+    sichtbar("hidden");
+    expect(gestartet(aufrufe)).toHaveLength(3);
+    Object.defineProperty(document, "visibilityState", { configurable: true, get: () => "visible" });
+    await userEvent.click(within(karte("Repo → Test 1")).getByRole("button", { name: "Ansehen & übertragen …" }));
+    fokus();
+    expect(gestartet(aufrufe)).toHaveLength(3);
+    // Zurück in der Übersicht: jetzt schon
+    await userEvent.click(screen.getByRole("button", { name: "zurück unverändert" }));
+    fokus();
+    await waitFor(() => expect(gestartet(aufrufe)).toEqual(["eins", "zwei", "server", "eins", "zwei"]));
+    uhr.mockRestore();
+  });
+
+  it("während verglichen wird: nichts dazu; nach dem Verlassen hört die Ansicht nicht mehr hin", async () => {
+    const zweite = haengend();
+    let n = 0;
+    const aufrufe = rust({
+      vergleich_starten: (a) => {
+        n += 1;
+        if (n === 2) return zweite.antwort(a);
+        return start({ vergleich_id: `${(a as { stufe: string }).stufe}#1`, zusammenfassung: GLEICH });
+      },
+    });
+    const { zurueck } = ansicht({ ...STRECKE, stufen: STRECKE.stufen.slice(0, 2) });
+    await waitFor(() => expect(within(zeile("Repo → Test 1")).getByText("gleich")).toBeInTheDocument());
+    const uhr = spaeter(NEU_VERGLEICHEN_NACH_MS + 1000);
+    fokus();
+    expect(gestartet(aufrufe)).toEqual(["eins", "zwei"]);
+    await act(async () => zweite.s.ok(start({ vergleich_id: "zwei#1", zusammenfassung: GLEICH })));
+    await waitFor(() => expect(within(zeile("Test 1 → Test 2")).getByText("gleich")).toBeInTheDocument());
+    await userEvent.click(screen.getByRole("button", { name: "← Strecken" }));
+    expect(zurueck).toHaveBeenCalled();
+    uhr.mockRestore();
+  });
+});
+
 describe("Streckenansicht – Stufe öffnen und zurück", () => {
   async function fertigGeladen() {
     const aufrufe = rust();
@@ -353,6 +434,7 @@ describe("Streckenansicht – Protokoll je Stufe", () => {
     groesse: 1,
     status: "erledigt",
     fehler: null,
+    hinweis: null,
     aktualisiert: 0,
     ...teil,
   });
@@ -369,7 +451,8 @@ describe("Streckenansicht – Protokoll je Stufe", () => {
           : [],
       lauf_journal: () => [
         schritt(0, { op: "ordner_anlegen", pfad: "css", quelle: null, groesse: 0 }),
-        schritt(1, { pfad: "config.php", quelle: "config.server.php", status: "fehler", fehler: "kein Zugriff" }),
+        schritt(1, { pfad: "config.php", quelle: "config.server.php", status: "fehler", fehler: "kein Zugriff", hinweis: "Datenverbindung 3-mal mit neuem Port wiederholt" }),
+        schritt(3, { pfad: "b.txt", quelle: "b.txt", hinweis: "Datenverbindung 1-mal mit neuem Port wiederholt" }),
         schritt(2, { op: "rechte_setzen", pfad: "a.txt", quelle: null, modus: "644", status: "uebersprungen" }),
       ],
     });
@@ -394,9 +477,11 @@ describe("Streckenansicht – Protokoll je Stufe", () => {
     expect(aufrufeVon(aufrufe, "lauf_journal")[0].args).toEqual({ laufId: "neu" });
     expect(schritte.map((s) => s.textContent)).toEqual([
       "Ordner anlegen css erledigt",
-      "Kopieren config.php ← config.server.php Fehler – kein Zugriff",
+      "Kopieren config.php ← config.server.php Fehler – kein Zugriff · ⚠ Datenverbindung 3-mal mit neuem Port wiederholt",
+      "Kopieren b.txt erledigt · ⚠ Datenverbindung 1-mal mit neuem Port wiederholt",
       "Rechte setzen a.txt 644 nicht ausgeführt",
     ]);
+    expect(schritte[2].querySelector(".journal-hinweis")).not.toBeNull();
     expect(schritte[1]).toHaveClass("journal-fehler");
     // Zuklappen und wieder auf: kein erneutes Laden nötig
     await userEvent.click(p.getByText(/4 Schritte · 3 KB/));

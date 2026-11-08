@@ -848,7 +848,8 @@ fn laeufe_und_journal_fuer_die_streckenansicht() {
     let j = a.aufruf("lauf_journal", json!({ "laufId": r["lauf_id"] })).unwrap();
     assert_eq!(j.as_array().unwrap().len(), 4);
     assert_eq!(j[0], json!({ "nr": 0, "op": "ordner_anlegen", "pfad": "css", "quelle": null, "modus": null,
-                             "groesse": 0, "status": "erledigt", "fehler": null, "aktualisiert": j[0]["aktualisiert"] }));
+                             "groesse": 0, "status": "erledigt", "fehler": null, "hinweis": null,
+                             "aktualisiert": j[0]["aktualisiert"] }));
     assert_eq!(a.aufruf("lauf_journal", json!({ "laufId": "gibtsnicht" })).unwrap(), json!([]));
 }
 

@@ -102,9 +102,10 @@ pub struct Uebertragen {
     pub quelle_mtime_ns: Option<i64>,
 }
 
-/// Rückmeldung an das Journal: Operation, neuer Status, ggf. Meldung und – bei
-/// erledigten Dateien – was übertragen wurde.
-pub type JournalMelden<'a> = dyn FnMut(&Operation, JournalStatus, Option<&str>, Option<&Uebertragen>) -> Result<()> + 'a;
+/// Rückmeldung an das Journal: Operation, neuer Status, ggf. Meldung, – bei
+/// erledigten Dateien – was übertragen wurde und ein Hinweis der Verbindung
+/// (z. B. wiederholte Datenverbindung).
+pub type JournalMelden<'a> = dyn FnMut(&Operation, JournalStatus, Option<&str>, Option<&Uebertragen>, Option<&str>) -> Result<()> + 'a;
 
 /// Führt einen Plan im Modus „Direkt“ aus: liest aus `quelle`, schreibt nach `ziel`.
 /// `lauf_id` macht die Namen der Temporärdateien eindeutig. Jeder Worker öffnet
@@ -146,7 +147,7 @@ pub fn direkt_ausfuehren(
 
     let (auftrag_tx, auftrag_rx) = mpsc::channel::<usize>();
     let auftrag_rx = Mutex::new(auftrag_rx);
-    let (fertig_tx, fertig_rx) = mpsc::channel::<(usize, Result<Option<Uebertragen>>)>();
+    let (fertig_tx, fertig_rx) = mpsc::channel::<(usize, Result<Option<Uebertragen>>, Option<String>)>();
     std::thread::scope(|s| {
         for _ in 0..worker {
             let (rx, tx) = (&auftrag_rx, fertig_tx.clone());
@@ -159,7 +160,8 @@ pub fn direkt_ausfuehren(
                         None => ziel.verbinden().map(|v| verbindung.insert(v)),
                     }
                     .and_then(|v| ausfuehren(&ops[nr], quelle, v.as_mut(), lauf_id, abbruch));
-                    let _ = tx.send((nr, r));
+                    let hinweis = verbindung.as_mut().and_then(|v| v.hinweis());
+                    let _ = tx.send((nr, r, hinweis));
                 }
             });
         }
@@ -178,7 +180,7 @@ pub fn direkt_ausfuehren(
             if laufend == 0 {
                 break;
             }
-            let (nr, r) = fertig_rx.recv().expect("Ein Worker meldet jeden Auftrag zurück");
+            let (nr, r, hinweis) = fertig_rx.recv().expect("Ein Worker meldet jeden Auftrag zurück");
             laufend -= 1;
             let o = &ops[nr];
             let mut uebertragen = None;
@@ -214,7 +216,7 @@ pub fn direkt_ausfuehren(
             if st != JournalStatus::Uebersprungen {
                 stand.fertig += 1;
             }
-            if let Err(e) = journal(o, st, meldung.as_deref(), uebertragen.as_ref()) {
+            if let Err(e) = journal(o, st, meldung.as_deref(), uebertragen.as_ref(), hinweis.as_deref()) {
                 erg.journal_fehler.get_or_insert(e.to_string());
             }
             if zuletzt.elapsed() >= opt.fortschritt_abstand {
@@ -240,7 +242,7 @@ pub fn direkt_ausfuehren(
         };
         status[o.nr] = Some(JournalStatus::Uebersprungen);
         erg.uebersprungen += 1;
-        if let Err(e) = journal(o, JournalStatus::Uebersprungen, Some(grund), None) {
+        if let Err(e) = journal(o, JournalStatus::Uebersprungen, Some(grund), None, None) {
             erg.journal_fehler.get_or_insert(e.to_string());
         }
     }

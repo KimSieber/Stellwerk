@@ -81,7 +81,7 @@ impl Strecke {
     fn laufen_mit(&self, plan: &Plan, ziel: &Ftps, worker: usize, abbruch: &AtomicBool) -> (LaufErgebnis, Vec<(usize, JournalStatus, Option<String>)>) {
         let mut journal = Vec::new();
         let opt = Optionen { worker, bei_fehler_stoppen: false, fortschritt_abstand: Duration::ZERO };
-        let erg = direkt_ausfuehren(plan, &Lokal::new(&self.q), ziel, LAUF, &opt, abbruch, &mut |o, st, m, _| {
+        let erg = direkt_ausfuehren(plan, &Lokal::new(&self.q), ziel, LAUF, &opt, abbruch, &mut |o, st, m, _, _| {
             journal.push((o.nr, st, m.map(String::from)));
             Ok(())
         }, &mut |_| {});
@@ -215,6 +215,7 @@ fn hochladen_oder_umbenennen_scheitert_temporaerdatei_wird_entfernt() {
     let (erg, _) = st.laufen(&st.plan(&Rechte::NichtSetzen), &st.ftps(), 1);
     assert_eq!(erg.fehler.len(), 1, "{erg:?}");
     assert!(erg.fehler[0].meldung.contains("550"), "{erg:?}");
+    assert!(erg.fehler[0].meldung.starts_with("Keine Schreibrechte in /httpdocs"), "{erg:?}");
     assert!(!st.z.join("gesperrt.txt").exists());
     st.keine_temporaerdateien();
 }
@@ -261,7 +262,10 @@ fn loeschen_und_ordner_anlegen_sind_vorsichtig() {
         ["datei-statt-ordner", "gesperrt-ordner/z.txt", "gesperrt.txt", "jetzt-ordner.txt", "voll"],
         "{erg:?}"
     );
-    assert!(erg.fehler.iter().any(|f| f.meldung == "Verbindung: Server antwortet 550 Permission denied"), "Code nur einmal");
+    assert!(
+        erg.fehler.iter().any(|f| f.meldung.starts_with("Keine Schreibrechte in /httpdocs – ") && f.meldung.ends_with("(Server antwortet 550 Permission denied)")),
+        "Ordner und Abhilfe, Code nur einmal: {erg:?}"
+    );
     assert_eq!(erg.uebersprungen, 2, "Ordner, deren Inhalt nicht gelöscht wurde");
     assert!(erg.fehler.iter().any(|f| f.meldung.contains("inzwischen ein Ordner")));
     assert!(!st.z.join("weg.txt").exists());
@@ -316,4 +320,28 @@ fn ohne_verbindung_scheitert_jeder_auftrag() {
     let (erg, _) = st.laufen(&st.plan(&Rechte::NichtSetzen), &Ftps::new(&z, "falsch").unwrap(), 1);
     assert_eq!(erg.fehler.len(), 1);
     assert!(erg.fehler[0].meldung.contains("Anmeldung"), "{erg:?}");
+}
+
+#[test]
+fn ohne_schreibrechte_nennt_die_meldung_ordner_und_abhilfe() {
+    // Wie bei manitu am 08.11.2026: Der FTP-Benutzer darf im Ordner nicht schreiben
+    let st = aufbau(Aufbau { schreibgeschuetzt: &["httpdocs", "nur-lesen"], ..Default::default() });
+    datei(&st.q, "a.php", "a");
+    datei(&st.q, "unter/nur-lesen/b.php", "b");
+    fs::create_dir_all(st.z.join("unter/nur-lesen")).unwrap();
+    let (erg, journal) = st.laufen(&st.plan(&Rechte::NichtSetzen), &st.ftps(), 1);
+    let mut meldungen: Vec<_> = erg.fehler.iter().map(|f| (f.pfad.to_string(), f.meldung.clone())).collect();
+    meldungen.sort();
+    let erwartet = |ordner: &str| format!("Keine Schreibrechte in {ordner} – Serverpfad der Stufe bzw. Rechte am Server prüfen (Server antwortet 550 Permission denied)");
+    assert_eq!(meldungen, [("a.php".to_string(), erwartet("/httpdocs")), ("unter/nur-lesen/b.php".to_string(), erwartet("/httpdocs/unter/nur-lesen"))]);
+    assert!(journal.iter().any(|(_, s, m)| *s == JournalStatus::Fehler && m.as_deref() == Some(erwartet("/httpdocs").as_str())));
+    st.keine_temporaerdateien();
+
+    // Ordner anlegen ohne Rechte
+    let st = aufbau(Aufbau { schreibgeschuetzt: &["httpdocs"], ..Default::default() });
+    fs::create_dir(st.q.join("neu")).unwrap();
+    let (erg, _) = st.laufen(&st.plan(&Rechte::NichtSetzen), &st.ftps(), 1);
+    assert_eq!(erg.fehler.len(), 1, "{erg:?}");
+    assert_eq!(erg.fehler[0].art, OpArt::OrdnerAnlegen);
+    assert!(erg.fehler[0].meldung.starts_with("Keine Schreibrechte in /httpdocs – "), "{erg:?}");
 }

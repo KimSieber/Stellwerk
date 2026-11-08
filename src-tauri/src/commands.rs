@@ -685,9 +685,9 @@ fn uebertragen(
         &lauf_id,
         &opt,
         abbruch,
-        &mut |op, status, meldung, uebertragen| {
+        &mut |op, status, meldung, uebertragen, hinweis| {
             let db = db.lock().unwrap();
-            db.journal_setzen(&lauf_id, op.nr, status, meldung, jetzt_ms())?;
+            db.journal_setzen(&lauf_id, op.nr, status, meldung, hinweis, jetzt_ms())?;
             if ftps.is_some() && status == JournalStatus::Erledigt {
                 manifest_fortschreiben(&db, ort, op, uebertragen)?;
             }

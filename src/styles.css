@@ -327,4 +327,5 @@ legend { font-weight: 600; padding: 0 6px; }
 .journal .op { color: var(--text-leise); }
 .journal-status { color: var(--text-leise); }
 .journal-fehler .journal-status { color: var(--loeschen); }
+.journal-hinweis { color: var(--konflikt); }
 @media (max-width: 760px) { .stufen-zeile { grid-template-columns: minmax(0, 1fr); } }

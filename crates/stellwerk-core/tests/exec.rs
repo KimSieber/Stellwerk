@@ -14,11 +14,11 @@ use filetime::{set_file_mtime, FileTime};
 use stellwerk_core::ansicht::{stufe_vergleichen, VergleichsSitzung};
 use stellwerk_core::config::{strecke_aus_toml, GlobalConfig};
 use stellwerk_core::diff::Zusammenfassung;
-use stellwerk_core::endpoint::{Lokal, ZielEndpunkt, ZielVerbindung};
+use stellwerk_core::endpoint::{Geschrieben, Lokal, QuellDatei, ZielEndpunkt, ZielVerbindung};
 use stellwerk_core::exec::{
     direkt_ausfuehren, standard_worker, ExecFortschritt, LaufErgebnis, Optionen, Uebertragen, MAX_WORKER,
 };
-use stellwerk_core::model::{Dateimodus, Rechte};
+use stellwerk_core::model::{Dateimodus, Rechte, RelPath};
 use stellwerk_core::plan::{plan_erstellen, OpArt, Plan};
 use stellwerk_core::store::JournalStatus;
 use stellwerk_core::StellwerkError;
@@ -129,7 +129,7 @@ fn laufen_mit(
         LAUF,
         o,
         abbruch,
-        &mut |op, st, m, u| {
+        &mut |op, st, m, u, _| {
             journal.push((op.nr, st, m.map(String::from)));
             if let Some(u) = u {
                 uebertragen.insert(op.nr, *u);
@@ -560,7 +560,7 @@ impl ZielEndpunkt for ZaehlendesZiel {
 }
 
 fn mit_ziel(a: &Aufbau, plan: &Plan, worker: usize, ziel: &ZaehlendesZiel) -> LaufErgebnis {
-    direkt_ausfuehren(plan, &Lokal::new(&a.q), ziel, LAUF, &opt(worker), &AtomicBool::new(false), &mut |_, _, _, _| Ok(()), &mut |_| {})
+    direkt_ausfuehren(plan, &Lokal::new(&a.q), ziel, LAUF, &opt(worker), &AtomicBool::new(false), &mut |_, _, _, _, _| Ok(()), &mut |_| {})
 }
 
 #[test]
@@ -605,4 +605,77 @@ fn je_datei_werden_hash_und_zeit_der_quelle_gemeldet() {
     assert_eq!(u.geschrieben.hash.0, *blake3::hash(b"abc").as_bytes());
     assert_eq!(u.quelle_mtime_ns, Some(1_700_000_000_123_456_789));
     assert_eq!(l.uebertragen.len(), 1, "nur Dateien – nicht der Ordner");
+}
+
+// --- Hinweise der Verbindung im Journal (v0.5) -------------------------------
+
+/// Lokale Verbindung, die nach jedem Schreiben einer Datei einen Hinweis meldet –
+/// wie FTPS nach einer wiederholten Datenverbindung.
+struct MitHinweis<'a> {
+    innen: Box<dyn ZielVerbindung + 'a>,
+    zuletzt: Option<String>,
+}
+
+impl ZielVerbindung for MitHinweis<'_> {
+    fn ordner_anlegen(&mut self, p: &RelPath) -> stellwerk_core::Result<()> {
+        self.innen.ordner_anlegen(p)
+    }
+    fn datei_schreiben(&mut self, p: &RelPath, q: QuellDatei, neu: bool, lauf: &str, abbruch: &AtomicBool) -> stellwerk_core::Result<Geschrieben> {
+        self.zuletzt = Some(format!("wiederholt bei {p}"));
+        self.innen.datei_schreiben(p, q, neu, lauf, abbruch)
+    }
+    fn rechte_setzen(&mut self, p: &RelPath, bits: u32) -> stellwerk_core::Result<()> {
+        self.innen.rechte_setzen(p, bits)
+    }
+    fn datei_loeschen(&mut self, p: &RelPath) -> stellwerk_core::Result<()> {
+        self.innen.datei_loeschen(p)
+    }
+    fn ordner_loeschen(&mut self, p: &RelPath) -> stellwerk_core::Result<()> {
+        self.innen.ordner_loeschen(p)
+    }
+    fn hinweis(&mut self) -> Option<String> {
+        self.zuletzt.take()
+    }
+}
+
+struct HinweisZiel(Lokal);
+
+impl ZielEndpunkt for HinweisZiel {
+    fn verbinden(&self) -> stellwerk_core::Result<Box<dyn ZielVerbindung + '_>> {
+        Ok(Box::new(MitHinweis { innen: self.0.verbinden()?, zuletzt: None }))
+    }
+}
+
+#[test]
+fn hinweise_der_verbindung_kommen_je_operation_ins_journal() {
+    let a = aufbau();
+    webseite(&a);
+    datei(&a.q, "kaputt/x.txt", "x");
+    let r = Rechte::Fest { ordner: Dateimodus::new(0o755), dateien: Dateimodus::new(0o644) };
+    let plan = a.plan_mit("", &r);
+    // Quelle verschwindet nach dem Planen: Fehler – der Hinweis steht trotzdem nur beim Schreiben
+    fs::remove_file(a.q.join("kaputt/x.txt")).unwrap();
+    let mut hinweise = BTreeMap::new();
+    let erg = direkt_ausfuehren(
+        &plan,
+        &Lokal::new(&a.q),
+        &HinweisZiel(Lokal::new(&a.z)),
+        LAUF,
+        &opt(2),
+        &AtomicBool::new(false),
+        &mut |op, _, _, _, h| {
+            hinweise.insert(op.nr, h.map(String::from));
+            Ok(())
+        },
+        &mut |_| {},
+    );
+    assert_eq!(erg.fehler.len(), 1, "{erg:?}");
+    let arten: std::collections::BTreeSet<_> = plan.operationen.iter().map(|o| format!("{:?}", o.art)).collect();
+    assert_eq!(arten.len(), 6, "jede Art Operation kommt vor: {arten:?}");
+    assert_eq!(hinweise.len(), plan.operationen.len());
+    for o in &plan.operationen {
+        let pfad = o.pfad.to_string();
+        let schreibt = matches!(o.art, OpArt::Kopieren | OpArt::Ueberschreiben) && pfad != "kaputt/x.txt";
+        assert_eq!(hinweise[&o.nr], schreibt.then(|| format!("wiederholt bei {pfad}")), "{pfad} ({:?})", o.art);
+    }
 }

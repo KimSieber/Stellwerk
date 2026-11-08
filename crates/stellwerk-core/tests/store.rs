@@ -62,7 +62,7 @@ fn neueres_schema_wird_nicht_angefasst() {
     Datenbank::oeffnen(&datei).unwrap().verbindung().pragma_update(None, "user_version", 99).unwrap();
     let e = Datenbank::oeffnen(&datei).err().unwrap();
     assert_eq!(e.kategorie(), "datenbank");
-    assert!(e.to_string().contains("Schema 99, diese Version kennt nur bis 3"), "{e}");
+    assert!(e.to_string().contains("Schema 99, diese Version kennt nur bis 4"), "{e}");
     assert!(e.to_string().contains("x.sqlite"), "{e}");
 }
 
@@ -165,21 +165,21 @@ fn phasen_beendet() {
 fn journal_aktualisieren() {
     let mut d = db();
     let id = d.lauf_anlegen("web", "spiegel", Modus::Direkt, &plan(), T).unwrap();
-    d.journal_setzen(&id, 0, JournalStatus::Erledigt, None, T + 1).unwrap();
-    d.journal_setzen(&id, 1, JournalStatus::Fehler, Some("Zugriff verweigert"), T + 2).unwrap();
-    d.journal_setzen(&id, 2, JournalStatus::Uebersprungen, None, T + 3).unwrap();
+    d.journal_setzen(&id, 0, JournalStatus::Erledigt, None, Some("Datenverbindung 1-mal mit neuem Port wiederholt"), T + 1).unwrap();
+    d.journal_setzen(&id, 1, JournalStatus::Fehler, Some("Zugriff verweigert"), None, T + 2).unwrap();
+    d.journal_setzen(&id, 2, JournalStatus::Uebersprungen, None, None, T + 3).unwrap();
     let j = d.journal(&id).unwrap();
-    let stand: Vec<_> = j.iter().map(|z| (z.status, z.fehler.as_deref(), z.aktualisiert)).collect();
+    let stand: Vec<_> = j.iter().map(|z| (z.status, z.fehler.as_deref(), z.hinweis.as_deref(), z.aktualisiert)).collect();
     assert_eq!(
         stand,
         vec![
-            (JournalStatus::Erledigt, None, T + 1),
-            (JournalStatus::Fehler, Some("Zugriff verweigert"), T + 2),
-            (JournalStatus::Uebersprungen, None, T + 3),
-            (JournalStatus::Offen, None, T),
+            (JournalStatus::Erledigt, None, Some("Datenverbindung 1-mal mit neuem Port wiederholt"), T + 1),
+            (JournalStatus::Fehler, Some("Zugriff verweigert"), None, T + 2),
+            (JournalStatus::Uebersprungen, None, None, T + 3),
+            (JournalStatus::Offen, None, None, T),
         ]
     );
-    let e = d.journal_setzen(&id, 4, JournalStatus::Erledigt, None, T).unwrap_err();
+    let e = d.journal_setzen(&id, 4, JournalStatus::Erledigt, None, None, T).unwrap_err();
     assert!(e.to_string().contains("Journal-Eintrag 4 von Lauf"), "{e}");
 }
 
@@ -332,12 +332,12 @@ fn datenbank_aus_v0_3_wird_hochgestuft_laeufe_bleiben() {
         let mut d = Datenbank::oeffnen(&datei).unwrap();
         let id = d.lauf_anlegen("web", "spiegel", Modus::Direkt, &plan(), T).unwrap();
         // Zustand wie v0.3: Schema 1 ohne die neuen Tabellen
-        d.verbindung().execute_batch("DROP TABLE manifest; DROP TABLE stufen_status; PRAGMA user_version = 1;").unwrap();
+        d.verbindung().execute_batch("DROP TABLE manifest; DROP TABLE stufen_status; ALTER TABLE journal DROP COLUMN hinweis; PRAGMA user_version = 1;").unwrap();
         id
     };
     let d = Datenbank::oeffnen(&datei).unwrap();
     let v: i64 = d.verbindung().pragma_query_value(None, "user_version", |r| r.get(0)).unwrap();
-    assert_eq!(v, 3);
+    assert_eq!(v, 4);
     assert_eq!(d.journal(&id).unwrap().len(), 4, "Läufe bleiben erhalten");
     assert!(d.manifest("web", "server").unwrap().is_empty());
     d.status_setzen("web", "server", "k", "v", T).unwrap();
@@ -363,13 +363,32 @@ fn datenbank_mit_schema_2_wird_hochgestuft_manifest_bleibt() {
         // Zustand nach Paket 3: Spalte hieß mtime_ms
         d.verbindung()
             .execute_batch(
-                "ALTER TABLE manifest RENAME COLUMN mtime_ns TO mtime_ms; PRAGMA user_version = 2;
+                "ALTER TABLE manifest RENAME COLUMN mtime_ns TO mtime_ms; ALTER TABLE journal DROP COLUMN hinweis; PRAGMA user_version = 2;
                  INSERT INTO manifest VALUES ('s', 'server', 'a', 0, 1, NULL, 5, NULL);",
             )
             .unwrap();
     }
     let d = Datenbank::oeffnen(&datei).unwrap();
     assert_eq!(d.manifest("s", "server").unwrap()[0].mtime_ns, Some(5));
+}
+
+#[test]
+fn datenbank_mit_schema_3_erhaelt_hinweise_im_journal() {
+    let tmp = tempfile::tempdir().unwrap();
+    let datei = tmp.path().join("v3.sqlite");
+    let id = {
+        let mut d = Datenbank::oeffnen(&datei).unwrap();
+        let id = d.lauf_anlegen("web", "spiegel", Modus::Direkt, &plan(), T).unwrap();
+        d.journal_setzen(&id, 1, JournalStatus::Fehler, Some("weg"), None, T + 1).unwrap();
+        // Zustand wie v0.4: Journal ohne Hinweis
+        d.verbindung().execute_batch("ALTER TABLE journal DROP COLUMN hinweis; PRAGMA user_version = 3;").unwrap();
+        id
+    };
+    let d = Datenbank::oeffnen(&datei).unwrap();
+    let j = d.journal(&id).unwrap();
+    assert_eq!((j[1].fehler.as_deref(), j[1].hinweis.as_deref()), (Some("weg"), None), "Journal bleibt erhalten");
+    d.journal_setzen(&id, 0, JournalStatus::Erledigt, None, Some("h"), T + 2).unwrap();
+    assert_eq!(d.journal(&id).unwrap()[0].hinweis.as_deref(), Some("h"));
 }
 
 #[test]
