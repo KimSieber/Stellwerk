@@ -187,7 +187,8 @@ pub fn offene_aufgeben(db: &Datenbank) -> Result<(), StellwerkError> {
 
 /// Markiert einen offenen Lauf als unterbrochen: Phase `abgebrochen` mit Vermerk
 /// `unterbrochen` (Grund, Phase) im Ergebnis, Sicherung des bekannten Stands verworfen,
-/// Warnung im Protokoll.
+/// Warnung im Protokoll. Der nächste Vergleich der Stufe liest den Server (v0.6.2) –
+/// nur so zeigt er bei FTPS die liegen gebliebenen Hilfsdateien.
 fn aufgeben(db: &Datenbank, lauf: &Lauf, grund: &str) -> Result<(), StellwerkError> {
     let ort = (lauf.strecke_id.as_str(), lauf.stufe_id.as_str(), lauf.id.as_str());
     let vermerk = json!({ "grund": grund, "phase": lauf.phase });
@@ -195,6 +196,7 @@ fn aufgeben(db: &Datenbank, lauf: &Lauf, grund: &str) -> Result<(), StellwerkErr
     stand["unterbrochen"] = vermerk.clone();
     db.lauf_phase(&lauf.id, LaufPhase::Abgebrochen, jetzt_ms(), Some(&stand))?;
     db.manifest_sicherung_verwerfen(&lauf.id)?;
+    db.status_setzen(ort.0, ort.1, crate::commands::SERVER_LESEN, "ja", jetzt_ms())?;
     db.protokollieren(&eintrag(ort, ProtokollEbene::Warnung, "unterbrochen", None, vermerk))?;
     Ok(())
 }

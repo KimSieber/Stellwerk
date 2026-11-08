@@ -197,6 +197,18 @@ export function laufText(l: Lauf): { text: string; art: "ok" | "warnung" | "fehl
   return { text: `${anzahl(e.erledigt, "Schritt", "Schritte")} · ${groesse(e.bytes)}`, art: "ok" };
 }
 
+/**
+ * v0.6.2: Hat der Lauf womöglich Reste am Ziel hinterlassen (unterbrochen, oder „alles
+ * zurück“ nicht vollständig)? Dann ist die Stufe rot, bis eine neue Übertragung aufräumt.
+ */
+export function resteHinweis(l: Lauf): string | null {
+  const e = l.ergebnis;
+  if (e?.unterbrochen) return "Letzter Lauf unterbrochen – am Ziel liegt womöglich ein halber Stand. Erst diese Stufe neu übertragen.";
+  const zurueck = (e?.rollback?.fehler.length ?? 0) + (e?.abbrechen?.fehler.length ?? 0);
+  if (zurueck > 0) return "Letzter Lauf nicht vollständig zurückgenommen – am Ziel liegen Reste. Erst diese Stufe neu übertragen.";
+  return null;
+}
+
 export const JOURNAL_TEXT: Record<JournalStatus, string> = {
   offen: "offen",
   erledigt: "erledigt",

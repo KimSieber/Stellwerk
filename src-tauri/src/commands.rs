@@ -308,6 +308,10 @@ pub struct Ungeprueft {
 
 /// Wann der Server zuletzt vollständig eingelesen wurde (`stufen_status`).
 const MANIFEST_SEIT: &str = "manifest_seit";
+/// Stufen-Status (v0.6.2): „ja“ – der nächste Vergleich liest den Server, auch ohne
+/// „Mit Server vergleichen“ (gesetzt, wenn ein Lauf unterbrochen wurde: Reste am Server
+/// kennt der letzte bekannte Stand nicht).
+pub(crate) const SERVER_LESEN: &str = "server_lesen";
 
 /// Scannt Quelle und Ziel einer Stufe und vergleicht sie. Verändert nichts (E4) –
 /// auch am Server nicht. FTPS-Ziel: ohne `server` gegen das Manifest (kein
@@ -341,11 +345,8 @@ pub async fn vergleich_starten(
     });
     let ergebnis = match &ftps {
         None => stufe_vergleichen(&s, &stufe, &global, &abbruch, &mut melden).map(|v| (v, None)),
-        Some(f) => {
-            let mit_server = server.unwrap_or(false);
-            vergleichen_entfernt(&state, &s, &stufe, &global, f, mit_server, &abbruch, &mut melden)
-                .map(|v| (v, Some(if mit_server { "server" } else { "manifest" })))
-        }
+        Some(f) => vergleichen_entfernt(&state, &s, &stufe, &global, f, server.unwrap_or(false), &abbruch, &mut melden)
+            .map(|(v, mit_server)| (v, Some(if mit_server { "server" } else { "manifest" }))),
     };
     state.vergleiche.abmelden(&schluessel, &abbruch);
     let (v, ziel_stand) = ergebnis?;
@@ -414,6 +415,7 @@ pub async fn inhalte_pruefen(state: State<'_, AppState>, vergleich_id: String, f
 }
 
 /// FTPS-Stufe vergleichen. Die Datenbank ist nie während des Netzzugriffs gesperrt.
+/// Liefert auch, ob der Server gelesen wurde (gewünscht oder nach einem unterbrochenen Lauf).
 #[allow(clippy::too_many_arguments)]
 fn vergleichen_entfernt(
     state: &AppState,
@@ -424,17 +426,18 @@ fn vergleichen_entfernt(
     mit_server: bool,
     abbruch: &AtomicBool,
     melden: &mut dyn FnMut(Fortschritt),
-) -> Result<StufenVergleich, StellwerkError> {
-    let (seit, manifest) = {
+) -> Result<(StufenVergleich, bool), StellwerkError> {
+    let (seit, manifest, lesen) = {
         let db = state.datenbank.lock().unwrap();
-        (db.status(&s.id, stufe, MANIFEST_SEIT)?, db.manifest(&s.id, stufe)?)
+        (db.status(&s.id, stufe, MANIFEST_SEIT)?, db.manifest(&s.id, stufe)?, db.status(&s.id, stufe, SERVER_LESEN)?)
     };
+    let mit_server = mit_server || lesen.as_deref() == Some("ja");
     if !mit_server {
         if seit.is_none() {
             return Err(StellwerkError::KeinManifest);
         }
         let v = stufe_vergleichen_entfernt(s, stufe, global, EntfernterStand::Manifest(&manifest), abbruch, melden)?;
-        return Ok(v.vergleich);
+        return Ok((v.vergleich, false));
     }
     let ftps = Ftps::new(ziel, &hinterlegtes_passwort(state, &ziel.konto_ref)?)?;
     let v = stufe_vergleichen_entfernt(s, stufe, global, EntfernterStand::Server { ftps: &ftps, manifest: &manifest }, abbruch, melden)?;
@@ -443,7 +446,8 @@ fn vergleichen_entfernt(
     let mut db = state.datenbank.lock().unwrap();
     db.manifest_ersetzen(&s.id, stufe, &neu)?;
     db.status_setzen(&s.id, stufe, MANIFEST_SEIT, &jetzt_ms().to_string(), jetzt_ms())?;
-    Ok(v.vergleich)
+    db.status_setzen(&s.id, stufe, SERVER_LESEN, "nein", jetzt_ms())?;
+    Ok((v.vergleich, true))
 }
 
 /// Bricht den laufenden Vergleich einer Stufe ab; `false`, wenn keiner läuft.

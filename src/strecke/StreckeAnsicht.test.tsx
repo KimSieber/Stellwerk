@@ -525,3 +525,36 @@ describe("Streckenansicht – gesperrte Stufe (Umschalten)", () => {
     expect(within(karte("Repo → Test 1")).queryAllByRole("button")).toEqual([]);
   });
 });
+
+describe("Streckenansicht – Reste nach einem unterbrochenen Lauf (v0.6.2)", () => {
+  const z = { ordner_anlegen: 0, kopieren: 1, ueberschreiben: 0, rechte: 0, dateien_loeschen: 0, ordner_loeschen: 0, bytes: 1 };
+  const e = { erledigt: 1, fehler: [], uebersprungen: 0, abgebrochen: false, gestoppt: false, bytes: 1, journal_fehler: null };
+  const lauf = (stufe: string, teil: Partial<Lauf>): Lauf => ({
+    id: `${stufe}-l`,
+    strecke_id: "web",
+    stufe_id: stufe,
+    modus: "umschalten",
+    phase: "abgebrochen",
+    gestartet: 0,
+    beendet: 1,
+    zusammenfassung: z,
+    ergebnis: { ...e, unterbrochen: { grund: "programm_beendet", phase: "umgeschaltet" } },
+    ...teil,
+  });
+
+  it("rot mit Hinweis, auch wenn der Vergleich „gleich“ sagt – gesperrt wird nichts", async () => {
+    rust({ laeufe: (a) => ((a as { stufe: string }).stufe === "eins" ? [lauf("eins", {})] : []) });
+    ansicht({ ...STRECKE, stufen: STRECKE.stufen.slice(0, 2) });
+    expect(await within(karte("Repo → Test 1")).findByText(/^Letzter Lauf unterbrochen/)).toHaveClass("fehler");
+    expect(karte("Repo → Test 1")).toHaveClass("status-fehler");
+    expect(await within(karte("Repo → Test 1")).findByRole("button", { name: "Ansehen & übertragen …" })).toBeEnabled();
+    expect(within(karte("Test 1 → Test 2")).queryByText(/^Letzter Lauf/)).toBeNull();
+  });
+
+  it("nach einer erfolgreichen Übertragung wieder normal", async () => {
+    rust({ laeufe: () => [lauf("eins", { id: "neu", phase: "fertig", ergebnis: e }), lauf("eins", {})] });
+    ansicht({ ...STRECKE, stufen: [STRECKE.stufen[0]] });
+    expect(await within(karte("Repo → Test 1")).findByText("gleich")).toBeInTheDocument();
+    expect(karte("Repo → Test 1")).toHaveClass("status-gleich");
+  });
+});

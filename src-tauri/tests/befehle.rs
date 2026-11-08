@@ -1487,6 +1487,29 @@ fn offene_laeufe_gelten_nach_dem_neustart_als_unterbrochen() {
 }
 
 #[test]
+fn ftps_nach_unterbrechung_liest_der_naechste_vergleich_den_server() {
+    let a = app();
+    let s = stellwerk_testserver::starten(Default::default());
+    ftps_strecke(&a, &s);
+    passwort_hinterlegen(&a);
+    let mut st = a.aufruf("strecke_laden", json!({ "id": "ftps-web" })).unwrap();
+    st["stufen"][0]["modus"] = json!("umschalten_manuell");
+    a.aufruf("strecke_speichern", json!({ "strecke": st })).unwrap();
+    let (id, _) = ftps_planen(&a, true);
+    let lauf = uebertragen(&a, &id, true, false).unwrap()["lauf_id"].clone();
+    a.aufruf("lauf_aufgeben", json!({ "laufId": lauf })).unwrap();
+
+    // Ohne „Mit Server“ – trotzdem vom Server: die Schattendatei ist zu löschen
+    let v = ftps_vergleich(&a, Some(false)).unwrap();
+    assert_eq!(v["ziel_stand"], "server", "{v}");
+    let schatten = format!("index.php.dpl-{}", lauf.as_str().unwrap());
+    let zeile = seite(&a, &v["vergleich_id"]).into_iter().find(|z| z["pfad"] == json!(schatten)).expect("Rest sichtbar");
+    assert_eq!(zeile["status"], "loeschen", "{zeile}");
+    // Nur einmal: danach wieder gegen den letzten bekannten Stand
+    assert_eq!(ftps_vergleich(&a, Some(false)).unwrap()["ziel_stand"], "manifest");
+}
+
+#[test]
 fn lauf_weiter_mit_unbekanntem_schritt_wird_abgewiesen() {
     let a = app();
     assert!(a.aufruf("lauf_weiter", json!({ "laufId": "x", "schritt": 5 })).is_err());

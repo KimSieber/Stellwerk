@@ -36,7 +36,7 @@ import {
   type StufeKurz,
   type VergleichStart,
 } from "../api";
-import { fortschrittText, groesse, JOURNAL_TEXT, laufText, laufZeit, offen, OP_TEXT, stufenText, uhrzeit } from "../vergleich/format";
+import { resteHinweis, fortschrittText, groesse, JOURNAL_TEXT, laufText, laufZeit, offen, OP_TEXT, stufenText, uhrzeit } from "../vergleich/format";
 import { VergleichAnsicht } from "../vergleich/VergleichAnsicht";
 
 /** So viele Läufe je Stufe werden gezeigt. */
@@ -196,6 +196,7 @@ export function StreckeAnsicht({ strecke, onZurueck, onBearbeiten }: Props) {
               status={status[st.id]}
               onOeffnen={() => setGeoeffnet(st)}
               onMitServer={() => vergleichen([st.id], true)}
+              strecke={strecke.id}
             />
             <LaufListe strecke={strecke.id} stufe={st.id} />
           </li>
@@ -211,17 +212,28 @@ type KarteProps = {
   status: StufenStatus;
   onOeffnen: () => void;
   onMitServer: () => void;
+  strecke: string;
 };
+
+/** Die letzten Läufe einer Stufe, neueste zuerst – für Karte und Protokoll (ein Cache-Eintrag). */
+const useLaeufe = (strecke: string, stufe: string) =>
+  useQuery({ queryKey: ["laeufe", strecke, stufe], queryFn: () => api.laeufe(strecke, stufe, LAEUFE_LIMIT) });
 
 /** Ob ein FTPS-Ziel noch nie vom Server gelesen wurde. */
 const ohneManifest = (s: StufenStatus) => s.art === "fehler" && (s.fehler as BefehlsFehler | null)?.kategorie === "kein_manifest";
 /** Ob auf der Stufe ein Lauf wartet („Umschalten“) – sie ist dann gesperrt. */
 const laufOffen = (s: StufenStatus) => s.art === "fehler" && (s.fehler as BefehlsFehler | null)?.kategorie === "lauf_offen";
 
-function StufenKarte({ nr, stufe, status, onOeffnen, onMitServer }: KarteProps) {
+function StufenKarte({ nr, stufe, status, onOeffnen, onMitServer, strecke }: KarteProps) {
+  // Dieselbe Abfrage wie das Protokoll daneben (geteilter Cache)
+  const laeufe = useLaeufe(strecke, stufe.id);
+  const letzter = laeufe.data?.[0];
+  const reste = letzter ? resteHinweis(letzter) : null;
   const art = laufOffen(status)
     ? "offen"
-    : status.art === "fertig"
+    : reste
+      ? "fehler"
+      : status.art === "fertig"
       ? offen(status.v.zusammenfassung) === 0
         ? "gleich"
         : "differenz"
@@ -238,6 +250,7 @@ function StufenKarte({ nr, stufe, status, onOeffnen, onMitServer }: KarteProps) 
         <div className="pfad">{stufe.quelle}</div>
         <div className="pfad">→ {stufe.ziel}</div>
       </div>
+      {reste && !laufOffen(status) && <p className="meldung fehler reste">{reste}</p>}
       {laufOffen(status) ? (
         <p className="stufen-stand">
           <span className="marke" aria-hidden="true">●</span> <b>Übertragung mit Umschalten läuft</b>
@@ -295,7 +308,7 @@ function StatusZeile({ status }: { status: StufenStatus }) {
 }
 
 function LaufListe({ strecke, stufe }: { strecke: string; stufe: string }) {
-  const laeufe = useQuery({ queryKey: ["laeufe", strecke, stufe], queryFn: () => api.laeufe(strecke, stufe, LAEUFE_LIMIT) });
+  const laeufe = useLaeufe(strecke, stufe);
   return (
     <div className="lauf-liste" aria-label="Protokoll">
       <h4>Protokoll</h4>

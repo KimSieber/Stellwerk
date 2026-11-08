@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { summe, zeile } from "../test/vergleich";
 import type { Lauf } from "../api";
-import { anzahl, execFortschrittText, JOURNAL_TEXT, laufText, laufZeit, offen, schritte, stufenText, uhrzeit, fortschrittText, groesse, OP_TEXT, planTeile, regelText, warnungText, zeilenTooltip, zeit } from "./format";
+import { anzahl, execFortschrittText, resteHinweis, JOURNAL_TEXT, laufText, laufZeit, offen, schritte, stufenText, uhrzeit, fortschrittText, groesse, OP_TEXT, planTeile, regelText, warnungText, zeilenTooltip, zeit } from "./format";
 
 describe("Darstellung", () => {
   it("Größen mit Einheit und deutschem Komma", () => {
@@ -158,6 +158,19 @@ describe("Streckenansicht", () => {
     const mit = (grund: "programm_beendet" | "aufgegeben", phase: "hochgeladen" | "umgeschaltet") => laufText({ ...l, ergebnis: { ...e, unterbrochen: { grund, phase } } });
     expect(mit("programm_beendet", "umgeschaltet")).toEqual({ text: "unterbrochen nach dem Umschalten (Programm beendet) · Stand am Ziel prüfen", art: "fehler" });
     expect(mit("aufgegeben", "hochgeladen").text).toBe("unterbrochen nach dem Bereitstellen (Rollback gescheitert) · Stand am Ziel prüfen");
+  });
+
+  it("Reste am Ziel (v0.6.2): unterbrochen oder nicht vollständig zurückgenommen", () => {
+    const z = { ordner_anlegen: 0, kopieren: 1, ueberschreiben: 0, rechte: 0, dateien_loeschen: 0, ordner_loeschen: 0, bytes: 1 };
+    const e = { erledigt: 1, fehler: [], uebersprungen: 0, abgebrochen: false, gestoppt: false, bytes: 1, journal_fehler: null };
+    const l: Lauf = { id: "l", strecke_id: "s", stufe_id: "t", modus: "umschalten", phase: "fertig", gestartet: 0, beendet: 1, zusammenfassung: z, ergebnis: e };
+    const f = { erledigt: 0, fehler: [{ nr: 0, pfad: "a", meldung: "m" }], gestoppt: false };
+    expect(resteHinweis(l)).toBeNull();
+    expect(resteHinweis({ ...l, ergebnis: null })).toBeNull();
+    expect(resteHinweis({ ...l, ergebnis: { ...e, unterbrochen: { grund: "aufgegeben", phase: "hochgeladen" } } })).toMatch(/^Letzter Lauf unterbrochen/);
+    expect(resteHinweis({ ...l, phase: "zurueckgerollt", ergebnis: { ...e, rollback: f } })).toMatch(/^Letzter Lauf nicht vollständig zurückgenommen/);
+    expect(resteHinweis({ ...l, phase: "abgebrochen", ergebnis: { ...e, abbrechen: f } })).toMatch(/nicht vollständig/);
+    expect(resteHinweis({ ...l, phase: "zurueckgerollt", ergebnis: { ...e, rollback: { ...f, fehler: [] } } })).toBeNull();
   });
 
   it("Journal-Status", () => {
