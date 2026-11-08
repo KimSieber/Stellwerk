@@ -1,6 +1,6 @@
 // Darstellung der Vergleichsdaten – reine Funktionen ohne Rechnerei über die Daten (A1).
 
-import type { DiffStatus, ExecFortschritt, Fortschritt, JournalStatus, Lauf, OpArt, PlanZusammenfassung, RegelTreffer, Warnung, Zeile, Zusammenfassung } from "../api";
+import type { DiffStatus, ExecFortschritt, Fortschritt, JournalStatus, Lauf, Modus, OpArt, PlanZusammenfassung, RegelTreffer, Warnung, Zeile, Zusammenfassung } from "../api";
 
 const zahl = new Intl.NumberFormat("de-DE", { maximumFractionDigits: 1 });
 
@@ -208,6 +208,20 @@ export function resteHinweis(l: Lauf): string | null {
   if (zurueck > 0) return "Letzter Lauf nicht vollständig zurückgenommen – am Ziel liegen Reste. Erst diese Stufe neu übertragen.";
   return null;
 }
+
+/** Modus einer Stufe – im Editor und in der Vergleichsansicht (v0.6.3). */
+export const MODUS_TEXT: Record<Modus, string> = {
+  direkt: "Direkt",
+  umschalten: "Umschalten automatisch",
+  umschalten_manuell: "Umschalten manuell",
+};
+
+/** Was der Modus beim Übertragen bedeutet (Tooltip). */
+export const MODUS_TITEL: Record<Modus, string> = {
+  direkt: "Jede Datei wird einzeln geschrieben – die Live-Seite ändert sich schon während der Übertragung",
+  umschalten: "Erst bereitstellen (Live-Seite unverändert), dann in einem Zug umschalten und übernehmen – von selbst",
+  umschalten_manuell: "Bereitstellen, Umschalten, Übernehmen – jeden Schritt löst du selbst aus",
+};
 
 export const JOURNAL_TEXT: Record<JournalStatus, string> = {
   offen: "offen",

@@ -1250,8 +1250,8 @@ fn umschalten_automatisch_stellt_bereit_der_dialog_fuehrt_weiter() {
     let l = a.aufruf("laeufe", json!({ "strecke": "mailwerk-web", "stufe": "spiegel", "limit": 1 })).unwrap();
     assert_eq!((l[0]["modus"].clone(), l[0]["phase"].clone()), (json!("umschalten"), json!("fertig")));
     assert_eq!(l[0]["ergebnis"]["uebernehmen"]["erledigt"], 2, "{}", l[0]["ergebnis"]);
-    // Danach wieder frei
-    starten(&a);
+    // Danach wieder frei; der Vergleich nennt den Modus der Stufe (v0.6.3)
+    assert_eq!(starten(&a)["modus"], "umschalten");
 }
 
 #[test]

@@ -626,3 +626,20 @@ describe("Vergleichsansicht – FTPS-Ziel", () => {
     expect(screen.getByRole("button", { name: "Übertragen …" })).toBeEnabled();
   });
 });
+
+describe("Vergleichsansicht – Modus der Stufe (v0.6.3)", () => {
+  it("steht neben „Übertragen …“, mit Erklärung; während des Vergleichs nicht", async () => {
+    let fertig = (_: unknown) => {};
+    let n = 0;
+    rust({ vergleich_starten: () => (++n === 1 ? start({ modus: "umschalten_manuell" }) : new Promise((ok) => (fertig = ok))) });
+    ansicht();
+    const marke = await screen.findByText("Modus: Umschalten manuell");
+    expect(marke).toHaveClass("modus-marke", "umschalten_manuell");
+    expect(marke).toHaveAttribute("title", expect.stringContaining("jeden Schritt löst du selbst aus"));
+    expect(marke).toHaveAttribute("title", expect.stringContaining("Ändern im Editor der Strecke"));
+    await userEvent.click(screen.getByRole("button", { name: "Neu vergleichen" }));
+    expect(screen.queryByText(/^Modus:/)).toBeNull();
+    await act(async () => fertig(start({ modus: "direkt" })));
+    expect(await screen.findByText("Modus: Direkt")).toHaveAttribute("title", expect.stringContaining("einzeln geschrieben"));
+  });
+});

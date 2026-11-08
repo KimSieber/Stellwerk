@@ -16,9 +16,9 @@ const liste = [
   },
 ];
 
-function rust() {
+function rust(streckenListe: () => unknown = () => liste) {
   return rustAttrappe({
-    strecken_liste: () => liste,
+    strecken_liste: streckenListe,
     konfig_ort: () => "/x",
     strecke_laden: () => beispielStrecke(),
     strecke_pruefen: () => [],
@@ -50,11 +50,32 @@ describe("App", () => {
     await userEvent.click(screen.getByRole("button", { name: "← Strecken" }));
     expect(await screen.findByRole("heading", { level: 2, name: "Strecken" })).toBeInTheDocument();
 
+  });
+
+  it("Bearbeiten → „Zurück zur Strecke“ führt in die Strecke, mit frisch geladenen Stufen (v0.6.4)", async () => {
+    let n = 0;
+    const umbenannt = [{ ...liste[0], stufen: [{ ...liste[0].stufen[0], name: "Entwicklung → Test" }] }];
+    rust(() => (++n === 1 ? liste : umbenannt));
+    mitQuery(<App />);
     await userEvent.click(await screen.findByRole("button", { name: "Mailwerk Webseite öffnen" }));
     await userEvent.click(screen.getByRole("button", { name: "Bearbeiten" }));
     expect(await screen.findByLabelText("Kennung")).toHaveValue("mailwerk-web");
-    await userEvent.click(screen.getByRole("button", { name: "← Strecken" }));
-    expect(await screen.findByRole("heading", { level: 2, name: "Strecken" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "← Strecken" })).toBeNull();
+    await userEvent.click(screen.getByRole("button", { name: "← Zurück zur Strecke" }));
+    expect(await screen.findByRole("heading", { level: 2, name: "Mailwerk Webseite" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { level: 3, name: "Entwicklung → Test" })).toBeInTheDocument();
+  });
+
+  it("Zurück zur Strecke: gibt es sie nicht mehr oder ist die Liste nicht lesbar – Startseite", async () => {
+    for (const zweite of [() => [], () => Promise.reject({ kategorie: "io", meldung: "x" })]) {
+      let n = 0;
+      const { unmount } = (rust(() => (++n === 1 ? liste : n === 2 ? zweite() : liste)), mitQuery(<App />));
+      await userEvent.click(await screen.findByRole("button", { name: "Mailwerk Webseite öffnen" }));
+      await userEvent.click(screen.getByRole("button", { name: "Bearbeiten" }));
+      await userEvent.click(await screen.findByRole("button", { name: "← Zurück zur Strecke" }));
+      expect(await screen.findByRole("heading", { level: 2, name: "Strecken" })).toBeInTheDocument();
+      unmount();
+    }
   });
 
   it("neue Strecke: nach dem Anlegen wird sie zum Bearbeiten geöffnet", async () => {
@@ -65,8 +86,17 @@ describe("App", () => {
     await userEvent.type(screen.getByLabelText("Name"), "Neu");
     await waitFor(() => expect(screen.getByRole("button", { name: "Speichern" })).toBeEnabled());
     await userEvent.click(screen.getByRole("button", { name: "Speichern" }));
-    // Danach ist die Kennung fest (Bearbeiten einer vorhandenen Strecke)
+    // Danach ist die Kennung fest (Bearbeiten einer vorhandenen Strecke); „Zurück“ führt in die neue Strecke
     await waitFor(() => expect(screen.getByLabelText("Kennung")).toHaveAttribute("readonly"));
+    expect(screen.getByRole("button", { name: "← Zurück zur Strecke" })).toBeInTheDocument();
+  });
+
+  it("neue Strecke: vor dem Speichern führt „← Strecken“ zur Startseite", async () => {
+    rust();
+    mitQuery(<App />);
+    await userEvent.click(await screen.findByRole("button", { name: "+ Neue Strecke" }));
+    await userEvent.click(screen.getByRole("button", { name: "← Strecken" }));
+    expect(await screen.findByRole("heading", { level: 2, name: "Strecken" })).toBeInTheDocument();
   });
 
   it("Menübefehl „Über Stellwerk“ öffnet den Dialog", async () => {

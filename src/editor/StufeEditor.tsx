@@ -1,6 +1,7 @@
 // Eine Stufe: Name, Kennung, Modus, Quelle, Ziel, Rechte, „nur online“, eigene Regeln.
 
 import type { Rechte, Stufe } from "../api";
+import { MODUS_TEXT } from "../vergleich/format";
 import { AuswahlFeld, QuelleFelder, TextFeld, ZielFelder } from "./Felder";
 import { kontoRef, type ObereRegel } from "./modell";
 import { RegelListe } from "./RegelListe";
@@ -42,11 +43,7 @@ export function StufeEditor(props: {
           label="Modus"
           ort={`${ort}.modus`}
           wert={stufe.modus}
-          optionen={[
-            ["direkt", "Direkt"],
-            ["umschalten", "Umschalten automatisch"],
-            ["umschalten_manuell", "Umschalten manuell"],
-          ]}
+          optionen={(["direkt", "umschalten", "umschalten_manuell"] as const).map((m) => [m, MODUS_TEXT[m]])}
           onChange={(modus) => setze({ modus })}
         />
         <AuswahlFeld

@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 
-import { EREIGNIS_UEBER, type StreckeUebersicht } from "./api";
+import { api, EREIGNIS_UEBER, type StreckeUebersicht } from "./api";
 import { APP_INFO } from "./appinfo";
 import { BeendenNachfrage } from "./beenden";
 import { StreckenListe } from "./components/StreckenListe";
@@ -12,7 +12,8 @@ import { StreckeAnsicht } from "./strecke/StreckeAnsicht";
 /** Welche Ansicht gerade offen ist. */
 type Ansicht =
   | { art: "liste" }
-  | { art: "editor"; id?: string }
+  /** `zurStrecke`: „Zurück“ führt in die Streckenansicht dieser Strecke (v0.6.4). */
+  | { art: "editor"; id?: string; zurStrecke?: boolean }
   | { art: "strecke"; strecke: StreckeUebersicht };
 
 export default function App() {
@@ -26,6 +27,19 @@ export default function App() {
       void abmelden.then((f) => f());
     };
   }, []);
+
+  /** Zurück aus dem Editor: in die Strecke (frisch geladen – die Stufen können sich geändert
+   *  haben) oder zur Startseite, wenn sie nicht (mehr) zu öffnen ist. */
+  const editorSchliessen = (id: string | undefined, zurStrecke: boolean) => {
+    if (!zurStrecke || id === undefined) return setAnsicht({ art: "liste" });
+    api
+      .streckenListe()
+      .then((liste) => {
+        const s = liste.find((x) => x.id === id && x.fehler === null);
+        setAnsicht(s ? { art: "strecke", strecke: s } : { art: "liste" });
+      })
+      .catch(() => setAnsicht({ art: "liste" }));
+  };
 
   return (
     <div className="app">
@@ -45,15 +59,17 @@ export default function App() {
             key={ansicht.strecke.id}
             strecke={ansicht.strecke}
             onZurueck={() => setAnsicht({ art: "liste" })}
-            onBearbeiten={() => setAnsicht({ art: "editor", id: ansicht.strecke.id })}
+            onBearbeiten={() => setAnsicht({ art: "editor", id: ansicht.strecke.id, zurStrecke: true })}
           />
         ) : (
           <StreckeEditor
             // Neuer Schlüssel je Strecke: Editor startet mit frischem Zustand
             key={ansicht.id ?? "neu"}
             id={ansicht.id}
-            onSchliessen={() => setAnsicht({ art: "liste" })}
-            onAngelegt={(id) => setAnsicht({ art: "editor", id })}
+            zurueckText={ansicht.zurStrecke ? "← Zurück zur Strecke" : undefined}
+            onSchliessen={() => editorSchliessen(ansicht.id, ansicht.zurStrecke ?? false)}
+            // Nach dem Anlegen führt „Zurück“ in die neue Strecke
+            onAngelegt={(id) => setAnsicht({ art: "editor", id, zurStrecke: true })}
           />
         )}
       </main>

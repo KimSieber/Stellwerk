@@ -26,7 +26,7 @@ import {
   type Zeile,
   type Zusammenfassung,
 } from "../api";
-import { fortschrittText, groesse } from "./format";
+import { fortschrittText, groesse, MODUS_TEXT, MODUS_TITEL } from "./format";
 import { ErsatzDialog, RegelMenue, type Ebene, type MenueAktion } from "./RegelMenue";
 import { UebertragenDialog } from "./UebertragenDialog";
 import { InhaltePruefen, pruefMeldung } from "./InhaltePruefen";
@@ -141,6 +141,11 @@ export function VergleichAnsicht({ strecke, stufe, titel, start, onZurueck }: Pr
                 </button>
               )}
             </>
+          )}
+          {zustand.art === "fertig" && (
+            <span className={`modus-marke ${zustand.v.modus}`} title={`${MODUS_TITEL[zustand.v.modus]}. Ändern im Editor der Strecke.`}>
+              Modus: {MODUS_TEXT[zustand.v.modus]}
+            </span>
           )}
           <button
             className="primaer"

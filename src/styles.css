@@ -360,3 +360,8 @@ legend { font-weight: 600; padding: 0 6px; }
 .inhalte-pruefen p { margin: 0; }
 .inhalte-pruefen .marke { color: var(--konflikt); }
 .inhalte-pruefen > button { justify-self: start; }
+
+/* --- Modus in der Vergleichsansicht (v0.6.3) --- */
+.modus-marke { align-self: center; font-size: 12px; padding: 4px 10px; border-radius: 999px; border: 1px solid var(--rand); color: var(--text-leise); white-space: nowrap; cursor: help; }
+.modus-marke.umschalten, .modus-marke.umschalten_manuell { border-color: var(--blau); color: var(--blau); }
+@media (prefers-color-scheme: dark) { .modus-marke.umschalten, .modus-marke.umschalten_manuell { border-color: #6f93cf; color: #9cb8e6; } }

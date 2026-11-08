@@ -29,6 +29,8 @@ type Props = {
   onSchliessen: () => void;
   /** Nach dem ersten Speichern einer neuen Strecke. */
   onAngelegt: (id: string) => void;
+  /** Beschriftung des Zurück-Knopfs (v0.6.4: „← Zurück zur Strecke“, wenn der Editor aus der Strecke kam). */
+  zurueckText?: string;
 };
 
 export function StreckeEditor(props: Props) {
@@ -43,7 +45,7 @@ export function StreckeEditor(props: Props) {
     return (
       <section>
         <p className="meldung fehler">{fehlerText(geladen.error)}</p>
-        <button onClick={props.onSchliessen}>← Strecken</button>
+        <button onClick={props.onSchliessen}>{props.zurueckText ?? "← Strecken"}</button>
       </section>
     );
   }
@@ -138,7 +140,7 @@ function Bearbeiten(props: Props & { start: Strecke; neu: boolean }) {
           <div className="kopfbereich">
             <div className="leiste">
               <button onClick={() => (geaendert ? setRueckfrage("verwerfen") : props.onSchliessen())}>
-                ← Strecken
+                {props.zurueckText ?? "← Strecken"}
               </button>
               <h2>{props.neu ? "Neue Strecke" : s.name || s.id}</h2>
               <button

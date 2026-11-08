@@ -297,6 +297,8 @@ pub struct VergleichStart {
     pub ziel_stand: Option<&'static str>,
     /// Dateien mit „Inhalt nicht geprüft“ – für „Inhalte prüfen“.
     pub ungeprueft: Ungeprueft,
+    /// Modus der Stufe, wie er jetzt konfiguriert ist (v0.6.3: Anzeige in der Vergleichsansicht).
+    pub modus: Modus,
 }
 
 /// Anzahl und Größe der Dateien, deren Inhalt am Ziel unbekannt ist.
@@ -339,6 +341,7 @@ pub async fn vergleich_starten(
             let _ = fortschritt.send(f);
         }
     };
+    let modus = s.stufen.iter().find(|st| st.id == stufe).map(|st| st.modus).unwrap_or_default();
     let ftps = s.stufen.iter().find(|st| st.id == stufe).and_then(|st| match &st.ziel {
         Endpunkt::Ftps(f) => Some(f.clone()),
         Endpunkt::Lokal { .. } => None,
@@ -367,6 +370,7 @@ pub async fn vergleich_starten(
         lesefehler: v.lesefehler,
         ziel_stand,
         ungeprueft,
+        modus,
     })
 }
 

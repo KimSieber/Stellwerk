@@ -221,6 +221,8 @@ export interface VergleichStart {
   ziel_stand: "manifest" | "server" | null;
   /** Dateien mit „Inhalt nicht geprüft“ (nur Größe bekannt) – für „Inhalte prüfen“. */
   ungeprueft: { anzahl: number; bytes: number };
+  /** Modus der Stufe, wie er jetzt konfiguriert ist (v0.6.3). */
+  modus: Modus;
 }
 
 /** Ergebnis von „Inhalte prüfen“. */
