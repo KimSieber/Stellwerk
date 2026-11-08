@@ -3,7 +3,7 @@
 import type { Rechte, Stufe } from "../api";
 import { MODUS_TEXT } from "../vergleich/format";
 import { AuswahlFeld, QuelleFelder, TextFeld, ZielFelder } from "./Felder";
-import { kontoRef, type ObereRegel } from "./modell";
+import { kontoRef, kontoRefQuelle, type ObereRegel } from "./modell";
 import { RegelListe } from "./RegelListe";
 import { StandardRegeln } from "./StandardRegeln";
 
@@ -17,6 +17,9 @@ export function StufeEditor(props: {
   /** Eingegebenes, noch nicht gespeichertes Passwort (nur bei FTPS-Ziel). */
   passwort: string;
   onPasswort: (p: string) => void;
+  /** Dasselbe für einen Server als Quelle (v0.6.5). */
+  quellPasswort: string;
+  onQuellPasswort: (p: string) => void;
   /** Regeln von Global und Strecke, die hier abgeschaltet werden können. */
   obereRegeln: ObereRegel[];
 }) {
@@ -65,7 +68,9 @@ export function StufeEditor(props: {
             wert={stufe.quelle}
             ort={`${ort}.quelle`}
             vorstufen={props.vorstufen}
+            konto={kontoRefQuelle(props.streckeId, stufe.id)}
             onChange={(quelle) => setze({ quelle })}
+            passwort={{ wert: props.quellPasswort, onChange: props.onQuellPasswort }}
           />
         </fieldset>
         <span className="pfeil" aria-hidden="true">

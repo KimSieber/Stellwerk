@@ -31,6 +31,11 @@ export function kontoRef(streckeId: string, stufeId: string): string {
   return `stellwerk:${streckeId}:${stufeId}`;
 }
 
+/** Schlüsselbund-Name einer Quelle auf einem Server (v0.6.5) – getrennt vom Ziel. */
+export function kontoRefQuelle(streckeId: string, stufeId: string): string {
+  return `${kontoRef(streckeId, stufeId)}:quelle`;
+}
+
 /** Erste freie Stufenkennung „stufe-N“. */
 export function freieStufenId(strecke: Strecke): string {
   const vergeben = new Set(strecke.stufen.map((s) => s.id));
@@ -66,18 +71,22 @@ export function endpunktVom(typ: "lokal" | "ftps", konto: string): Endpunkt {
     : { typ: "ftps", host: "", port: 21, pfad: "/", benutzer: "", tls: "explizit", konto_ref: konto };
 }
 
-/** Leere Quelle des gewünschten Typs; `stufe` verweist auf die Vorstufe. FTPS ist nur Ziel. */
-export function quelleVom(typ: "lokal" | "stufe", vorstufe?: string): Quelle {
-  return typ === "stufe" ? { typ: "stufe", stufe: vorstufe ?? "" } : { typ: "lokal", pfad: "" };
+/** Leere Quelle des gewünschten Typs; `stufe` verweist auf die Vorstufe, `ftps` erhält `konto` (v0.6.5). */
+export function quelleVom(typ: Quelle["typ"], vorstufe?: string, konto = ""): Quelle {
+  if (typ === "stufe") return { typ: "stufe", stufe: vorstufe ?? "" };
+  return endpunktVom(typ, konto);
 }
 
-/** Setzt bei allen FTPS-Zielen den internen Schlüsselbund-Namen passend zu Strecke und Stufe. */
+/** Setzt bei allen FTPS-Zielen und -Quellen den internen Schlüsselbund-Namen passend zu Strecke und Stufe. */
 export function kontenAngleichen(s: Strecke): Strecke {
   return {
     ...s,
-    stufen: s.stufen.map((st) =>
-      st.ziel.typ === "ftps" ? { ...st, ziel: { ...st.ziel, konto_ref: kontoRef(s.id, st.id) } } : st,
-    ),
+    stufen: s.stufen.map((st) => {
+      let neu = st;
+      if (neu.ziel.typ === "ftps") neu = { ...neu, ziel: { ...neu.ziel, konto_ref: kontoRef(s.id, st.id) } };
+      if (neu.quelle.typ === "ftps") neu = { ...neu, quelle: { ...neu.quelle, konto_ref: kontoRefQuelle(s.id, st.id) } };
+      return neu;
+    }),
   };
 }
 

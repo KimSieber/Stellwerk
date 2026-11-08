@@ -160,22 +160,24 @@ describe("QuelleFelder", () => {
       <Zustand
         start={start}
         beobachter={(w) => werte.push(w)}
-        kind={(w, s) => <QuelleFelder wert={w} ort="q" vorstufen={vorstufen} onChange={s} />}
+        kind={(w, s) => <QuelleFelder wert={w} ort="q" vorstufen={vorstufen} konto="stellwerk:s:x:quelle" onChange={s} />}
       />,
     );
     return werte;
   }
 
-  it("erste Stufe: nur lokaler Ordner – FTPS ist nie Quelle", () => {
+  it("erste Stufe: lokaler Ordner oder FTPS-Server (v0.6.5)", () => {
     aufbau({ typ: "lokal", pfad: "" }, []);
     const optionen = Array.from(screen.getByLabelText<HTMLSelectElement>("Art").options).map((o) => o.text);
-    expect(optionen).toEqual(["Lokaler Ordner"]);
+    expect(optionen).toEqual(["Lokaler Ordner", "FTPS-Server"]);
   });
 
-  it("ältere Konfiguration mit FTPS als Quelle bleibt sichtbar und lässt sich umstellen", async () => {
-    const werte = aufbau({ typ: "ftps", host: "h", port: 21, pfad: "/", benutzer: "b", tls: "explizit", konto_ref: "k" }, []);
-    expect(screen.getByLabelText("Art")).toHaveValue("ftps");
-    expect(screen.getByLabelText("Server")).toHaveValue("h");
+  it("FTPS-Server als Quelle: Felder wie beim Ziel, eigenes Konto; zurück auf lokal", async () => {
+    const werte = aufbau({ typ: "lokal", pfad: "" }, []);
+    await userEvent.selectOptions(screen.getByLabelText("Art"), "FTPS-Server");
+    expect(werte.at(-1)).toEqual({ typ: "ftps", host: "", port: 21, pfad: "/", benutzer: "", tls: "explizit", konto_ref: "stellwerk:s:x:quelle" });
+    await userEvent.type(screen.getByLabelText("Server"), "h");
+    expect(werte.at(-1)).toMatchObject({ host: "h" });
     await userEvent.selectOptions(screen.getByLabelText("Art"), "Lokaler Ordner");
     expect(werte.at(-1)).toEqual({ typ: "lokal", pfad: "" });
   });

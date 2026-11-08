@@ -6,7 +6,7 @@ import type { Stufe } from "../api";
 import { beispielStrecke, mitQuery, rustAttrappe, Zustand } from "../test/hilfen";
 import { StufeEditor } from "./StufeEditor";
 
-function aufbau(start: Stufe, onEntfernen = vi.fn(), onPasswort = vi.fn()) {
+function aufbau(start: Stufe, onEntfernen = vi.fn(), onPasswort = vi.fn(), onQuellPasswort = vi.fn()) {
   rustAttrappe({ passwort_vorhanden: () => false });
   const werte: Stufe[] = [];
   mitQuery(
@@ -23,6 +23,8 @@ function aufbau(start: Stufe, onEntfernen = vi.fn(), onPasswort = vi.fn()) {
           onEntfernen={onEntfernen}
           passwort=""
           onPasswort={onPasswort}
+          quellPasswort=""
+          onQuellPasswort={onQuellPasswort}
           obereRegeln={[{ muster: ".DS_Store", typ: "ignorieren", herkunft: "global" }]}
         />
       )}
@@ -124,5 +126,16 @@ describe("StufeEditor", () => {
     aufbau(server(), weg);
     await userEvent.click(screen.getByRole("button", { name: "Stufe entfernen" }));
     expect(weg).toHaveBeenCalledOnce();
+  });
+
+  it("Server als Quelle: eigenes Passwort-Feld (v0.6.5)", async () => {
+    const onQuellPasswort = vi.fn();
+    const stand = aufbau({ ...server(), quelle: { typ: "lokal", pfad: "" } }, vi.fn(), vi.fn(), onQuellPasswort);
+    const quelle = screen.getByRole("group", { name: "Quelle (wird nur gelesen)" });
+    await userEvent.selectOptions(within(quelle).getByLabelText("Art"), "FTPS-Server");
+    expect(stand().quelle).toMatchObject({ typ: "ftps", konto_ref: "stellwerk:mailwerk-web:server:quelle" });
+    await userEvent.type(await within(quelle).findByLabelText("Passwort"), "q");
+    expect(onQuellPasswort).toHaveBeenCalledWith("q");
+    expect(within(quelle).getByRole("button", { name: "Verbindung testen" })).toBeInTheDocument();
   });
 });

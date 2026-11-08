@@ -124,10 +124,24 @@ fn ftps_zertifikat_muss_ein_sha256_fingerprint_sein() {
 }
 
 #[test]
-fn ftps_ist_nur_als_ziel_erlaubt() {
+fn ftps_als_quelle_wird_wie_ein_ziel_geprueft() {
+    // v0.6.5: Server als Quelle erlaubt, mit lokalem Ziel
     let mut s = beispiel();
     s.stufen[0].quelle = Quelle::Ftps(gueltiges_ftps());
-    assert_eq!(fehler_orte(&s), vec!["stufen[0].quelle.typ"]);
+    assert_eq!(fehler_orte(&s), Vec::<String>::new());
+    s.stufen[0].quelle = Quelle::Ftps(ftps("", 0, "/x", "kim", "k"));
+    assert_eq!(fehler_orte(&s), vec!["stufen[0].quelle.host", "stufen[0].quelle.port"]);
+}
+
+#[test]
+fn server_zu_server_geht_noch_nicht() {
+    // Stufe 2 hat ein FTPS-Ziel; ihre Quelle wird zum Server – direkt oder über die Vorstufe
+    let mut s = beispiel();
+    s.stufen[1].quelle = Quelle::Ftps(gueltiges_ftps());
+    assert_eq!(fehler_orte(&s), vec!["stufen[1].ziel.typ"]);
+    let mut s = beispiel();
+    s.stufen[0].ziel = Endpunkt::Ftps(gueltiges_ftps());
+    assert!(fehler_orte(&s).contains(&"stufen[1].ziel.typ".to_string()), "{:?}", fehler_orte(&s));
 }
 
 #[test]

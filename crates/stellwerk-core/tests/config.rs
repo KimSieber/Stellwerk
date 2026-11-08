@@ -290,4 +290,13 @@ fn rechte_nach_muster_im_toml() {
 #[test]
 fn konten_der_strecke() {
     assert_eq!(stellwerk_core::secrets::konten_der_strecke(&beispiel()), vec!["stellwerk:mailwerk-web:server"]);
+    // v0.6.5: das Konto einer Quelle auf dem Server gehört dazu
+    let mut s = beispiel();
+    let Endpunkt::Ftps(mut f) = s.stufen[1].ziel.clone() else { unreachable!() };
+    f.konto_ref = "stellwerk:mailwerk-web:spiegel:quelle".into();
+    s.stufen[0].quelle = Quelle::Ftps(f);
+    assert_eq!(
+        stellwerk_core::secrets::konten_der_strecke(&s),
+        vec!["stellwerk:mailwerk-web:spiegel:quelle", "stellwerk:mailwerk-web:server"]
+    );
 }

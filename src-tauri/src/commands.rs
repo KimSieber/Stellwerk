@@ -1,13 +1,13 @@
 //! Befehle für das Frontend (ARCHITEKTUR Kap. 9). Hier wird nur übersetzt, nicht gerechnet.
 
-use std::collections::HashSet;
-use std::path::Path;
+use std::collections::{HashMap, HashSet};
+use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 use std::time::{Duration, Instant};
 
 use serde_json::json;
 use stellwerk_core::endpoint::ftps::{Verbindungstest, FTPS_WORKER};
-use stellwerk_core::endpoint::{Ftps, Lokal, ZielEndpunkt};
+use stellwerk_core::endpoint::{Ftps, Lokal, QuellEndpunkt, ZielEndpunkt};
 use stellwerk_core::exec::{direkt_ausfuehren, standard_worker, ExecFortschritt, LaufErgebnis, Optionen, Uebertragen};
 use stellwerk_core::plan::{plan_erstellen as plan_erstellen_aus, OpArt, Operation, Plan, PlanWarnung, PlanZusammenfassung};
 use stellwerk_core::store::{
@@ -19,7 +19,7 @@ use tauri::ipc::Channel;
 use tauri::State;
 
 use stellwerk_core::ansicht::{
-    stufe_vergleichen, stufe_vergleichen_entfernt, ziel_kennung, Drossel, EntfernterStand, Filter, Fortschritt, Lesefehler, Seite,
+    ftps_kennung, stufe_vergleichen, stufe_vergleichen_entfernt, stufe_vergleichen_vom_server, ziel_kennung, Drossel, EntfernterStand, Filter, Fortschritt, Lesefehler, Seite,
     StufenVergleich, VergleichsSitzung,
 };
 use stellwerk_core::diff::Zusammenfassung;
@@ -346,9 +346,15 @@ pub async fn vergleich_starten(
         Endpunkt::Ftps(f) => Some(f.clone()),
         Endpunkt::Lokal { .. } => None,
     });
-    let ergebnis = match &ftps {
-        None => stufe_vergleichen(&s, &stufe, &global, &abbruch, &mut melden).map(|v| (v, None)),
-        Some(f) => vergleichen_entfernt(&state, &s, &stufe, &global, f, server.unwrap_or(false), &abbruch, &mut melden)
+    // v0.6.5: Quelle auf einem Server (direkt oder über „Ziel einer Vorstufe“)
+    let quelle_server = match s.stufen.iter().position(|st| st.id == stufe).and_then(|i| effektive_quelle(&s, i)) {
+        Some(Quelle::Ftps(f)) => Some(f),
+        _ => None,
+    };
+    let ergebnis = match (&quelle_server, &ftps) {
+        (Some(q), _) => vom_server(&state, &s, &stufe, &global, q, &abbruch, &mut melden).map(|v| (v, None)),
+        (None, None) => stufe_vergleichen(&s, &stufe, &global, &abbruch, &mut melden).map(|v| (v, None)),
+        (None, Some(f)) => vergleichen_entfernt(&state, &s, &stufe, &global, f, server.unwrap_or(false), &abbruch, &mut melden)
             .map(|(v, mit_server)| (v, Some(if mit_server { "server" } else { "manifest" }))),
     };
     state.vergleiche.abmelden(&schluessel, &abbruch);
@@ -416,6 +422,20 @@ pub async fn inhalte_pruefen(state: State<'_, AppState>, vergleich_id: String, f
         }
     }
     Ok(erg)
+}
+
+/// Stufe mit Quelle auf einem Server vergleichen (v0.6.5) – mit dem Passwort der Quelle.
+fn vom_server(
+    state: &AppState,
+    s: &Strecke,
+    stufe: &str,
+    global: &GlobalConfig,
+    quelle: &stellwerk_core::model::FtpsEndpunkt,
+    abbruch: &AtomicBool,
+    melden: &mut dyn FnMut(Fortschritt),
+) -> Result<StufenVergleich, StellwerkError> {
+    let ftps = Ftps::new(quelle, &hinterlegtes_passwort(state, &quelle.konto_ref)?)?;
+    stufe_vergleichen_vom_server(s, stufe, global, &ftps, abbruch, melden)
 }
 
 /// FTPS-Stufe vergleichen. Die Datenbank ist nie während des Netzzugriffs gesperrt.
@@ -589,8 +609,8 @@ pub fn plan_erstellen(state: State<'_, AppState>, vergleich_id: String) -> Antwo
             .ok_or_else(|| StellwerkError::NichtGefunden(format!("Stufe „{}“ – bitte neu vergleichen", o.stufe)))?;
         let st = &s.stufen[i];
         offen_pruefen(&state, &o.strecke, &o.stufe)?;
-        let gleiche_ordner = ziel_kennung(&st.ziel) == o.ziel
-            && effektive_quelle(&s, i) == Some(Quelle::Lokal { pfad: o.quelle.clone() });
+        let quelle = effektive_quelle(&s, i);
+        let gleiche_ordner = ziel_kennung(&st.ziel) == o.ziel && quelle.as_ref().and_then(quell_kennung).as_deref() == Some(o.quelle.as_path());
         if !gleiche_ordner {
             return Err(StellwerkError::NichtUnterstuetzt(
                 "Quelle oder Ziel der Stufe wurden seit dem Vergleich geändert – bitte neu vergleichen".into(),
@@ -603,7 +623,7 @@ pub fn plan_erstellen(state: State<'_, AppState>, vergleich_id: String) -> Antwo
             warnungen: plan.warnungen.clone(),
             quelle: o.quelle.display().to_string(),
             ziel: o.ziel.display().to_string(),
-            worker: worker_fuer(&st.ziel),
+            worker: worker_fuer(matches!(quelle, Some(Quelle::Ftps(_))), &st.ziel),
             modus: st.modus,
         };
         o.plan = Some(plan);
@@ -681,17 +701,18 @@ pub async fn lauf_starten(
     bei_fehler_stoppen: bool,
     fortschritt: Channel<ExecFortschritt>,
 ) -> Antwort<LaufAntwort> {
-    let (plan, strecke, stufe, quelle, ziel) = mit_vergleich(&state, &vergleich_id, |o| {
+    let (plan, strecke, stufe, quelle, ziel, zeiten) = mit_vergleich(&state, &vergleich_id, |o| {
         // Der Plan gilt genau einmal – ein zweiter Start braucht eine neue Bestätigung
         let plan = o.plan.take().ok_or_else(|| {
             StellwerkError::NichtBestaetigt("Übertragung – bitte „Übertragen …“ erneut öffnen und bestätigen".into())
         })?;
-        Ok((plan, o.strecke.clone(), o.stufe.clone(), o.quelle.clone(), o.ziel.clone()))
+        Ok((plan, o.strecke.clone(), o.stufe.clone(), o.quelle.clone(), o.ziel.clone(), quell_zeiten(&o.sitzung)))
     })?;
     if plan.hat_loeschungen() && !loeschen_bestaetigt {
         return Err(StellwerkError::NichtBestaetigt(format!("{} Löschungen", plan.loeschliste.len())).into());
     }
     let (ziel, modus) = ziel_der_stufe(&state, &strecke, &stufe, &ziel)?;
+    let quelle = QuellEp::neu(&state, &strecke, &stufe, &quelle, zeiten)?;
     offen_pruefen(&state, &strecke, &stufe)?;
     let schluessel = format!("{strecke}/{stufe}");
     let abbruch = state
@@ -707,11 +728,67 @@ pub async fn lauf_starten(
     Ok(ergebnis?)
 }
 
-/// So viele Dateien werden gleichzeitig geschrieben.
-pub(crate) fn worker_fuer(ziel: &Endpunkt) -> usize {
-    match ziel {
+/// So viele Dateien werden gleichzeitig geschrieben – bei einer Quelle auf einem
+/// Server höchstens so viele, wie dort Verbindungen erlaubt sind.
+pub(crate) fn worker_fuer(quelle_server: bool, ziel: &Endpunkt) -> usize {
+    let n = match ziel {
         Endpunkt::Lokal { .. } => standard_worker(),
         Endpunkt::Ftps(_) => FTPS_WORKER,
+    };
+    if quelle_server { n.min(FTPS_WORKER) } else { n }
+}
+
+/// Kennung einer aufgelösten Quelle wie im Vergleich: Ordner bzw. `ftps://…`.
+fn quell_kennung(q: &Quelle) -> Option<PathBuf> {
+    // `Stufe` kommt aufgelöst nicht vor
+    match q { Quelle::Lokal { pfad } => Some(pfad.clone()), Quelle::Ftps(f) => Some(ftps_kennung(f)), Quelle::Stufe { .. } => None }
+}
+
+/// Änderungszeit der Quelle je Pfad aus dem Vergleich – eine Quelle auf dem Server
+/// übernimmt sie beim Schreiben (v0.6.5).
+fn quell_zeiten(sitzung: &VergleichsSitzung) -> HashMap<RelPath, i64> {
+    sitzung.eintraege().iter().filter_map(|e| e.quelle.as_ref()).filter_map(|q| Some((q.pfad.clone(), q.mtime_ns?))).collect()
+}
+
+/// Quelle eines Laufs: lokaler Ordner oder Server (v0.6.5), wie sie jetzt konfiguriert
+/// ist – sie muss dieselbe sein wie beim Vergleich.
+pub(crate) enum QuellEp {
+    Lokal(PathBuf),
+    Ftps { ftps: Ftps, zeiten: HashMap<RelPath, i64>, kennung: PathBuf },
+}
+
+impl QuellEp {
+    pub(crate) fn neu(state: &AppState, strecke: &str, stufe: &str, kennung: &Path, zeiten: HashMap<RelPath, i64>) -> Result<Self, StellwerkError> {
+        let s = state.store.strecke_laden(strecke)?;
+        let geaendert = || StellwerkError::NichtUnterstuetzt("Quelle der Stufe wurde seit dem Vergleich geändert – bitte neu vergleichen".into());
+        let i = s.stufen.iter().position(|st| st.id == stufe).ok_or_else(geaendert)?;
+        match effektive_quelle(&s, i) {
+            Some(Quelle::Lokal { pfad }) if pfad == kennung => Ok(Self::Lokal(pfad)),
+            Some(Quelle::Ftps(f)) if ftps_kennung(&f) == kennung => {
+                let ftps = Ftps::new(&f, &hinterlegtes_passwort(state, &f.konto_ref)?)?;
+                Ok(Self::Ftps { ftps, zeiten, kennung: kennung.to_path_buf() })
+            }
+            _ => Err(geaendert()),
+        }
+    }
+
+    pub(crate) fn ist_server(&self) -> bool {
+        matches!(self, Self::Ftps { .. })
+    }
+
+    /// Ordner bzw. `ftps://…` – fürs Protokoll.
+    pub(crate) fn kennung(&self) -> &Path {
+        match self {
+            Self::Lokal(p) => p,
+            Self::Ftps { kennung, .. } => kennung,
+        }
+    }
+
+    pub(crate) fn ep(&self) -> Box<dyn QuellEndpunkt + '_> {
+        match self {
+            Self::Lokal(p) => Box::new(Lokal::new(p)),
+            Self::Ftps { ftps, zeiten, .. } => Box::new(ftps.als_quelle(zeiten.clone())),
+        }
     }
 }
 
@@ -761,14 +838,14 @@ pub(crate) fn uebertragen(
     plan: &Plan,
     strecke: &str,
     stufe: &str,
-    quelle: &Path,
+    quelle: &QuellEp,
     ziel: &Endpunkt,
     bei_fehler_stoppen: bool,
     abbruch: &AtomicBool,
     fortschritt: &Channel<ExecFortschritt>,
 ) -> Result<LaufAntwort, StellwerkError> {
     let db = &state.datenbank;
-    let worker = worker_fuer(ziel);
+    let worker = worker_fuer(quelle.ist_server(), ziel);
     // Alles, was scheitern kann, bevor der Lauf angelegt wird
     let zep = ZielEp::neu(state, ziel, strecke, stufe)?;
     let (ziel_ep, ftps) = (zep.ep(), zep.ftps());
@@ -783,7 +860,7 @@ pub(crate) fn uebertragen(
             "lauf_gestartet",
             None,
             json!({
-                "modus": "direkt", "quelle": quelle, "ziel": ziel, "worker": worker,
+                "modus": "direkt", "quelle": quelle.kennung(), "ziel": ziel, "worker": worker,
                 "bei_fehler_stoppen": bei_fehler_stoppen, "plan": plan.zusammenfassung,
             }),
         ))?;
@@ -793,7 +870,7 @@ pub(crate) fn uebertragen(
     let opt = Optionen { worker, bei_fehler_stoppen, fortschritt_abstand: Duration::from_millis(100) };
     let ergebnis = direkt_ausfuehren(
         plan,
-        &Lokal::new(quelle),
+        quelle.ep().as_ref(),
         ziel_ep,
         &lauf_id,
         &opt,

@@ -9,7 +9,7 @@
 //! - Endpunkte arbeiten **synchron**; parallel wird über den Worker-Pool (Threads).
 //!
 //! Abweichung vom Entwurf: kein `async_trait`, und der Scan bleibt vorerst im
-//! Modul [`crate::scan`] (Quellen sind immer lokal).
+//! Modul [`crate::scan`]; eine Quelle auf einem Server liest [`FtpsQuelle`] (v0.6.5).
 
 pub mod ftps;
 pub mod lokal;
@@ -19,7 +19,7 @@ use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::SystemTime;
 
-pub use ftps::Ftps;
+pub use ftps::{Ftps, FtpsQuelle};
 pub use lokal::Lokal;
 
 use crate::error::{Result, StellwerkError};

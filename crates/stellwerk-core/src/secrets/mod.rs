@@ -12,7 +12,7 @@ use std::collections::HashMap;
 use std::sync::Mutex;
 
 use crate::error::Result;
-use crate::model::{Endpunkt, Strecke};
+use crate::model::{Endpunkt, Quelle, Strecke};
 
 /// Dienstname der Einträge im Schlüsselbund.
 pub const DIENST: &str = "de.sieber-bw.stellwerk";
@@ -39,9 +39,17 @@ pub fn konto_ref(strecke_id: &str, stufe_id: &str) -> String {
 pub fn konten_der_strecke(s: &Strecke) -> Vec<String> {
     s.stufen
         .iter()
-        .filter_map(|st| match &st.ziel {
-            Endpunkt::Ftps(f) => Some(f.konto_ref.clone()),
-            Endpunkt::Lokal { .. } => None,
+        .flat_map(|st| {
+            // v0.6.5: auch ein Server als Quelle hat ein eigenes Konto
+            let quelle = match &st.quelle {
+                Quelle::Ftps(f) => Some(f.konto_ref.clone()),
+                _ => None,
+            };
+            let ziel = match &st.ziel {
+                Endpunkt::Ftps(f) => Some(f.konto_ref.clone()),
+                Endpunkt::Lokal { .. } => None,
+            };
+            quelle.into_iter().chain(ziel)
         })
         .collect()
 }

@@ -220,14 +220,24 @@ export function PasswortFeld(props: { konto: string; ort: string } & PasswortEin
 }
 
 /** Quelle einer Stufe: lokaler Ordner oder das Ziel einer Vorstufe. FTPS ist nur Ziel (Einbahn). */
-export function QuelleFelder(props: { wert: Quelle; ort: string; vorstufen: Stufe[]; onChange: (q: Quelle) => void }) {
+export function QuelleFelder(props: {
+  wert: Quelle;
+  ort: string;
+  vorstufen: Stufe[];
+  /** Schlüsselbund-Name, falls ein Server als Quelle gewählt wird (v0.6.5). */
+  konto: string;
+  onChange: (q: Quelle) => void;
+  passwort?: PasswortEingabe;
+}) {
   const { wert, ort, vorstufen } = props;
-  const typen: [Quelle["typ"], string][] = [["lokal", "Lokaler Ordner"]];
+  // v0.6.5: Auch ein Server kann Quelle sein – gelesen wird nur
+  const typen: [Quelle["typ"], string][] = [
+    ["lokal", "Lokaler Ordner"],
+    ["ftps", "FTPS-Server"],
+  ];
   // Auch ohne Vorstufe anbieten, wenn bereits gesetzt (z. B. nach Entfernen der Vorstufe) –
   // die Prüfung meldet den Fehler dann am Feld.
   if (vorstufen.length > 0 || wert.typ === "stufe") typen.push(["stufe", "Ziel einer Vorstufe"]);
-  // Ältere Konfigurationen mit FTPS als Quelle sichtbar machen; die Prüfung meldet den Fehler.
-  if (wert.typ === "ftps") typen.push(["ftps", "FTPS-Server (nur als Ziel möglich)"]);
   const vorletzte = vorstufen[vorstufen.length - 1]?.id;
   return (
     <>
@@ -236,7 +246,7 @@ export function QuelleFelder(props: { wert: Quelle; ort: string; vorstufen: Stuf
         ort={`${ort}.typ`}
         wert={wert.typ}
         optionen={typen}
-        onChange={(typ) => props.onChange(quelleVom(typ === "stufe" ? "stufe" : "lokal", vorletzte))}
+        onChange={(typ) => props.onChange(quelleVom(typ, vorletzte, props.konto))}
       />
       {wert.typ === "stufe" ? (
         <AuswahlFeld
@@ -247,7 +257,7 @@ export function QuelleFelder(props: { wert: Quelle; ort: string; vorstufen: Stuf
           onChange={(stufe) => props.onChange({ typ: "stufe", stufe })}
         />
       ) : (
-        <EndpunktFelder wert={wert} ort={ort} onChange={props.onChange} />
+        <EndpunktFelder wert={wert} ort={ort} onChange={props.onChange} passwort={props.passwort} />
       )}
     </>
   );

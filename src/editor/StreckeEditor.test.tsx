@@ -242,6 +242,22 @@ describe("Passwörter", () => {
     expect(aufrufeVon(a, "passwort_speichern")).toHaveLength(1);
   });
 
+  it("Passwort eines Servers als Quelle kommt unter eigenem Namen in den Schlüsselbund (v0.6.5)", async () => {
+    const mit = beispielStrecke();
+    mit.stufen[0].quelle = { typ: "ftps", host: "h", port: 21, pfad: "/logs", benutzer: "b", tls: "explizit", konto_ref: "alt" };
+    const a = rust({ strecke_laden: () => mit });
+    editor("mailwerk-web");
+    const [quelle] = await screen.findAllByLabelText("Passwort");
+    await userEvent.type(quelle, "q-geheim");
+    await waitFor(() => expect(speichernKnopf()).toBeEnabled());
+    await userEvent.click(speichernKnopf());
+    await screen.findByText("Gespeichert.");
+    expect(aufrufeVon(a, "passwort_speichern").map((x) => x.args)).toEqual([{ konto: "stellwerk:mailwerk-web:spiegel:quelle", passwort: "q-geheim" }]);
+    const gesendet = (aufrufeVon(a, "strecke_speichern")[0].args as Args).strecke;
+    expect(gesendet.stufen[0].quelle).toMatchObject({ konto_ref: "stellwerk:mailwerk-web:spiegel:quelle" });
+    expect(screen.getAllByLabelText("Passwort")[0]).toHaveValue("");
+  });
+
   it("Fehler beim Schlüsselbund wird angezeigt", async () => {
     rust({
       passwort_speichern: () => {

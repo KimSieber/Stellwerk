@@ -12,6 +12,9 @@
 //!
 //! „Geändert“ bei Dateien: Größe verschieden → geändert. Gleiche Größe und gleiche
 //! Zeit → gleich (schnell, ohne Lesen). Sonst entscheidet der BLAKE3-Hash.
+//! Quelle auf einem Server (v0.6.5): Ihr Inhalt ist nur per Herunterladen bekannt –
+//! gleiche Größe, andere Zeit heißt dann „geändert“; ohne Zeit (nur `LIST`) gilt gleiche
+//! Größe als gleich, mit Hinweis „Inhalt nicht geprüft“.
 //! Dateien „nur online“ werden nie gehasht, weil das den Download auslösen würde.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
@@ -90,6 +93,8 @@ pub struct DiffOptionen {
     pub nur_online: NurOnline,
     /// Inhalt auch bei gleicher Größe und Zeit prüfen (gründlich, langsamer).
     pub inhalt_immer_pruefen: bool,
+    /// Die Quelle liegt auf einem Server – ihr Inhalt wird nie gelesen (v0.6.5).
+    pub quelle_entfernt: bool,
 }
 
 /// Liefert Inhalts-Hashes beider Seiten – lokal aus Dateien, bei entfernten Zielen
@@ -315,6 +320,13 @@ fn beide_seiten(
         return if zeit_gleich && !opt.inhalt_immer_pruefen { DiffStatus::Gleich } else { DiffStatus::Geaendert };
     }
     if zeit_gleich && !opt.inhalt_immer_pruefen {
+        return DiffStatus::Gleich;
+    }
+    if opt.quelle_entfernt {
+        if q.mtime_ns.is_some() {
+            return DiffStatus::Geaendert;
+        }
+        warnungen.push(Warnung::InhaltNichtGeprueft);
         return DiffStatus::Gleich;
     }
     // Bekannter Hash des Ziels (Manifest) zuerst – dann wird nichts am Ziel gelesen

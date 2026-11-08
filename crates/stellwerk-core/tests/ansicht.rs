@@ -175,16 +175,16 @@ fn ftps_ziel_ist_noch_nicht_vergleichbar() {
 }
 
 #[test]
-fn quelle_muss_lokaler_ordner_sein() {
+fn quelle_auf_dem_server_braucht_den_eigenen_vergleich() {
     let a = aufbau();
     let mut s = a.strecke();
-    // Quelle verweist auf eine Stufe mit FTPS-Ziel
-    s.stufen[1].quelle = stellwerk_core::model::Quelle::Stufe { stufe: "server".into() };
+    // Die Vorstufe hat ein FTPS-Ziel – das vergleicht `stufe_vergleichen_vom_server` (v0.6.5)
+    s.stufen[0].ziel = s.stufen[2].ziel.clone();
     let e = vergleich(&s, "weiter").unwrap_err();
-    assert!(matches!(&e, StellwerkError::NichtUnterstuetzt(m) if m.contains("kein lokaler Ordner")), "{e}");
-    // … oder auf eine Stufe, die es nicht gibt
+    assert!(matches!(&e, StellwerkError::NichtUnterstuetzt(m) if m.contains("FTPS-Server")), "{e}");
+    // Eine Stufe, die es nicht gibt, meldet die Prüfung der Konfiguration
     s.stufen[1].quelle = stellwerk_core::model::Quelle::Stufe { stufe: "gibt-es-nicht".into() };
-    assert_eq!(vergleich(&s, "weiter").unwrap_err().kategorie(), "nicht_unterstuetzt");
+    assert_eq!(vergleich(&s, "weiter").unwrap_err().kategorie(), "validierung");
 }
 
 #[test]

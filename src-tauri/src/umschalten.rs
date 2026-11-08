@@ -27,7 +27,6 @@ use tauri::ipc::Channel;
 use tauri::State;
 
 use stellwerk_core::ansicht::ziel_kennung;
-use stellwerk_core::endpoint::Lokal;
 use stellwerk_core::exec::umschalten::{self as phasen, plan_aus_journal, PhasenErgebnis};
 use stellwerk_core::exec::{ExecFortschritt, Optionen};
 use stellwerk_core::model::{Endpunkt, Modus};
@@ -35,7 +34,7 @@ use stellwerk_core::plan::{OpArt, Plan};
 use stellwerk_core::store::{jetzt_ms, Datenbank, JournalStatus, JournalZeile, Lauf, LaufPhase, ManifestEintrag, ProtokollEbene};
 use stellwerk_core::StellwerkError;
 
-use crate::commands::{eintrag, manifest_fortschreiben, worker_fuer, Antwort, LaufAntwort, ZielEp};
+use crate::commands::{eintrag, manifest_fortschreiben, worker_fuer, Antwort, LaufAntwort, QuellEp, ZielEp};
 use crate::state::AppState;
 
 /// Nächster Schritt eines wartenden Laufs.
@@ -72,14 +71,14 @@ pub(crate) fn starten(
     plan: &Plan,
     (strecke, stufe): Ort,
     modus: Modus,
-    quelle: &Path,
+    quelle: &QuellEp,
     ziel: &Endpunkt,
     bei_fehler_stoppen: bool,
     abbruch: &AtomicBool,
     fortschritt: &Channel<ExecFortschritt>,
 ) -> Result<LaufAntwort, StellwerkError> {
     let db = &state.datenbank;
-    let worker = worker_fuer(ziel);
+    let worker = worker_fuer(quelle.ist_server(), ziel);
     let zep = ZielEp::neu(state, ziel, strecke, stufe)?;
     let kennung = ziel_kennung(ziel);
     let lauf_id = db.lock().unwrap().lauf_anlegen(strecke, stufe, modus, plan, jetzt_ms())?;
@@ -87,7 +86,7 @@ pub(crate) fn starten(
     {
         let db = db.lock().unwrap();
         let details = json!({
-            "modus": modus, "quelle": quelle, "ziel": kennung, "worker": worker,
+            "modus": modus, "quelle": quelle.kennung(), "ziel": kennung, "worker": worker,
             "bei_fehler_stoppen": bei_fehler_stoppen, "plan": plan.zusammenfassung,
         });
         db.protokollieren(&eintrag(ort, ProtokollEbene::Info, "lauf_gestartet", None, details))?;
@@ -97,7 +96,7 @@ pub(crate) fn starten(
     let opt = Optionen { worker, bei_fehler_stoppen, fortschritt_abstand: Duration::from_millis(100) };
     let ergebnis = phasen::hochladen(
         plan,
-        &Lokal::new(quelle),
+        quelle.ep().as_ref(),
         zep.ep(),
         &lauf_id,
         &opt,

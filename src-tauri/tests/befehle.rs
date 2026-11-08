@@ -128,7 +128,7 @@ fn speichern_laden_liste_loeschen() {
 }
 
 #[test]
-fn liste_zeigt_warnungen_alte_ftps_quellen_und_defekte_dateien() {
+fn liste_zeigt_warnungen_ftps_quellen_und_defekte_dateien() {
     let a = app();
     let mut s = strecke_json(&a.wurzel);
     s["stufen"][1]["rechte"] = json!({ "modus": "fest", "dateien": "777" });
@@ -153,7 +153,9 @@ ziel = { typ = "lokal", pfad = "/tmp/x" }
     let liste = a.aufruf("strecken_liste", json!({})).unwrap();
     assert_eq!(liste[0]["id"], "alt");
     assert_eq!(liste[0]["stufen"][0]["quelle"], "ftps://quelle.example.de/www");
-    assert_eq!(liste[0]["probleme"][0]["ort"], "stufen[0].quelle.typ");
+    // v0.6.5: Ein Server als Quelle ist kein Fehler mehr
+    let orte: Vec<&str> = liste[0]["probleme"].as_array().unwrap().iter().map(|p| p["ort"].as_str().unwrap()).collect();
+    assert!(!orte.iter().any(|o| o.starts_with("stufen[0].quelle")), "{orte:?}");
 
     assert_eq!(liste[1]["id"], "kaputt");
     assert_eq!(liste[1]["name"], Value::Null);
@@ -1507,6 +1509,85 @@ fn ftps_nach_unterbrechung_liest_der_naechste_vergleich_den_server() {
     assert_eq!(zeile["status"], "loeschen", "{zeile}");
     // Nur einmal: danach wieder gegen den letzten bekannten Stand
     assert_eq!(ftps_vergleich(&a, Some(false)).unwrap()["ziel_stand"], "manifest");
+}
+
+// --- Server als Quelle (v0.6.5) ------------------------------------------------
+
+/// Strecke „holen“: Quelle ein Ordner auf dem Testserver, Ziel lokal.
+fn holen_strecke(a: &Testapp, s: &stellwerk_testserver::TestServer, modus: &str) -> std::path::PathBuf {
+    let q = s.ordner("logs");
+    std::fs::write(q.join("a.log"), "eins").unwrap();
+    std::fs::create_dir_all(q.join("alt")).unwrap();
+    std::fs::write(q.join("alt/b.log"), "zwei").unwrap();
+    let ziel = a.wurzel.join("daten/geholt");
+    std::fs::create_dir_all(&ziel).unwrap();
+    let mut quelle = ftps_ziel(s.port, Some(&s.fingerprint));
+    quelle["pfad"] = json!("/logs");
+    quelle["konto_ref"] = json!("stellwerk:holen:s:quelle");
+    let strecke = json!({ "id": "holen", "name": "Holen", "version": 1, "stufen": [{
+        "id": "s", "name": "Server → lokal", "modus": modus, "quelle": quelle, "ziel": { "typ": "lokal", "pfad": ziel } }] });
+    a.aufruf("strecke_anlegen", json!({ "strecke": strecke })).unwrap();
+    ziel
+}
+
+fn holen_vergleich(a: &Testapp) -> Result<Value, Value> {
+    a.aufruf("vergleich_starten", json!({ "strecke": "holen", "stufe": "s", "fortschritt": KANAL }))
+}
+
+#[test]
+fn server_als_quelle_vergleichen_und_herunterladen() {
+    let a = app();
+    let s = stellwerk_testserver::starten(Default::default());
+    let ziel = holen_strecke(&a, &s, "direkt");
+    // Ohne Passwort der Quelle
+    assert_eq!(holen_vergleich(&a).unwrap_err()["kategorie"], "nicht_gefunden");
+    a.aufruf("passwort_speichern", json!({ "konto": "stellwerk:holen:s:quelle", "passwort": stellwerk_testserver::PASSWORT })).unwrap();
+
+    let v = holen_vergleich(&a).unwrap();
+    assert_eq!((v["quelle"].clone(), v["ziel_stand"].clone()), (json!(format!("ftps://127.0.0.1:{}/logs", s.port)), Value::Null));
+    assert_eq!((v["zusammenfassung"]["neu"].clone(), v["modus"].clone()), (json!(3), json!("direkt")), "{v}");
+    let vorschau = a.aufruf("plan_erstellen", json!({ "vergleichId": v["vergleich_id"] })).unwrap();
+    assert_eq!(vorschau["worker"], 2, "höchstens so viele wie Verbindungen zum Server");
+    let r = uebertragen(&a, &v["vergleich_id"], false, false).unwrap();
+    assert_eq!(r["phase"], "fertig", "{r}");
+    assert_eq!(std::fs::read_to_string(ziel.join("a.log")).unwrap(), "eins");
+    assert_eq!(std::fs::read_to_string(ziel.join("alt/b.log")).unwrap(), "zwei");
+    let lauf = r["lauf_id"].as_str().unwrap();
+    let f = stellwerk_core::store::ProtokollFilter { lauf_id: Some(lauf.into()), ..Default::default() };
+    let gestartet = db(&a).protokoll(&f).unwrap().into_iter().find(|e| e.aktion == "lauf_gestartet").unwrap().details.unwrap();
+    assert_eq!(gestartet["quelle"], json!(format!("ftps://127.0.0.1:{}/logs", s.port)), "{gestartet}");
+
+    // Danach ist alles gleich – die Zeit des Servers wurde übernommen; am Server unverändert
+    let v = holen_vergleich(&a).unwrap();
+    assert_eq!((v["zusammenfassung"]["gleich"].clone(), v["zusammenfassung"]["ausgewaehlt"].clone()), (json!(3), json!(0)), "{v}");
+    assert_eq!(std::fs::read_to_string(s.wurzel().join("logs/a.log")).unwrap(), "eins");
+}
+
+#[test]
+fn server_als_quelle_mit_umschalten_und_geaenderter_quelle() {
+    let a = app();
+    let s = stellwerk_testserver::starten(Default::default());
+    let ziel = holen_strecke(&a, &s, "umschalten_manuell");
+    a.aufruf("passwort_speichern", json!({ "konto": "stellwerk:holen:s:quelle", "passwort": stellwerk_testserver::PASSWORT })).unwrap();
+    let v = holen_vergleich(&a).unwrap();
+    a.aufruf("plan_erstellen", json!({ "vergleichId": v["vergleich_id"] })).unwrap();
+    let r = uebertragen(&a, &v["vergleich_id"], false, false).unwrap();
+    assert_eq!(r["phase"], "hochgeladen", "{r}");
+    weiter(&a, &r["lauf_id"], "umschalten").unwrap();
+    assert_eq!(weiter(&a, &r["lauf_id"], "uebernehmen").unwrap()["phase"], "fertig");
+    assert_eq!(std::fs::read_to_string(ziel.join("a.log")).unwrap(), "eins");
+
+    // Quelle nach dem Plan geändert: kein Lauf
+    std::fs::write(s.wurzel().join("logs/a.log"), "eins und mehr").unwrap();
+    let v = holen_vergleich(&a).unwrap();
+    a.aufruf("plan_erstellen", json!({ "vergleichId": v["vergleich_id"] })).unwrap();
+    let mut st = a.aufruf("strecke_laden", json!({ "id": "holen" })).unwrap();
+    st["stufen"][0]["quelle"]["pfad"] = json!("/anders");
+    a.aufruf("strecke_speichern", json!({ "strecke": st.clone() })).unwrap();
+    let e = uebertragen(&a, &v["vergleich_id"], false, false).unwrap_err();
+    assert!(e["meldung"].as_str().unwrap().contains("Quelle der Stufe wurde seit dem Vergleich geändert"), "{e}");
+    // … und der Plan erkennt es auch
+    assert!(a.aufruf("plan_erstellen", json!({ "vergleichId": v["vergleich_id"] })).unwrap_err()["meldung"].as_str().unwrap().contains("seit dem Vergleich"));
 }
 
 #[test]

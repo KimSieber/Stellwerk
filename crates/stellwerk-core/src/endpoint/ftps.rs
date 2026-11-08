@@ -14,8 +14,10 @@
 //!   Adresse, wird die Adresse der Steuerverbindung verwendet.
 //! - Das Passwort kommt vom Aufrufer (Schlüsselbund) und wird nirgends ausgegeben.
 
-use std::io;
+use std::collections::HashMap;
+use std::io::{self, Seek};
 use std::path::Path;
+use std::time::{SystemTime, UNIX_EPOCH};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::net::{SocketAddr, TcpStream, ToSocketAddrs};
 use std::sync::{Arc, Mutex};
@@ -30,7 +32,7 @@ use sha2::{Digest, Sha256};
 use suppaftp::types::FileType;
 use suppaftp::{FtpError, RustlsConnector, RustlsFtpStream, Status};
 
-use super::{kopieren, temp_name, Geschrieben, QuellDatei, ZielEndpunkt, ZielVerbindung};
+use super::{kopieren, temp_name, Geschrieben, QuellDatei, QuellEndpunkt, ZielEndpunkt, ZielVerbindung};
 use crate::error::{Result, StellwerkError};
 use crate::model::{Eintrag, EintragArt, FtpsEndpunkt, RegelTyp, RelPath, Warnung};
 use crate::rules::RegelWerk;
@@ -75,8 +77,13 @@ fn mit_datenkanal<T>(mut befehl: impl FnMut() -> suppaftp::FtpResult<T>) -> supp
 
 /// Eine Datei herunterladen und dabei hashen; der Inhalt wird nirgends gespeichert.
 fn herunterladen_hash(ftp: &mut RustlsFtpStream, abs: &str, abbruch: &AtomicBool) -> Result<Geschrieben> {
+    herunterladen(ftp, abs, &mut io::sink(), "(Prüfsumme)", abbruch)
+}
+
+/// `RETR` nach `aus` (Datenverbindung bei Bedarf wiederholt); liefert Bytes und Hash.
+fn herunterladen(ftp: &mut RustlsFtpStream, abs: &str, aus: &mut dyn io::Write, aus_ort: &str, abbruch: &AtomicBool) -> Result<Geschrieben> {
     let mut strom = mit_datenkanal(|| ftp.retr_as_stream(abs)).map_err(ftp_fehler)?;
-    match kopieren(&mut strom, &mut io::sink(), abbruch, Path::new(abs), Path::new("(Prüfsumme)")) {
+    match kopieren(&mut strom, aus, abbruch, Path::new(abs), Path::new(aus_ort)) {
         Ok(g) => strom.finish().map_err(ftp_fehler).map(|()| g),
         Err(e) => {
             let _ = ftp.abort(strom);
@@ -458,6 +465,50 @@ impl Ftps {
             zertifikat: Zertifikatsstand { fingerprint: g.fingerprint, vom_system: g.system },
         })
     }
+}
+
+/// Ein FTPS-Server als Quelle (v0.6.5) – nur lesend (E3). Jede Datei wird per `RETR`
+/// in eine anonyme Zwischendatei geladen und von dort geschrieben; so funktioniert jedes
+/// Ziel gleich. Verbindungen werden zwischen Dateien wiederverwendet (je Worker eine).
+/// Als Änderungszeit gilt die aus dem Vergleich (`MLSD`) – damit ist der nächste Vergleich
+/// „gleich“; ohne bekannte Zeit (`LIST`) die aktuelle.
+pub struct FtpsQuelle<'a> {
+    ftps: &'a Ftps,
+    zeiten: HashMap<RelPath, i64>,
+    frei: Mutex<Vec<RustlsFtpStream>>,
+}
+
+impl Ftps {
+    /// Diesen Server als Quelle lesen; `zeiten`: Änderungszeit (ns) je Pfad aus dem Vergleich.
+    pub fn als_quelle(&self, zeiten: HashMap<RelPath, i64>) -> FtpsQuelle<'_> {
+        FtpsQuelle { ftps: self, zeiten, frei: Mutex::new(Vec::new()) }
+    }
+}
+
+impl QuellEndpunkt for FtpsQuelle<'_> {
+    fn oeffnen(&self, p: &RelPath) -> Result<QuellDatei> {
+        let abs = self.ftps.absolut(p.as_str());
+        let frei = self.frei.lock().expect("Verbindungen").pop();
+        let mut ftp = match frei {
+            Some(f) => f,
+            None => self.ftps.anmelden()?,
+        };
+        let io_fehler = |e| StellwerkError::io(Path::new(&abs), e);
+        let mut zwischen = tempfile::tempfile().map_err(io_fehler)?;
+        // Kein Abbruch mitten in einer Datei – die Ausführung prüft ihn zwischen den Dateien
+        let g = herunterladen(&mut ftp, &abs, &mut zwischen, "(Zwischendatei)", &AtomicBool::new(false))?;
+        // Nach einem Fehler wird die Verbindung verworfen (könnte aus dem Takt sein)
+        self.frei.lock().expect("Verbindungen").push(ftp);
+        zwischen.rewind().map_err(io_fehler)?;
+        let geaendert = self.zeiten.get(p).map_or_else(SystemTime::now, |ns| zeit_aus_ns(*ns));
+        Ok(QuellDatei { inhalt: Box::new(zwischen), groesse: g.bytes, geaendert, modus: None })
+    }
+}
+
+/// Nanosekunden seit 1970 (auch davor) als Zeitpunkt.
+fn zeit_aus_ns(ns: i64) -> SystemTime {
+    let d = Duration::from_nanos(ns.unsigned_abs());
+    if ns >= 0 { UNIX_EPOCH + d } else { UNIX_EPOCH - d }
 }
 
 impl ZielEndpunkt for Ftps {

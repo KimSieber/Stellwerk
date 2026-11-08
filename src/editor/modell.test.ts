@@ -84,6 +84,7 @@ describe("Stufen und Strecken", () => {
     expect(quelleVom("stufe", "vor")).toEqual({ typ: "stufe", stufe: "vor" });
     expect(quelleVom("stufe")).toEqual({ typ: "stufe", stufe: "" });
     expect(quelleVom("lokal")).toEqual({ typ: "lokal", pfad: "" });
+    expect(quelleVom("ftps", undefined, "k")).toEqual(endpunktVom("ftps", "k"));
   });
 
   it("kontenAngleichen setzt den internen Schlüsselbund-Namen jeder FTPS-Stufe", () => {
@@ -92,6 +93,10 @@ describe("Stufen und Strecken", () => {
     const s = kontenAngleichen({ ...leer, id: "web", stufen: [lokal, ftps] });
     expect(s.stufen[0]).toBe(lokal);
     expect(s.stufen[1].ziel).toMatchObject({ konto_ref: "stellwerk:web:server" });
+    // v0.6.5: auch eine Quelle auf dem Server – mit eigenem Namen
+    const holen = { ...neueStufe(leer), id: "holen", quelle: endpunktVom("ftps", "x") };
+    const t = kontenAngleichen({ ...leer, id: "web", stufen: [holen] });
+    expect(t.stufen[0].quelle).toMatchObject({ konto_ref: "stellwerk:web:holen:quelle" });
   });
 
   it("neue Regel", () => {

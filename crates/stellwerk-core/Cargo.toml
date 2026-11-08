@@ -22,7 +22,8 @@ suppaftp.workspace = true
 rustls.workspace = true
 rustls-platform-verifier.workspace = true
 sha2.workspace = true
+# Zwischendatei beim Lesen von einem Server (v0.6.5)
+tempfile.workspace = true
 
 [dev-dependencies]
-tempfile.workspace = true
 stellwerk-testserver = { path = "../stellwerk-testserver" }

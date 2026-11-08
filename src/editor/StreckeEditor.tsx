@@ -58,6 +58,8 @@ function Bearbeiten(props: Props & { start: Strecke; neu: boolean }) {
   const [s, setS] = useState<Strecke>(() => kontenAngleichen(props.start));
   // Eingegebene Passwörter je Stufe – nur bis zum Speichern im Speicher, nie in der Strecke
   const [passwoerter, setPasswoerter] = useState<string[]>(() => props.start.stufen.map(() => ""));
+  // Dasselbe für Server als Quelle (v0.6.5)
+  const [quellPasswoerter, setQuellPasswoerter] = useState<string[]>(() => props.start.stufen.map(() => ""));
   const [geaendert, setGeaendert] = useState(false);
   const [kennungVonHand, setKennungVonHand] = useState(false);
   const [rueckfrage, setRueckfrage] = useState<"verwerfen" | "loeschen" | null>(null);
@@ -109,10 +111,12 @@ function Bearbeiten(props: Props & { start: Strecke; neu: boolean }) {
       // Erst nach erfolgreichem Speichern: Passwörter in den Schlüsselbund
       for (const [i, st] of s.stufen.entries()) {
         if (passwoerter[i] && st.ziel.typ === "ftps") await api.passwortSpeichern(st.ziel.konto_ref, passwoerter[i]);
+        if (quellPasswoerter[i] && st.quelle.typ === "ftps") await api.passwortSpeichern(st.quelle.konto_ref, quellPasswoerter[i]);
       }
     },
     onSuccess: async () => {
       setPasswoerter(s.stufen.map(() => ""));
+      setQuellPasswoerter(s.stufen.map(() => ""));
       await client.invalidateQueries({ queryKey: ["passwort"] });
       await client.invalidateQueries({ queryKey: ["strecken"] });
       await client.invalidateQueries({ queryKey: ["strecke", s.id] });
@@ -214,11 +218,17 @@ function Bearbeiten(props: Props & { start: Strecke; neu: boolean }) {
               onChange={(neu) => aendern({ ...s, stufen: s.stufen.map((x, k) => (k === i ? neu : x)) })}
               onEntfernen={() => {
                 setPasswoerter(passwoerter.filter((_, k) => k !== i));
+                setQuellPasswoerter(quellPasswoerter.filter((_, k) => k !== i));
                 aendern({ ...s, stufen: s.stufen.filter((_, k) => k !== i) });
               }}
               passwort={passwoerter[i]}
               onPasswort={(p) => {
                 setPasswoerter(passwoerter.map((x, k) => (k === i ? p : x)));
+                setGeaendert(true);
+              }}
+              quellPasswort={quellPasswoerter[i]}
+              onQuellPasswort={(p) => {
+                setQuellPasswoerter(quellPasswoerter.map((x, k) => (k === i ? p : x)));
                 setGeaendert(true);
               }}
               obereRegeln={regelnFuerStufe(global, s)}
@@ -227,6 +237,7 @@ function Bearbeiten(props: Props & { start: Strecke; neu: boolean }) {
           <button
             onClick={() => {
               setPasswoerter([...passwoerter, ""]);
+              setQuellPasswoerter([...quellPasswoerter, ""]);
               aendern({ ...s, stufen: [...s.stufen, neueStufe(s)] });
             }}
           >

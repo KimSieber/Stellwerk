@@ -13,7 +13,7 @@ use std::collections::HashMap;
 use crate::diff::{vergleiche_mit_fortschritt, DiffOptionen, EntfernterInhalt, InhaltPruefer, LokalerInhalt, Vergleich};
 use crate::endpoint::Ftps;
 use crate::error::{Result, StellwerkError};
-use crate::model::{Endpunkt, Quelle, RelPath, Strecke, Stufe};
+use crate::model::{Endpunkt, FtpsEndpunkt, Quelle, RelPath, Strecke, Stufe};
 use crate::rules::RegelWerk;
 use crate::scan::{aus_liste, scan_lokal, ScanErgebnis, ScanFehler};
 use crate::store::ManifestEintrag;
@@ -62,18 +62,17 @@ pub struct StufenVergleich {
     pub lesefehler: Vec<Lesefehler>,
 }
 
-/// Gemeinsamer Anfang beider Vergleiche: Stufe finden, Quelle auflösen, Konfiguration
-/// dieser Stufe prüfen, Regeln bilden.
-fn vorbereiten<'s>(strecke: &'s Strecke, stufe_id: &str, global: &GlobalConfig) -> Result<(usize, &'s Stufe, PathBuf, RegelWerk)> {
+/// Gemeinsamer Anfang aller Vergleiche: Stufe finden, Quelle auflösen (lokaler Ordner
+/// oder Server), Konfiguration dieser Stufe prüfen, Regeln bilden.
+fn vorbereiten<'s>(strecke: &'s Strecke, stufe_id: &str, global: &GlobalConfig) -> Result<(&'s Stufe, Quelle, RegelWerk)> {
     let index = strecke
         .stufen
         .iter()
         .position(|s| s.id == stufe_id)
         .ok_or_else(|| StellwerkError::NichtGefunden(format!("Stufe „{stufe_id}“ in Strecke „{}“", strecke.id)))?;
     let stufe = &strecke.stufen[index];
-    let Some(Quelle::Lokal { pfad: quelle }) = effektive_quelle(strecke, index) else {
-        return Err(StellwerkError::NichtUnterstuetzt("Quelle ist kein lokaler Ordner".into()));
-    };
+    // Fehlt die Vorstufe, meldet das die Prüfung unten
+    let quelle = effektive_quelle(strecke, index);
     let eigene = format!("stufen[{index}]");
     let fehler: Vec<Problem> = validiere_strecke(strecke, global)
         .into_iter()
@@ -83,11 +82,22 @@ fn vorbereiten<'s>(strecke: &'s Strecke, stufe_id: &str, global: &GlobalConfig) 
     if !fehler.is_empty() {
         return Err(StellwerkError::Validierung(fehler));
     }
+    let quelle = quelle.expect("ohne Fehler ist die Quelle aufgelöst");
     // Die Quelle kann der Zielordner einer anderen Stufe sein – deren Prüfung zählt oben nicht
-    if !quelle.is_dir() {
-        return Err(StellwerkError::KeinVerzeichnis(quelle));
+    if let Quelle::Lokal { pfad } = &quelle {
+        if !pfad.is_dir() {
+            return Err(StellwerkError::KeinVerzeichnis(pfad.clone()));
+        }
     }
-    Ok((index, stufe, quelle, RegelWerk::fuer_stufe(global, strecke, index)?))
+    Ok((stufe, quelle, RegelWerk::fuer_stufe(global, strecke, index)?))
+}
+
+/// Lokaler Quellordner – eine Quelle auf dem Server vergleicht [`stufe_vergleichen_vom_server`].
+fn lokale_quelle(q: Quelle) -> Result<PathBuf> {
+    match q {
+        Quelle::Lokal { pfad } => Ok(pfad),
+        _ => Err(StellwerkError::NichtUnterstuetzt("Quelle ist ein FTPS-Server".into())),
+    }
 }
 
 /// Vergleicht Quelle und Ziel der Stufe `stufe_id` – nur lokale Ziele; für FTPS
@@ -100,7 +110,8 @@ pub fn stufe_vergleichen(
     abbruch: &AtomicBool,
     fortschritt: &mut dyn FnMut(Fortschritt),
 ) -> Result<StufenVergleich> {
-    let (_, stufe, quelle, regeln) = vorbereiten(strecke, stufe_id, global)?;
+    let (stufe, quelle, regeln) = vorbereiten(strecke, stufe_id, global)?;
+    let quelle = lokale_quelle(quelle)?;
     let Endpunkt::Lokal { pfad: ziel } = &stufe.ziel else {
         return Err(StellwerkError::NichtUnterstuetzt("FTPS-Ziele werden gegen das Manifest verglichen".into()));
     };
@@ -111,7 +122,31 @@ pub fn stufe_vergleichen(
     let q = scan(&quelle, Phase::Quelle, fortschritt)?;
     let z = scan(ziel, Phase::Ziel, fortschritt)?;
     let inhalt = LokalerInhalt::new(&quelle, ziel);
-    abschliessen(stufe, quelle, ziel.clone(), q, z, &regeln, &inhalt, abbruch, fortschritt)
+    abschliessen(stufe, quelle, ziel.clone(), q, z, &regeln, &inhalt, false, abbruch, fortschritt)
+}
+
+/// Vergleicht eine Stufe, deren Quelle ein FTPS-Server ist (v0.6.5), mit ihrem lokalen
+/// Ziel. Die Quelle wird vom Server eingelesen (Größe und Zeit aus `MLSD`), nie
+/// verändert und nie gelesen – „geändert“ entscheiden Größe und Zeit.
+pub fn stufe_vergleichen_vom_server(
+    strecke: &Strecke,
+    stufe_id: &str,
+    global: &GlobalConfig,
+    ftps: &Ftps,
+    abbruch: &AtomicBool,
+    fortschritt: &mut dyn FnMut(Fortschritt),
+) -> Result<StufenVergleich> {
+    let (stufe, quelle, regeln) = vorbereiten(strecke, stufe_id, global)?;
+    let Quelle::Ftps(server) = &quelle else {
+        return Err(StellwerkError::NichtUnterstuetzt("Quelle ist kein FTPS-Server".into()));
+    };
+    // Ein FTPS-Ziel weist schon die Prüfung ab (Server → Server folgt) – hier zur Sicherheit
+    let Endpunkt::Lokal { pfad: ziel } = &stufe.ziel else { return Err(StellwerkError::NichtUnterstuetzt("Server → Server".into())) };
+    let q = ftps.auflisten(&regeln, abbruch, &mut |anzahl| fortschritt(Fortschritt { phase: Phase::Quelle, anzahl }))?;
+    let z = scan_lokal(ziel, &regeln, abbruch, &mut |anzahl| fortschritt(Fortschritt { phase: Phase::Ziel, anzahl }))?;
+    // Wird bei entfernter Quelle nicht gefragt – gleiche Größe und Zeit oder eben nicht
+    let inhalt = LokalerInhalt::new(ziel, ziel);
+    abschliessen(stufe, ftps_kennung(server), ziel.clone(), q, z, &regeln, &inhalt, true, abbruch, fortschritt)
 }
 
 /// Woher der Stand eines entfernten Ziels (FTPS) kommt.
@@ -141,7 +176,8 @@ pub fn stufe_vergleichen_entfernt(
     abbruch: &AtomicBool,
     fortschritt: &mut dyn FnMut(Fortschritt),
 ) -> Result<EntfernterVergleich> {
-    let (_, stufe, quelle, regeln) = vorbereiten(strecke, stufe_id, global)?;
+    let (stufe, quelle, regeln) = vorbereiten(strecke, stufe_id, global)?;
+    let quelle = lokale_quelle(quelle)?;
     let Endpunkt::Ftps(_) = &stufe.ziel else {
         return Err(StellwerkError::NichtUnterstuetzt("Stufe hat kein FTPS-Ziel".into()));
     };
@@ -158,7 +194,7 @@ pub fn stufe_vergleichen_entfernt(
     z.fehler.extend(server_fehler);
     let inhalt = EntfernterInhalt::new(&quelle);
     let ziel = ziel_kennung(&stufe.ziel);
-    let vergleich = abschliessen(stufe, quelle, ziel, q, z, &regeln, &inhalt, abbruch, fortschritt)?;
+    let vergleich = abschliessen(stufe, quelle, ziel, q, z, &regeln, &inhalt, false, abbruch, fortschritt)?;
     Ok(EntfernterVergleich { vergleich, neues_manifest })
 }
 
@@ -167,8 +203,13 @@ pub fn stufe_vergleichen_entfernt(
 pub fn ziel_kennung(ziel: &Endpunkt) -> PathBuf {
     match ziel {
         Endpunkt::Lokal { pfad } => pfad.clone(),
-        Endpunkt::Ftps(f) => PathBuf::from(format!("ftps://{}:{}{}", f.host, f.port, f.pfad)),
+        Endpunkt::Ftps(f) => ftps_kennung(f),
     }
+}
+
+/// Kennung eines Servers: `ftps://host:port/pfad` – für Ziel und Quelle (v0.6.5).
+pub fn ftps_kennung(f: &FtpsEndpunkt) -> PathBuf {
+    PathBuf::from(format!("ftps://{}:{}{}", f.host, f.port, f.pfad))
 }
 
 /// Stand des Servers mit dem bisherigen Manifest zusammenführen (nach Pfad sortiert): Hat sich Art und
@@ -201,10 +242,11 @@ fn abschliessen(
     z: ScanErgebnis,
     regeln: &RegelWerk,
     inhalt: &dyn InhaltPruefer,
+    quelle_entfernt: bool,
     abbruch: &AtomicBool,
     fortschritt: &mut dyn FnMut(Fortschritt),
 ) -> Result<StufenVergleich> {
-    let opt = DiffOptionen { nur_online: stufe.nur_online, inhalt_immer_pruefen: false };
+    let opt = DiffOptionen { nur_online: stufe.nur_online, inhalt_immer_pruefen: false, quelle_entfernt };
     let mut melden = |anzahl| fortschritt(Fortschritt { phase: Phase::Vergleich, anzahl });
     let vergleich = vergleiche_mit_fortschritt(&q, &z, regeln, &opt, inhalt, abbruch, &mut melden)?;
     let lesefehler = [(Seitenname::Quelle, q.fehler), (Seitenname::Ziel, z.fehler)]

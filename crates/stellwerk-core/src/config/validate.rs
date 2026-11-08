@@ -89,11 +89,8 @@ pub fn validiere_strecke(s: &Strecke, global: &GlobalConfig) -> Vec<Problem> {
         // Quelle
         match &st.quelle {
             Quelle::Lokal { pfad } => pruefe_lokal(pfad, &format!("{ort}.quelle.pfad"), &mut p),
-            // Übertragen wird nur zum Server hin, nie von ihm herunter (Einbahn).
-            Quelle::Ftps(_) => p.push(Problem::fehler(
-                format!("{ort}.quelle.typ"),
-                "Ein FTPS-Server kann nur Ziel sein, nicht Quelle",
-            )),
+            // v0.6.5: Ein Server kann auch Quelle sein – gelesen wird nur (E3)
+            Quelle::Ftps(f) => pruefe_ftps(f, &format!("{ort}.quelle"), &mut p),
             Quelle::Stufe { stufe } => {
                 let vor = s.stufen[..i].iter().any(|v| &v.id == stufe);
                 if !vor {
@@ -109,6 +106,13 @@ pub fn validiere_strecke(s: &Strecke, global: &GlobalConfig) -> Vec<Problem> {
         match &st.ziel {
             Endpunkt::Lokal { pfad } => pruefe_lokal(pfad, &format!("{ort}.ziel.pfad"), &mut p),
             Endpunkt::Ftps(f) => pruefe_ftps(f, &format!("{ort}.ziel"), &mut p),
+        }
+        // Server → Server folgt mit v0.6.5b (auch über „Ziel einer Vorstufe“)
+        if matches!(st.ziel, Endpunkt::Ftps(_)) && matches!(effektive_quelle(s, i), Some(Quelle::Ftps(_))) {
+            p.push(Problem::fehler(
+                format!("{ort}.ziel.typ"),
+                "Von einem FTPS-Server direkt zu einem FTPS-Server geht noch nicht – Ziel vorerst lokal",
+            ));
         }
 
         // Einbahn (E3): Eine Stufe schreibt nie in ihre eigene Quelle und nie in die
