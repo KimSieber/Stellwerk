@@ -35,6 +35,10 @@ pub enum StellwerkError {
     #[error("Noch nicht unterstützt: {0}")]
     NichtUnterstuetzt(String),
 
+    /// Ein FTPS-Ziel wurde noch nie eingelesen – erst „Mit Server vergleichen“.
+    #[error("Noch nie mit dem Server verglichen – bitte „Mit Server vergleichen …“")]
+    KeinManifest,
+
     /// Vom Nutzer abgebrochen.
     #[error("Abgebrochen")]
     Abbruch,
@@ -79,6 +83,7 @@ impl StellwerkError {
             Self::KeinVerzeichnis(_) => "kein_verzeichnis",
             Self::Schluesselbund(_) => "schluesselbund",
             Self::NichtUnterstuetzt(_) => "nicht_unterstuetzt",
+            Self::KeinManifest => "kein_manifest",
             Self::Abbruch => "abbruch",
             Self::NichtBestaetigt(_) => "nicht_bestaetigt",
             Self::Datenbank(_) => "datenbank",

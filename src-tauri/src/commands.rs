@@ -16,7 +16,10 @@ use serde::Serialize;
 use tauri::ipc::Channel;
 use tauri::State;
 
-use stellwerk_core::ansicht::{stufe_vergleichen, Drossel, Filter, Fortschritt, Lesefehler, Seite, VergleichsSitzung};
+use stellwerk_core::ansicht::{
+    stufe_vergleichen, stufe_vergleichen_entfernt, ziel_kennung, Drossel, EntfernterStand, Filter, Fortschritt, Lesefehler, Seite,
+    StufenVergleich, VergleichsSitzung,
+};
 use stellwerk_core::diff::Zusammenfassung;
 use stellwerk_core::model::RelPath;
 
@@ -215,13 +218,19 @@ pub async fn verbindung_testen(state: State<'_, AppState>, ziel: Endpunkt, passw
     };
     let passwort = match passwort.filter(|p| !p.is_empty()) {
         Some(p) => p,
-        None => state.tresor.lesen(&ziel.konto_ref)?.ok_or_else(|| {
-            StellwerkError::NichtGefunden("Passwort – bitte eingeben (im Schlüsselbund ist keines hinterlegt)".into())
-        })?,
+        None => hinterlegtes_passwort(&state, &ziel.konto_ref)?,
     };
     let ftps = Ftps::new(&ziel, &passwort)?;
     let test = tauri::async_runtime::spawn_blocking(move || ftps.verbindung_testen()).await.expect("Verbindungstest beendet");
     Ok(test?)
+}
+
+/// Passwort aus dem Schlüsselbund; fehlt es → „nicht gefunden“ mit Hinweis.
+fn hinterlegtes_passwort(state: &AppState, konto: &str) -> Result<String, StellwerkError> {
+    state
+        .tresor
+        .lesen(konto)?
+        .ok_or_else(|| StellwerkError::NichtGefunden("Passwort – bitte eingeben (im Schlüsselbund ist keines hinterlegt)".into()))
 }
 
 #[tauri::command]
@@ -242,31 +251,52 @@ pub struct VergleichStart {
     /// Anzahl aller Zeilen ohne Filter.
     pub zeilen: usize,
     pub lesefehler: Vec<Lesefehler>,
+    /// Nur bei FTPS-Zielen: woher der Stand des Ziels kommt (`manifest` | `server`).
+    pub ziel_stand: Option<&'static str>,
 }
 
-/// Scannt Quelle und Ziel einer Stufe und vergleicht sie. Verändert nichts (E4).
-/// Fortschritt kommt gedrosselt über `fortschritt`. Läuft außerhalb des
-/// Hauptthreads (async), damit `vergleich_abbrechen` jederzeit ankommt.
+/// Wann der Server zuletzt vollständig eingelesen wurde (`stufen_status`).
+const MANIFEST_SEIT: &str = "manifest_seit";
+
+/// Scannt Quelle und Ziel einer Stufe und vergleicht sie. Verändert nichts (E4) –
+/// auch am Server nicht. FTPS-Ziel: ohne `server` gegen das Manifest (kein
+/// Serverkontakt; nie eingelesen → `kein_manifest`), mit `server` wird der Server
+/// eingelesen und das Manifest abgeglichen. Fortschritt kommt gedrosselt über
+/// `fortschritt`. Läuft außerhalb des Hauptthreads (async), damit
+/// `vergleich_abbrechen` jederzeit ankommt.
 #[tauri::command]
 pub async fn vergleich_starten(
     state: State<'_, AppState>,
     strecke: String,
     stufe: String,
     fortschritt: Channel<Fortschritt>,
+    server: Option<bool>,
 ) -> Antwort<VergleichStart> {
     let s = state.store.strecke_laden(&strecke)?;
     let global = state.store.global_laden()?;
     let schluessel = format!("{strecke}/{stufe}");
     let abbruch = state.vergleiche.anmelden(&schluessel);
     let mut drossel = Drossel::neu(Duration::from_millis(100));
-    let ergebnis = stufe_vergleichen(&s, &stufe, &global, &abbruch, &mut |f| {
+    let mut melden = |f: Fortschritt| {
         if drossel.durchlassen(&f, Instant::now()) {
             // Ein geschlossenes Fenster ist kein Grund, den Vergleich abzubrechen
             let _ = fortschritt.send(f);
         }
+    };
+    let ftps = s.stufen.iter().find(|st| st.id == stufe).and_then(|st| match &st.ziel {
+        Endpunkt::Ftps(f) => Some(f.clone()),
+        Endpunkt::Lokal { .. } => None,
     });
+    let ergebnis = match &ftps {
+        None => stufe_vergleichen(&s, &stufe, &global, &abbruch, &mut melden).map(|v| (v, None)),
+        Some(f) => {
+            let mit_server = server.unwrap_or(false);
+            vergleichen_entfernt(&state, &s, &stufe, &global, f, mit_server, &abbruch, &mut melden)
+                .map(|v| (v, Some(if mit_server { "server" } else { "manifest" })))
+        }
+    };
     state.vergleiche.abmelden(&schluessel, &abbruch);
-    let v = ergebnis?;
+    let (v, ziel_stand) = ergebnis?;
 
     let sitzung = VergleichsSitzung::neu(v.vergleich);
     let zusammenfassung = sitzung.zusammenfassung().clone();
@@ -280,7 +310,41 @@ pub async fn vergleich_starten(
         zusammenfassung,
         zeilen,
         lesefehler: v.lesefehler,
+        ziel_stand,
     })
+}
+
+/// FTPS-Stufe vergleichen. Die Datenbank ist nie während des Netzzugriffs gesperrt.
+#[allow(clippy::too_many_arguments)]
+fn vergleichen_entfernt(
+    state: &AppState,
+    s: &Strecke,
+    stufe: &str,
+    global: &GlobalConfig,
+    ziel: &stellwerk_core::model::FtpsEndpunkt,
+    mit_server: bool,
+    abbruch: &AtomicBool,
+    melden: &mut dyn FnMut(Fortschritt),
+) -> Result<StufenVergleich, StellwerkError> {
+    let (seit, manifest) = {
+        let db = state.datenbank.lock().unwrap();
+        (db.status(&s.id, stufe, MANIFEST_SEIT)?, db.manifest(&s.id, stufe)?)
+    };
+    if !mit_server {
+        if seit.is_none() {
+            return Err(StellwerkError::KeinManifest);
+        }
+        let v = stufe_vergleichen_entfernt(s, stufe, global, EntfernterStand::Manifest(&manifest), abbruch, melden)?;
+        return Ok(v.vergleich);
+    }
+    let ftps = Ftps::new(ziel, &hinterlegtes_passwort(state, &ziel.konto_ref)?)?;
+    let v = stufe_vergleichen_entfernt(s, stufe, global, EntfernterStand::Server { ftps: &ftps, manifest: &manifest }, abbruch, melden)?;
+    // Mit Server gibt es immer ein abgeglichenes Manifest
+    let neu = v.neues_manifest.unwrap_or_default();
+    let mut db = state.datenbank.lock().unwrap();
+    db.manifest_ersetzen(&s.id, stufe, &neu)?;
+    db.status_setzen(&s.id, stufe, MANIFEST_SEIT, &jetzt_ms().to_string(), jetzt_ms())?;
+    Ok(v.vergleich)
 }
 
 /// Bricht den laufenden Vergleich einer Stufe ab; `false`, wenn keiner läuft.
@@ -420,12 +484,15 @@ pub fn plan_erstellen(state: State<'_, AppState>, vergleich_id: String) -> Antwo
                 "„Mit Umschalten“ kommt in einer späteren Version – für diese Stufe bitte „Direkt“ wählen".into(),
             ));
         }
-        let gleiche_ordner = matches!(&st.ziel, Endpunkt::Lokal { pfad } if *pfad == o.ziel)
+        let gleiche_ordner = ziel_kennung(&st.ziel) == o.ziel
             && effektive_quelle(&s, i) == Some(Quelle::Lokal { pfad: o.quelle.clone() });
         if !gleiche_ordner {
             return Err(StellwerkError::NichtUnterstuetzt(
                 "Quelle oder Ziel der Stufe wurden seit dem Vergleich geändert – bitte neu vergleichen".into(),
             ));
+        }
+        if matches!(st.ziel, Endpunkt::Ftps(_)) {
+            return Err(StellwerkError::NichtUnterstuetzt("Übertragen zum Server folgt im nächsten Schritt von v0.4".into()));
         }
         let plan = plan_erstellen_aus(o.sitzung.eintraege(), &st.rechte)?;
         let vorschau = PlanVorschau {

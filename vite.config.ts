@@ -20,11 +20,12 @@ export default defineConfig({
   test: {
     environment: "jsdom",
     setupFiles: ["src/test/setup.ts"],
-    include: ["src/**/*.test.{ts,tsx}"],
+    include: ["src/**/*.test.{ts,tsx}", "scripts/**/*.test.mjs"],
     coverage: {
       provider: "v8",
       reportsDirectory: "target/abdeckung-frontend", // target/ ist in .gitignore
-      include: ["src/**/*.{ts,tsx}"],
+      // pruefen.mjs startet nur die Befehle; die Auswertung ist getestet
+      include: ["src/**/*.{ts,tsx}", "scripts/auswertung.mjs"],
       exclude: ["src/**/*.test.{ts,tsx}", "src/test/**"],
       // Jede Funktion und jede Zeile muss durch einen Test abgedeckt sein.
       thresholds: { functions: 100, lines: 100, statements: 100, branches: 100 },

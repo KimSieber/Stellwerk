@@ -142,7 +142,7 @@ pub fn stufe_vergleichen_entfernt(
     fortschritt: &mut dyn FnMut(Fortschritt),
 ) -> Result<EntfernterVergleich> {
     let (_, stufe, quelle, regeln) = vorbereiten(strecke, stufe_id, global)?;
-    let Endpunkt::Ftps(f) = &stufe.ziel else {
+    let Endpunkt::Ftps(_) = &stufe.ziel else {
         return Err(StellwerkError::NichtUnterstuetzt("Stufe hat kein FTPS-Ziel".into()));
     };
     let q = scan_lokal(&quelle, &regeln, abbruch, &mut |anzahl| fortschritt(Fortschritt { phase: Phase::Quelle, anzahl }))?;
@@ -157,9 +157,18 @@ pub fn stufe_vergleichen_entfernt(
     let mut z = aus_liste(manifest.iter().map(ManifestEintrag::als_eintrag).collect(), &regeln);
     z.fehler.extend(server_fehler);
     let inhalt = EntfernterInhalt::new(&quelle);
-    let ziel = PathBuf::from(format!("ftps://{}:{}{}", f.host, f.port, f.pfad));
+    let ziel = ziel_kennung(&stufe.ziel);
     let vergleich = abschliessen(stufe, quelle, ziel, q, z, &regeln, &inhalt, abbruch, fortschritt)?;
     Ok(EntfernterVergleich { vergleich, neues_manifest })
+}
+
+/// Kennung eines Ziels, wie sie Vergleich und Plan verwenden: der Ordner bzw.
+/// `ftps://host:port/pfad`. Ändert sie sich nach dem Vergleich, ist er veraltet.
+pub fn ziel_kennung(ziel: &Endpunkt) -> PathBuf {
+    match ziel {
+        Endpunkt::Lokal { pfad } => pfad.clone(),
+        Endpunkt::Ftps(f) => PathBuf::from(format!("ftps://{}:{}{}", f.host, f.port, f.pfad)),
+    }
 }
 
 /// Stand des Servers mit dem bisherigen Manifest zusammenführen (nach Pfad sortiert): Hat sich Art und

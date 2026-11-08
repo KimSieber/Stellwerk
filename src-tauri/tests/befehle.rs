@@ -368,7 +368,8 @@ fn vergleich_fehler_kommen_mit_kategorie() {
     let e = a
         .aufruf("vergleich_starten", json!({ "strecke": "mailwerk-web", "stufe": "server", "fortschritt": KANAL }))
         .unwrap_err();
-    assert_eq!(e["kategorie"], "nicht_unterstuetzt");
+    // FTPS-Stufe ohne Manifest (seit v0.4 vergleichbar)
+    assert_eq!(e["kategorie"], "kein_manifest");
     let e = a
         .aufruf("vergleich_starten", json!({ "strecke": "fehlt", "stufe": "x", "fortschritt": KANAL }))
         .unwrap_err();
@@ -915,4 +916,102 @@ fn verbindung_testen_meldet_zertifikat_mit_fingerprint_und_gelingt_nach_bestaeti
     assert!(e.to_string().contains("ziel"), "{e}");
     let e = a.aufruf("verbindung_testen", json!({ "ziel": ziel, "passwort": 42 })).unwrap_err();
     assert!(e.to_string().contains("passwort"), "{e}");
+}
+
+// --- FTPS vergleichen (v0.4 Schritt 2) -----------------------------------------
+
+/// Strecke mit einer Stufe lokal → Testserver; Quelle mit `index.php` (neu) und
+/// `gleich.css` (am Server gleich groß, anderer Inhalt).
+fn ftps_strecke(a: &Testapp, s: &stellwerk_testserver::TestServer) {
+    let q = a.wurzel.join("daten/quelle");
+    std::fs::create_dir_all(&q).unwrap();
+    std::fs::write(q.join("index.php"), "neu").unwrap();
+    std::fs::write(q.join("gleich.css"), "ccc").unwrap();
+    std::fs::write(s.wurzel().join("gleich.css"), "xyz").unwrap();
+    std::fs::write(s.wurzel().join("alt.txt"), "weg").unwrap();
+    let mut ziel = ftps_ziel(s.port, Some(&s.fingerprint));
+    ziel["konto_ref"] = json!("stellwerk:ftps-web:server");
+    let strecke = json!({
+        "id": "ftps-web", "name": "FTPS", "version": 1,
+        "stufen": [{ "id": "server", "name": "Server", "modus": "direkt",
+                     "quelle": { "typ": "lokal", "pfad": q }, "ziel": ziel }]
+    });
+    a.aufruf("strecke_anlegen", json!({ "strecke": strecke })).unwrap();
+}
+
+fn ftps_vergleich(a: &Testapp, server: Option<bool>) -> Result<Value, Value> {
+    a.aufruf("vergleich_starten", json!({ "strecke": "ftps-web", "stufe": "server", "fortschritt": KANAL, "server": server }))
+}
+
+#[test]
+fn ftps_erst_mit_dem_server_dann_gegen_das_manifest() {
+    let a = app();
+    let s = stellwerk_testserver::starten(Default::default());
+    ftps_strecke(&a, &s);
+
+    // Noch nie eingelesen: kein Serverkontakt, eigene Kategorie
+    let e = ftps_vergleich(&a, None).unwrap_err();
+    assert_eq!(e["kategorie"], "kein_manifest");
+    assert_eq!(ftps_vergleich(&a, Some(false)).unwrap_err()["kategorie"], "kein_manifest");
+    // Mit Server, aber ohne Passwort im Schlüsselbund
+    assert_eq!(ftps_vergleich(&a, Some(true)).unwrap_err()["kategorie"], "nicht_gefunden");
+    assert!(db(&a).manifest("ftps-web", "server").unwrap().is_empty());
+
+    a.aufruf("passwort_speichern", json!({ "konto": "stellwerk:ftps-web:server", "passwort": stellwerk_testserver::PASSWORT }))
+        .unwrap();
+    let v = ftps_vergleich(&a, Some(true)).unwrap();
+    assert_eq!(v["ziel_stand"], "server");
+    assert_eq!(v["ziel"], json!(format!("ftps://127.0.0.1:{}/", s.port)));
+    assert_eq!(v["zusammenfassung"]["neu"], 1);
+    assert_eq!(v["zusammenfassung"]["gleich"], 1);
+    assert_eq!(v["zusammenfassung"]["loeschen"], 1);
+    let seite = a
+        .aufruf("diff_seite", json!({ "vergleichId": v["vergleich_id"], "offset": 0, "limit": 10, "filter": "alle", "zugeklappt": [] }))
+        .unwrap();
+    let gleich = seite["zeilen"].as_array().unwrap().iter().find(|z| z["pfad"] == "gleich.css").unwrap().clone();
+    assert_eq!(gleich["warnungen"], json!([{ "art": "inhalt_nicht_geprueft" }]));
+
+    // Manifest gespeichert (ohne Hashes), Zeitpunkt gemerkt; am Server nichts verändert
+    let m = db(&a).manifest("ftps-web", "server").unwrap();
+    let pfade: Vec<_> = m.iter().map(|e| (e.pfad.as_str(), e.hash.is_none())).collect();
+    assert_eq!(pfade, [("alt.txt", true), ("gleich.css", true)]);
+    assert!(db(&a).status("ftps-web", "server", "manifest_seit").unwrap().is_some());
+    assert_eq!(std::fs::read_to_string(s.wurzel().join("gleich.css")).unwrap(), "xyz");
+
+    // Danach gegen das Manifest: Änderungen am Server bleiben unsichtbar (kein Kontakt)
+    std::fs::remove_file(s.wurzel().join("alt.txt")).unwrap();
+    let m = ftps_vergleich(&a, None).unwrap();
+    assert_eq!(m["ziel_stand"], "manifest");
+    assert_eq!(m["zusammenfassung"]["loeschen"], 1);
+    // Server neu lesen gleicht das Manifest ab
+    let neu = ftps_vergleich(&a, Some(true)).unwrap();
+    assert_eq!(neu["zusammenfassung"]["loeschen"], 0);
+    assert_eq!(db(&a).manifest("ftps-web", "server").unwrap().len(), 1);
+
+    // Übertragen zum Server folgt erst in Schritt 3
+    let e = a.aufruf("plan_erstellen", json!({ "vergleichId": neu["vergleich_id"] })).unwrap_err();
+    assert_eq!(e["kategorie"], "nicht_unterstuetzt");
+}
+
+#[test]
+fn ftps_fehler_beim_einlesen_speichern_kein_manifest() {
+    let a = app();
+    let s = stellwerk_testserver::starten(Default::default());
+    ftps_strecke(&a, &s);
+    a.aufruf("passwort_speichern", json!({ "konto": "stellwerk:ftps-web:server", "passwort": "falsch" })).unwrap();
+    assert_eq!(ftps_vergleich(&a, Some(true)).unwrap_err()["kategorie"], "anmeldung");
+    assert!(db(&a).status("ftps-web", "server", "manifest_seit").unwrap().is_none());
+    // Lokale Stufen ignorieren `server`
+    mit_vergleichsdaten(&a);
+    let v = a
+        .aufruf("vergleich_starten", json!({ "strecke": "mailwerk-web", "stufe": "spiegel", "fortschritt": KANAL, "server": true }))
+        .unwrap();
+    assert_eq!(v["ziel_stand"], Value::Null);
+}
+
+#[test]
+fn vergleich_starten_mit_falschem_server_wert_wird_abgewiesen() {
+    let a = app();
+    let e = a.aufruf("vergleich_starten", json!({ "strecke": "x", "stufe": "y", "fortschritt": KANAL, "server": "ja" }));
+    assert!(e.unwrap_err().to_string().contains("server"));
 }

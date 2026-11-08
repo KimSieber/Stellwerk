@@ -553,3 +553,23 @@ fn globale_regel_ist_nie_aus_dem_menue_entfernbar() {
     assert_eq!((z.eintrag.pfad.as_str(), z.eintrag.status), ("global.txt", Ignoriert));
     assert!(!z.regel_entfernbar);
 }
+
+#[test]
+fn ziel_kennung_fuer_ordner_und_server() {
+    use stellwerk_core::ansicht::ziel_kennung;
+    use stellwerk_core::model::{Endpunkt, FtpsEndpunkt};
+    let lokal = Endpunkt::Lokal { pfad: PathBuf::from("/daten/spiegel") };
+    assert_eq!(ziel_kennung(&lokal), PathBuf::from("/daten/spiegel"));
+    let f: FtpsEndpunkt = serde_json::from_value(serde_json::json!({
+        "host": "ftp.example.de", "port": 21, "pfad": "/web/", "benutzer": "kim", "tls": "explizit", "konto_ref": "k"
+    }))
+    .unwrap();
+    assert_eq!(ziel_kennung(&Endpunkt::Ftps(f)), PathBuf::from("ftps://ftp.example.de:21/web/"));
+}
+
+#[test]
+fn kein_manifest_hat_eigene_kategorie() {
+    let e = StellwerkError::KeinManifest;
+    assert_eq!(e.kategorie(), "kein_manifest");
+    assert!(e.to_string().contains("Mit Server vergleichen"));
+}
