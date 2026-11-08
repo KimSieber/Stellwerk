@@ -987,10 +987,6 @@ fn ftps_erst_mit_dem_server_dann_gegen_das_manifest() {
     let neu = ftps_vergleich(&a, Some(true)).unwrap();
     assert_eq!(neu["zusammenfassung"]["loeschen"], 0);
     assert_eq!(db(&a).manifest("ftps-web", "server").unwrap().len(), 1);
-
-    // Übertragen zum Server folgt erst in Schritt 3
-    let e = a.aufruf("plan_erstellen", json!({ "vergleichId": neu["vergleich_id"] })).unwrap_err();
-    assert_eq!(e["kategorie"], "nicht_unterstuetzt");
 }
 
 #[test]
@@ -1014,4 +1010,184 @@ fn vergleich_starten_mit_falschem_server_wert_wird_abgewiesen() {
     let a = app();
     let e = a.aufruf("vergleich_starten", json!({ "strecke": "x", "stufe": "y", "fortschritt": KANAL, "server": "ja" }));
     assert!(e.unwrap_err().to_string().contains("server"));
+}
+
+// --- FTPS übertragen (v0.4 Schritt 3) -------------------------------------------
+
+fn passwort_hinterlegen(a: &Testapp) {
+    a.aufruf("passwort_speichern", json!({ "konto": "stellwerk:ftps-web:server", "passwort": stellwerk_testserver::PASSWORT }))
+        .unwrap();
+}
+
+/// Mit dem Server vergleichen und den Plan erstellen; liefert (Vergleich, Vorschau).
+fn ftps_planen(a: &Testapp, server: bool) -> (Value, Value) {
+    let id = ftps_vergleich(a, Some(server)).unwrap()["vergleich_id"].clone();
+    let vorschau = a.aufruf("plan_erstellen", json!({ "vergleichId": id })).unwrap();
+    (id, vorschau)
+}
+
+fn seite(a: &Testapp, id: &Value) -> Vec<Value> {
+    let s = a.aufruf("diff_seite", json!({ "vergleichId": id, "offset": 0, "limit": 50, "filter": "alle", "zugeklappt": [] })).unwrap();
+    s["zeilen"].as_array().unwrap().clone()
+}
+
+fn gelernt(a: &Testapp) -> Option<String> {
+    db(a).status("ftps-web", "server", "umbenennen_ueberschreibt").unwrap()
+}
+
+#[test]
+fn ftps_uebertragen_schreibt_den_server_und_den_letzten_bekannten_stand() {
+    let a = app();
+    let s = stellwerk_testserver::starten(Default::default());
+    ftps_strecke(&a, &s);
+    let q = a.wurzel.join("daten/quelle");
+    std::fs::create_dir_all(q.join("css")).unwrap();
+    std::fs::write(q.join("css/site.css"), "body{}").unwrap();
+    passwort_hinterlegen(&a);
+
+    let (id, vorschau) = ftps_planen(&a, true);
+    assert_eq!(vorschau["worker"], 2, "FTPS: fest 2 Verbindungen");
+    assert_eq!(vorschau["ziel"], json!(format!("ftps://127.0.0.1:{}/", s.port)));
+    assert_eq!(vorschau["zusammenfassung"]["kopieren"], 2);
+    assert_eq!(vorschau["zusammenfassung"]["dateien_loeschen"], 1);
+    let r = uebertragen(&a, &id, true, false).unwrap();
+    assert_eq!(r["ergebnis"]["erledigt"], 4, "{r}");
+    assert_eq!(r["ergebnis"]["fehler"], json!([]));
+
+    // Am Server: neu, Ordner, gelöscht; „gleich“ (nur Größe) bleibt unberührt
+    assert_eq!(std::fs::read_to_string(s.wurzel().join("index.php")).unwrap(), "neu");
+    assert_eq!(std::fs::read_to_string(s.wurzel().join("css/site.css")).unwrap(), "body{}");
+    assert!(!s.wurzel().join("alt.txt").exists());
+    assert_eq!(std::fs::read_to_string(s.wurzel().join("gleich.css")).unwrap(), "xyz");
+
+    // Letzter bekannter Stand: übertragene Dateien mit Hash und Lauf, Gelöschtes heraus
+    let lauf = r["lauf_id"].as_str().unwrap();
+    let m = db(&a).manifest("ftps-web", "server").unwrap();
+    let stand: Vec<_> = m.iter().map(|e| (e.pfad.as_str(), e.ist_ordner, e.hash.is_some(), e.lauf_id.as_deref())).collect();
+    assert_eq!(
+        stand,
+        [("css", true, false, Some(lauf)), ("css/site.css", false, true, Some(lauf)), ("gleich.css", false, false, None), ("index.php", false, true, Some(lauf))]
+    );
+    assert!(m.iter().find(|e| e.pfad.as_str() == "index.php").unwrap().mtime_ns.is_some());
+    // Nichts ersetzt → über das Umbenennen noch nichts gelernt
+    assert_eq!(gelernt(&a), None);
+
+    // Schnell vergleichen: alles gleich, übertragene Dateien ohne Hinweis
+    let v = ftps_vergleich(&a, Some(false)).unwrap();
+    assert_eq!(v["zusammenfassung"]["ausgewaehlt"], 0);
+    let zeilen = seite(&a, &v["vergleich_id"]);
+    let hinweise = |pfad: &str| zeilen.iter().find(|z| z["pfad"] == pfad).unwrap()["warnungen"].clone();
+    assert_eq!(hinweise("index.php"), json!([]));
+    assert_eq!(hinweise("gleich.css"), json!([{ "art": "inhalt_nicht_geprueft" }]));
+
+    // Ersetzen: der Testserver überschreibt beim Umbenennen → gelernt „ja“
+    std::fs::write(q.join("index.php"), "neuer!").unwrap();
+    let (id, vorschau) = ftps_planen(&a, false);
+    assert_eq!(vorschau["zusammenfassung"]["ueberschreiben"], 1);
+    uebertragen(&a, &id, true, false).unwrap();
+    assert_eq!(std::fs::read_to_string(s.wurzel().join("index.php")).unwrap(), "neuer!");
+    assert_eq!(gelernt(&a).as_deref(), Some("ja"));
+
+    // Verbindungstest zeigt das Gelernte der Stufe
+    let mut ziel = ftps_ziel(s.port, Some(&s.fingerprint));
+    ziel["konto_ref"] = json!("stellwerk:ftps-web:server");
+    let t = a.aufruf("verbindung_testen", json!({ "ziel": ziel })).unwrap();
+    assert_eq!(t["umbenennen_ueberschreibt"], true);
+    assert_eq!(t["verzeichnis"], "/", "Ergebnis des Tests bleibt flach");
+}
+
+#[test]
+fn ftps_server_ueberschreibt_beim_umbenennen_nicht() {
+    let a = app();
+    let aufbau = stellwerk_testserver::Aufbau { umbenennen_ueberschreibt_nicht: true, ..Default::default() };
+    let s = stellwerk_testserver::starten(aufbau);
+    ftps_strecke(&a, &s);
+    passwort_hinterlegen(&a);
+    std::fs::write(s.wurzel().join("index.php"), "alt!").unwrap();
+    for (inhalt, erwartet) in [("neu-1", "nein"), ("neu--2", "nein")] {
+        std::fs::write(a.wurzel.join("daten/quelle/index.php"), inhalt).unwrap();
+        let (id, _) = ftps_planen(&a, true);
+        let r = uebertragen(&a, &id, true, false).unwrap();
+        assert_eq!(r["ergebnis"]["fehler"], json!([]), "{r}");
+        assert_eq!(std::fs::read_to_string(s.wurzel().join("index.php")).unwrap(), inhalt);
+        assert_eq!(gelernt(&a).as_deref(), Some(erwartet));
+    }
+    let mut ziel = ftps_ziel(s.port, Some(&s.fingerprint));
+    ziel["konto_ref"] = json!("stellwerk:ftps-web:server");
+    assert_eq!(a.aufruf("verbindung_testen", json!({ "ziel": ziel })).unwrap()["umbenennen_ueberschreibt"], false);
+}
+
+#[test]
+fn ftps_lauf_wird_nicht_angelegt_ohne_passwort_oder_bei_geaendertem_ziel() {
+    let a = app();
+    let s = stellwerk_testserver::starten(Default::default());
+    ftps_strecke(&a, &s);
+    passwort_hinterlegen(&a);
+
+    // Passwort inzwischen entfernt: Fehler vor dem Lauf, nichts angelegt
+    let (id, _) = ftps_planen(&a, true);
+    a.aufruf("passwort_entfernen", json!({ "konto": "stellwerk:ftps-web:server" })).unwrap();
+    assert_eq!(uebertragen(&a, &id, true, false).unwrap_err()["kategorie"], "nicht_gefunden");
+    assert_eq!(a.aufruf("laeufe", json!({ "strecke": "ftps-web", "stufe": "server", "limit": 5 })).unwrap(), json!([]));
+    assert!(s.wurzel().join("alt.txt").exists());
+
+    // Ziel nach dem Plan geändert (anderer Serverpfad): abgewiesen
+    passwort_hinterlegen(&a);
+    let (id, _) = ftps_planen(&a, true);
+    let mut strecke = a.aufruf("strecke_laden", json!({ "id": "ftps-web" })).unwrap();
+    strecke["stufen"][0]["ziel"]["pfad"] = json!("/anders");
+    a.aufruf("strecke_speichern", json!({ "strecke": strecke })).unwrap();
+    let e = uebertragen(&a, &id, true, false).unwrap_err();
+    assert_eq!(e["kategorie"], "nicht_unterstuetzt");
+    assert!(e["meldung"].as_str().unwrap().contains("neu vergleichen"));
+    // Stufe inzwischen ganz entfernt
+    let (id, _) = {
+        strecke["stufen"][0]["ziel"]["pfad"] = json!("/");
+        a.aufruf("strecke_speichern", json!({ "strecke": strecke })).unwrap();
+        ftps_planen(&a, true)
+    };
+    strecke["stufen"][0]["id"] = json!("umbenannt");
+    a.aufruf("strecke_speichern", json!({ "strecke": strecke })).unwrap();
+    assert_eq!(uebertragen(&a, &id, true, false).unwrap_err()["kategorie"], "nicht_unterstuetzt");
+    assert!(s.wurzel().join("alt.txt").exists());
+}
+
+#[test]
+fn verbindung_testen_ohne_gelerntes() {
+    let a = app();
+    let s = stellwerk_testserver::starten(Default::default());
+    let pw = stellwerk_testserver::PASSWORT;
+    for (konto, status) in [("anderes-konto", None), ("stellwerk:x:y", None), ("stellwerk:x:y", Some("quatsch"))] {
+        if let Some(w) = status {
+            db(&a).status_setzen("x", "y", "umbenennen_ueberschreibt", w, 0).unwrap();
+        }
+        let mut ziel = ftps_ziel(s.port, Some(&s.fingerprint));
+        ziel["konto_ref"] = json!(konto);
+        let t = a.aufruf("verbindung_testen", json!({ "ziel": ziel, "passwort": pw })).unwrap();
+        assert_eq!(t["umbenennen_ueberschreibt"], Value::Null, "{konto} {status:?}");
+    }
+}
+
+#[test]
+fn ftps_rechte_nach_stufen_einstellung_aendern_den_letzten_stand_nicht() {
+    let a = app();
+    let s = stellwerk_testserver::starten(stellwerk_testserver::Aufbau { site_chmod: true, ..Default::default() });
+    ftps_strecke(&a, &s);
+    passwort_hinterlegen(&a);
+    let mut strecke = a.aufruf("strecke_laden", json!({ "id": "ftps-web" })).unwrap();
+    strecke["stufen"][0]["rechte"] = json!({ "modus": "fest", "ordner": "755", "dateien": "640" });
+    a.aufruf("strecke_speichern", json!({ "strecke": strecke })).unwrap();
+
+    let (id, vorschau) = ftps_planen(&a, true);
+    assert_eq!(vorschau["zusammenfassung"]["rechte"], 1, "{vorschau}");
+    let r = uebertragen(&a, &id, true, false).unwrap();
+    assert_eq!(r["ergebnis"]["fehler"], json!([]), "{r}");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let modus = std::fs::metadata(s.wurzel().join("index.php")).unwrap().permissions().mode() & 0o777;
+        assert_eq!(modus, 0o640);
+    }
+    let pfade: Vec<_> = db(&a).manifest("ftps-web", "server").unwrap().into_iter().map(|e| e.pfad.as_str().to_string()).collect();
+    assert_eq!(pfade, ["gleich.css", "index.php"]);
 }

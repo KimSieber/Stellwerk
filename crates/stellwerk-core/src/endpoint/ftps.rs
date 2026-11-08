@@ -39,6 +39,36 @@ use crate::scan::{aus_liste, ist_konfliktkopie, ScanErgebnis, ScanFehler};
 /// Zeitlimit für Verbindungsaufbau und jede Antwort des Servers.
 pub const ZEITLIMIT: Duration = Duration::from_secs(30);
 
+/// Zeitlimit für den Aufbau der Datenverbindung. Kürzer als [`ZEITLIMIT`]: Ist der
+/// vom Server genannte Port unterwegs gesperrt, wird schneller ein neuer versucht.
+pub const DATEN_VERBINDEN: Duration = Duration::from_secs(10);
+
+/// So oft wird ein Befehl mit Datenverbindung versucht, wenn die Datenverbindung
+/// nicht zustande kommt – jeder Versuch mit einem neuen Port vom Server.
+pub const DATEN_VERSUCHE: usize = 3;
+
+thread_local! {
+    /// Ob im laufenden Versuch die Datenverbindung gescheitert ist. Die Verbindung
+    /// wird auf dem Thread des Befehls aufgebaut, daher genügt ein Wert je Thread.
+    static DATENKANAL_GESCHEITERT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Führt einen Befehl mit Datenverbindung aus. Kam nur die Datenverbindung nicht
+/// zustande, wird er wiederholt (neues `PASV`, neuer Port) – sicher, weil
+/// Stellwerk die Datenverbindung aufbaut, **bevor** der Befehl (`STOR`, `MLSD` …)
+/// an den Server geht. Andere Fehler werden nie wiederholt.
+fn mit_datenkanal<T>(mut befehl: impl FnMut() -> suppaftp::FtpResult<T>) -> suppaftp::FtpResult<T> {
+    let mut versuch = 1;
+    loop {
+        DATENKANAL_GESCHEITERT.set(false);
+        let r = befehl();
+        if r.is_ok() || !DATENKANAL_GESCHEITERT.get() || versuch == DATEN_VERSUCHE {
+            return r;
+        }
+        versuch += 1;
+    }
+}
+
 /// SHA-256 als `AB:CD:…` (Großbuchstaben, Doppelpunkte).
 pub fn fingerprint_text(f: &[u8; 32]) -> String {
     f.iter().map(|b| format!("{b:02X}")).collect::<Vec<_>>().join(":")
@@ -156,6 +186,10 @@ pub struct Verbindungstest {
     pub zertifikat: Zertifikatsstand,
 }
 
+/// Gleichzeitige Verbindungen beim Übertragen – fest, bis die adaptive
+/// Parallelität kommt (Entscheidung 08.11.2026).
+pub const FTPS_WORKER: usize = 2;
+
 /// Ein FTPS-Ziel mit Zugangsdaten.
 pub struct Ftps {
     ziel: FtpsEndpunkt,
@@ -261,7 +295,7 @@ impl Ftps {
                 return Err(StellwerkError::Abbruch);
             }
             let abs = self.absolut(ordner.as_str());
-            let zeilen = match if mlsd { ftp.mlsd(Some(&abs)) } else { ftp.list(Some(&abs)) } {
+            let zeilen = match mit_datenkanal(|| if mlsd { ftp.mlsd(Some(&abs)) } else { ftp.list(Some(&abs)) }) {
                 Ok(z) => z,
                 Err(e) if ordner.ist_wurzel() => return Err(StellwerkError::NichtGefunden(format!("Serverpfad {abs} nicht lesbar: {e}"))),
                 Err(e) => {
@@ -353,7 +387,7 @@ impl Ftps {
         let mut ftp = self.anmelden()?;
         let begruessung = ftp.get_welcome_msg().map(begruessung_text);
         let verzeichnis = ftp.pwd().map_err(ftp_fehler)?;
-        let eintraege = ftp.nlst(None).map_err(ftp_fehler)?.iter().filter(ist_eintrag).count();
+        let eintraege = mit_datenkanal(|| ftp.nlst(None)).map_err(ftp_fehler)?.iter().filter(ist_eintrag).count();
         let feat = ftp.feat().unwrap_or_default();
         let chmod = match ftp.site("HELP") {
             Ok(r) => Some(nennt_chmod(&r.body)),
@@ -416,7 +450,7 @@ impl FtpsVerbindung<'_> {
     /// Hochladen nach `tmp`, Zeit setzen, umbenennen – ohne Aufräumen (macht der Aufrufer).
     fn hochladen(&mut self, q: QuellDatei, tmp: &str, ziel: &str, neu: bool, ort: &RelPath, abbruch: &AtomicBool) -> Result<Geschrieben> {
         let QuellDatei { mut inhalt, geaendert, .. } = q;
-        let mut strom = self.ftp.put_with_stream(tmp).map_err(ftp_fehler)?;
+        let mut strom = mit_datenkanal(|| self.ftp.put_with_stream(tmp)).map_err(ftp_fehler)?;
         let geschrieben = match kopieren(&mut inhalt, &mut strom, abbruch, Path::new(ort.as_str()), Path::new(tmp)) {
             Ok(g) => g,
             Err(e) => {
@@ -658,9 +692,16 @@ fn begruessung_pruefen(s: &TcpStream, ort: &str, t: Duration) -> Result<()> {
 
 /// Datenverbindung im passiven Modus – mit denselben Zeitlimits.
 fn datenkanal(a: SocketAddr, t: Duration) -> suppaftp::FtpResult<TcpStream> {
-    let s = TcpStream::connect_timeout(&a, t).map_err(FtpError::ConnectionError)?;
-    zeitlimits(&s, t);
-    Ok(s)
+    match TcpStream::connect_timeout(&a, t.min(DATEN_VERBINDEN)) {
+        Ok(s) => {
+            zeitlimits(&s, t);
+            Ok(s)
+        }
+        Err(e) => {
+            DATENKANAL_GESCHEITERT.set(true);
+            Err(FtpError::ConnectionError(e))
+        }
+    }
 }
 
 /// Lese- und Schreib-Zeitlimit; scheitert nur bei einer Dauer von 0, die es hier nicht gibt.
@@ -718,6 +759,47 @@ fn nennt_chmod(text: &[u8]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn datenkanal_meldet_scheitern_und_erfolg() {
+        let lauscher = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let frei = lauscher.local_addr().unwrap();
+        DATENKANAL_GESCHEITERT.set(false);
+        let s = datenkanal(frei, Duration::from_secs(5)).unwrap();
+        assert_eq!(s.read_timeout().unwrap(), Some(Duration::from_secs(5)));
+        assert!(!DATENKANAL_GESCHEITERT.get());
+        // Nicht erreichbar (Port geschlossen): Fehler und Merker gesetzt
+        drop(lauscher);
+        assert!(matches!(datenkanal(frei, Duration::from_secs(5)), Err(FtpError::ConnectionError(_))));
+        assert!(DATENKANAL_GESCHEITERT.get());
+    }
+
+    /// Befehl, der `n`-mal an der Datenverbindung scheitert (oder mit `anders` an etwas anderem).
+    fn befehl(versuche: &mut usize, scheitert: usize, anders: bool) -> suppaftp::FtpResult<&'static str> {
+        *versuche += 1;
+        if anders {
+            return Err(FtpError::BadResponse);
+        }
+        if *versuche <= scheitert {
+            DATENKANAL_GESCHEITERT.set(true);
+            return Err(FtpError::ConnectionError(io::Error::from(io::ErrorKind::TimedOut)));
+        }
+        Ok("ok")
+    }
+
+    #[test]
+    fn datenkanal_wird_mit_neuem_port_wiederholt() {
+        for (scheitert, ok, versuche) in [(0, true, 1), (2, true, 3), (3, false, 3), (9, false, 3)] {
+            let mut n = 0;
+            let r = mit_datenkanal(|| befehl(&mut n, scheitert, false));
+            assert_eq!((r.is_ok(), n), (ok, versuche), "scheitert {scheitert}×");
+        }
+        // Andere Fehler (Server, Steuerverbindung) nie wiederholen – auch nach einem früheren Scheitern
+        DATENKANAL_GESCHEITERT.set(true);
+        let mut n = 0;
+        assert!(matches!(mit_datenkanal(|| befehl(&mut n, 0, true)), Err(FtpError::BadResponse)));
+        assert_eq!(n, 1);
+    }
 
     #[test]
     fn fingerprint_hin_und_zurueck() {

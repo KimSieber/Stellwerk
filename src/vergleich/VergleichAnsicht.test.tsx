@@ -563,13 +563,11 @@ describe("Vergleichsansicht – FTPS-Ziel", () => {
     expect(server(aufrufe)).toEqual([false, true]);
   });
 
-  it("gegen das Manifest: Hinweis, „Mit Server vergleichen“, „Schnell vergleichen“ ohne Server; Übertragen gesperrt", async () => {
+  it("gegen das Manifest: Hinweis, „Mit Server vergleichen“, „Schnell vergleichen“ ohne Server; Übertragen möglich", async () => {
     const aufrufe = rust({ vergleich_starten: (a) => ftps((a as { server: boolean }).server ? "server" : "manifest") });
     ansicht();
     expect(await screen.findByText(/letzter bekannter Stand – der Server wurde nicht gelesen/)).toBeInTheDocument();
-    const uebertragen = screen.getByRole("button", { name: "Übertragen …" });
-    expect(uebertragen).toBeDisabled();
-    expect(uebertragen).toHaveAttribute("title", "Übertragen zum Server folgt im nächsten Schritt");
+    expect(screen.getByRole("button", { name: "Übertragen …" })).toBeEnabled();
     expect(screen.queryByRole("button", { name: "Neu vergleichen" })).toBeNull();
     await userEvent.click(screen.getByRole("button", { name: "Mit Server vergleichen" }));
     expect(await screen.findByText("Stand des Servers: soeben vollständig gelesen.")).toBeInTheDocument();

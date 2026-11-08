@@ -6,11 +6,13 @@ use std::sync::atomic::AtomicBool;
 use std::time::{Duration, Instant};
 
 use serde_json::json;
-use stellwerk_core::endpoint::ftps::Verbindungstest;
-use stellwerk_core::endpoint::{Ftps, Lokal};
-use stellwerk_core::exec::{direkt_ausfuehren, standard_worker, ExecFortschritt, LaufErgebnis, Optionen};
-use stellwerk_core::plan::{plan_erstellen as plan_erstellen_aus, Plan, PlanWarnung, PlanZusammenfassung};
-use stellwerk_core::store::{jetzt_ms, JournalStatus, JournalZeile, Lauf, LaufPhase, ProtokollEbene, Protokollieren};
+use stellwerk_core::endpoint::ftps::{Verbindungstest, FTPS_WORKER};
+use stellwerk_core::endpoint::{Ftps, Lokal, ZielEndpunkt};
+use stellwerk_core::exec::{direkt_ausfuehren, standard_worker, ExecFortschritt, LaufErgebnis, Optionen, Uebertragen};
+use stellwerk_core::plan::{plan_erstellen as plan_erstellen_aus, OpArt, Operation, Plan, PlanWarnung, PlanZusammenfassung};
+use stellwerk_core::store::{
+    jetzt_ms, Datenbank, JournalStatus, JournalZeile, Lauf, LaufPhase, ManifestEintrag, ProtokollEbene, Protokollieren,
+};
 
 use serde::Serialize;
 use tauri::ipc::Channel;
@@ -211,8 +213,13 @@ pub fn passwort_vorhanden(state: State<'_, AppState>, konto: String) -> Antwort<
 /// Datenkanal und Fähigkeiten. Liest nur – auf dem Server wird nichts verändert, daher
 /// kein Protokolleintrag (E8). Passwort: das eingegebene (noch nicht gespeicherte),
 /// sonst das aus dem Schlüsselbund. Es erscheint in keiner Antwort.
+/// Zusätzlich, was Stellwerk über den Server dieser Stufe gelernt hat.
 #[tauri::command]
-pub async fn verbindung_testen(state: State<'_, AppState>, ziel: Endpunkt, passwort: Option<String>) -> Antwort<Verbindungstest> {
+pub async fn verbindung_testen(
+    state: State<'_, AppState>,
+    ziel: Endpunkt,
+    passwort: Option<String>,
+) -> Antwort<VerbindungstestAntwort> {
     let Endpunkt::Ftps(ziel) = ziel else {
         return Err(StellwerkError::NichtUnterstuetzt("Verbindungstest gibt es nur für FTPS-Ziele".into()).into());
     };
@@ -220,9 +227,44 @@ pub async fn verbindung_testen(state: State<'_, AppState>, ziel: Endpunkt, passw
         Some(p) => p,
         None => hinterlegtes_passwort(&state, &ziel.konto_ref)?,
     };
+    let umbenennen_ueberschreibt = match stufe_aus_konto(&ziel.konto_ref) {
+        Some((strecke, stufe)) => gelernt_umbenennen(&state.datenbank.lock().unwrap(), strecke, stufe)?,
+        None => None,
+    };
     let ftps = Ftps::new(&ziel, &passwort)?;
     let test = tauri::async_runtime::spawn_blocking(move || ftps.verbindung_testen()).await.expect("Verbindungstest beendet");
-    Ok(test?)
+    Ok(VerbindungstestAntwort { test: test?, umbenennen_ueberschreibt })
+}
+
+/// Antwort von `verbindung_testen`.
+#[derive(Debug, Serialize)]
+pub struct VerbindungstestAntwort {
+    #[serde(flatten)]
+    pub test: Verbindungstest,
+    /// Gelernt aus Läufen: Ersetzt der Server beim Umbenennen eine vorhandene Datei?
+    /// `None`: noch nicht bekannt (oder Ziel noch keiner Stufe zugeordnet).
+    pub umbenennen_ueberschreibt: Option<bool>,
+}
+
+/// Schlüssel in `stufen_status`: Ersetzt der Server beim Umbenennen (`ja`/`nein`)?
+const UMBENENNEN_UEBERSCHREIBT: &str = "umbenennen_ueberschreibt";
+
+/// Strecke und Stufe aus dem Konto `stellwerk:<strecke>:<stufe>`.
+fn stufe_aus_konto(konto: &str) -> Option<(&str, &str)> {
+    let mut teile = konto.split(':');
+    match (teile.next(), teile.next(), teile.next(), teile.next()) {
+        (Some("stellwerk"), Some(strecke), Some(stufe), None) => Some((strecke, stufe)),
+        _ => None,
+    }
+}
+
+/// Gelerntes `umbenennen_ueberschreibt` der Stufe; Unbekanntes gilt als nicht gelernt.
+fn gelernt_umbenennen(db: &Datenbank, strecke: &str, stufe: &str) -> Result<Option<bool>, StellwerkError> {
+    Ok(match db.status(strecke, stufe, UMBENENNEN_UEBERSCHREIBT)?.as_deref() {
+        Some("ja") => Some(true),
+        Some("nein") => Some(false),
+        _ => None,
+    })
 }
 
 /// Passwort aus dem Schlüsselbund; fehlt es → „nicht gefunden“ mit Hinweis.
@@ -491,9 +533,6 @@ pub fn plan_erstellen(state: State<'_, AppState>, vergleich_id: String) -> Antwo
                 "Quelle oder Ziel der Stufe wurden seit dem Vergleich geändert – bitte neu vergleichen".into(),
             ));
         }
-        if matches!(st.ziel, Endpunkt::Ftps(_)) {
-            return Err(StellwerkError::NichtUnterstuetzt("Übertragen zum Server folgt im nächsten Schritt von v0.4".into()));
-        }
         let plan = plan_erstellen_aus(o.sitzung.eintraege(), &st.rechte)?;
         let vorschau = PlanVorschau {
             zusammenfassung: plan.zusammenfassung.clone(),
@@ -501,7 +540,7 @@ pub fn plan_erstellen(state: State<'_, AppState>, vergleich_id: String) -> Antwo
             warnungen: plan.warnungen.clone(),
             quelle: o.quelle.display().to_string(),
             ziel: o.ziel.display().to_string(),
-            worker: standard_worker(),
+            worker: worker_fuer(&st.ziel),
         };
         o.plan = Some(plan);
         Ok(vorschau)
@@ -535,6 +574,7 @@ pub async fn lauf_starten(
     if plan.hat_loeschungen() && !loeschen_bestaetigt {
         return Err(StellwerkError::NichtBestaetigt(format!("{} Löschungen", plan.loeschliste.len())).into());
     }
+    let ziel = ziel_der_stufe(&state, &strecke, &stufe, &ziel)?;
     let schluessel = format!("{strecke}/{stufe}");
     let abbruch = state
         .laeufe
@@ -545,6 +585,53 @@ pub async fn lauf_starten(
     Ok(ergebnis?)
 }
 
+/// So viele Dateien werden gleichzeitig geschrieben.
+fn worker_fuer(ziel: &Endpunkt) -> usize {
+    match ziel {
+        Endpunkt::Lokal { .. } => standard_worker(),
+        Endpunkt::Ftps(_) => FTPS_WORKER,
+    }
+}
+
+/// Ziel der Stufe, wie es jetzt konfiguriert ist – es muss dasselbe sein wie beim Vergleich.
+fn ziel_der_stufe(state: &AppState, strecke: &str, stufe: &str, kennung: &Path) -> Result<Endpunkt, StellwerkError> {
+    let s = state.store.strecke_laden(strecke)?;
+    s.stufen
+        .into_iter()
+        .find(|st| st.id == stufe)
+        .map(|st| st.ziel)
+        .filter(|z| ziel_kennung(z) == kennung)
+        .ok_or_else(|| StellwerkError::NichtUnterstuetzt("Ziel der Stufe wurde seit dem Vergleich geändert – bitte neu vergleichen".into()))
+}
+
+/// Nach einer erledigten Operation am Server: den letzten bekannten Stand (Manifest)
+/// fortschreiben – Datei mit Hash und Zeit der Quelle, neuer Ordner, Gelöschtes heraus.
+fn manifest_fortschreiben(
+    db: &Datenbank,
+    ort: (&str, &str, &str),
+    op: &Operation,
+    uebertragen: Option<&Uebertragen>,
+) -> Result<(), StellwerkError> {
+    let (strecke, stufe, lauf_id) = ort;
+    let eintrag = |ist_ordner, groesse, hash, mtime_ns| ManifestEintrag {
+        pfad: op.pfad.clone(),
+        ist_ordner,
+        groesse,
+        hash,
+        mtime_ns,
+        lauf_id: Some(lauf_id.to_string()),
+    };
+    match (op.art, uebertragen) {
+        (OpArt::Kopieren | OpArt::Ueberschreiben, Some(u)) => {
+            db.manifest_setzen(strecke, stufe, &eintrag(false, u.geschrieben.bytes, Some(u.geschrieben.hash), u.quelle_mtime_ns))
+        }
+        (OpArt::OrdnerAnlegen, _) => db.manifest_setzen(strecke, stufe, &eintrag(true, 0, None, None)),
+        (OpArt::DateiLoeschen | OpArt::OrdnerLoeschen, _) => db.manifest_entfernen(strecke, stufe, &op.pfad),
+        // Rechte stehen nicht im Manifest; erledigte Dateien kommen immer mit `uebertragen`
+        _ => Ok(()),
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn uebertragen(
     state: &AppState,
@@ -552,13 +639,27 @@ fn uebertragen(
     strecke: &str,
     stufe: &str,
     quelle: &Path,
-    ziel: &Path,
+    ziel: &Endpunkt,
     bei_fehler_stoppen: bool,
     abbruch: &AtomicBool,
     fortschritt: &Channel<ExecFortschritt>,
 ) -> Result<LaufAntwort, StellwerkError> {
     let db = &state.datenbank;
-    let worker = standard_worker();
+    let worker = worker_fuer(ziel);
+    // Alles, was scheitern kann, bevor der Lauf angelegt wird
+    let (ftps, lokal) = match ziel {
+        Endpunkt::Ftps(f) => {
+            let gelernt = gelernt_umbenennen(&db.lock().unwrap(), strecke, stufe)?;
+            let ftps = Ftps::new(f, &hinterlegtes_passwort(state, &f.konto_ref)?)?.mit_umbenennen_ueberschreibt(gelernt);
+            (Some(ftps), None)
+        }
+        Endpunkt::Lokal { pfad } => (None, Some(Lokal::new(pfad))),
+    };
+    let ziel_ep: &dyn ZielEndpunkt = match &ftps {
+        Some(f) => f,
+        None => lokal.as_ref().expect("lokales Ziel"),
+    };
+    let ziel = ziel_kennung(ziel);
     let lauf_id = db.lock().unwrap().lauf_anlegen(strecke, stufe, Modus::Direkt, plan, jetzt_ms())?;
     let ort = (strecke, stufe, lauf_id.as_str());
     {
@@ -580,13 +681,16 @@ fn uebertragen(
     let ergebnis = direkt_ausfuehren(
         plan,
         &Lokal::new(quelle),
-        &Lokal::new(ziel),
+        ziel_ep,
         &lauf_id,
         &opt,
         abbruch,
-        &mut |op, status, meldung, _| {
+        &mut |op, status, meldung, uebertragen| {
             let db = db.lock().unwrap();
             db.journal_setzen(&lauf_id, op.nr, status, meldung, jetzt_ms())?;
+            if ftps.is_some() && status == JournalStatus::Erledigt {
+                manifest_fortschreiben(&db, ort, op, uebertragen)?;
+            }
             if status == JournalStatus::Fehler {
                 let details = json!({ "op": op.art, "meldung": meldung });
                 db.protokollieren(&eintrag(ort, ProtokollEbene::Fehler, "operation_fehler", Some(op.pfad.as_str()), details))?;
@@ -606,6 +710,9 @@ fn uebertragen(
     };
     let zusammen = json!(ergebnis);
     let db = db.lock().unwrap();
+    if let Some(gelernt) = ftps.as_ref().and_then(Ftps::umbenennen_ueberschreibt) {
+        db.status_setzen(strecke, stufe, UMBENENNEN_UEBERSCHREIBT, if gelernt { "ja" } else { "nein" }, jetzt_ms())?;
+    }
     db.lauf_phase(&lauf_id, phase, jetzt_ms(), Some(&zusammen))?;
     db.protokollieren(&eintrag(ort, ebene, "lauf_beendet", None, zusammen))?;
     Ok(LaufAntwort { lauf_id, ergebnis })

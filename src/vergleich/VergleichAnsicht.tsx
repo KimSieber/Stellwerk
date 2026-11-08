@@ -10,7 +10,7 @@
 //
 // FTPS-Ziel: „Schnell vergleichen“ vergleicht gegen das Manifest (ohne Serverkontakt),
 // „Mit Server vergleichen“ liest den Server vollständig. In der Oberfläche heißt das
-// Manifest „letzter bekannter Stand“. Übertragen folgt im nächsten Schritt.
+// Manifest „letzter bekannter Stand“.
 
 import { useEffect, useRef, useState } from "react";
 
@@ -131,11 +131,9 @@ export function VergleichAnsicht({ strecke, stufe, titel, start, onZurueck }: Pr
           )}
           <button
             className="primaer"
-            disabled={zustand.art !== "fertig" || ftps}
-            title={
-              ftps ? "Übertragen zum Server folgt im nächsten Schritt" : "Ausgewähltes ins Ziel übertragen – vorher wird der Plan zur Bestätigung gezeigt"
-            }
-            onClick={zustand.art === "fertig" && !ftps ? () => setUebertragen(zustand.v.vergleich_id) : undefined}
+            disabled={zustand.art !== "fertig"}
+            title="Ausgewähltes ins Ziel übertragen – vorher wird der Plan zur Bestätigung gezeigt"
+            onClick={zustand.art === "fertig" ? () => setUebertragen(zustand.v.vergleich_id) : undefined}
           >
             Übertragen …
           </button>

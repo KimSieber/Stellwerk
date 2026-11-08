@@ -73,11 +73,19 @@ function Erfolg({ e, host }: { e: Ergebnis; host: string }) {
         <dt>Verzeichnisliste (MLSD)</dt>
         <dd>{f.mlsd ? "ja" : "nein – einfache Liste (LIST)"}</dd>
         <dt>Änderungszeit setzen (MFMT)</dt>
-        <dd>{f.mfmt ? "ja" : "nein – Vergleich über das Manifest"}</dd>
+        <dd>{f.mfmt ? "ja" : "nein – Stellwerk merkt sich die Zeit selbst"}</dd>
         <dt>Dateirechte (SITE CHMOD)</dt>
         <dd>{f.chmod === null ? "unbekannt – wird beim ersten Setzen geprüft" : janein(f.chmod)}</dd>
         <dt>Fortsetzen (REST)</dt>
         <dd>{janein(f.fortsetzen)}</dd>
+        <dt>Ersetzen per Umbenennen</dt>
+        <dd>
+          {e.umbenennen_ueberschreibt === null
+            ? "noch nicht bekannt – zeigt sich beim ersten Ersetzen"
+            : e.umbenennen_ueberschreibt
+              ? "ja"
+              : "nein – alte Datei wird vorher gelöscht (kurz fehlt sie)"}
+        </dd>
       </dl>
     </div>
   );

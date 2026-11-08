@@ -20,6 +20,7 @@ function ergebnis(teil: Partial<Ergebnis> = {}): Ergebnis {
     eintraege: 1,
     faehigkeiten: { mlsd: true, mfmt: true, chmod: true, fortsetzen: true, utf8: true },
     zertifikat: { fingerprint: FP, vom_system: true },
+    umbenennen_ueberschreibt: true,
     ...teil,
   };
 }
@@ -47,6 +48,7 @@ describe("Verbindung testen", () => {
     expect(ok).toHaveTextContent(/MFMT\)ja/);
     expect(ok).toHaveTextContent(/CHMOD\)ja/);
     expect(ok).toHaveTextContent(/REST\)ja/);
+    expect(ok).toHaveTextContent(/Umbenennenja$/);
     expect(knopf()).toHaveTextContent("Verbindung testen");
   });
 
@@ -56,6 +58,7 @@ describe("Verbindung testen", () => {
       eintraege: 2,
       faehigkeiten: { mlsd: false, mfmt: false, chmod: null, fortsetzen: false, utf8: false },
       zertifikat: { fingerprint: FP, vom_system: false },
+      umbenennen_ueberschreibt: null,
     });
     const a = rustAttrappe({ verbindung_testen: () => e });
     render(<Verbindungstest ziel={ziel} passwort="geheim" onZertifikat={() => {}} />);
@@ -66,16 +69,20 @@ describe("Verbindung testen", () => {
     expect(ok).not.toHaveTextContent("„");
     expect(ok).toHaveTextContent("über den bestätigten Fingerprint");
     expect(ok).toHaveTextContent("nein – einfache Liste (LIST)");
-    expect(ok).toHaveTextContent("nein – Vergleich über das Manifest");
+    expect(ok).toHaveTextContent("nein – Stellwerk merkt sich die Zeit selbst");
+    expect(ok).toHaveTextContent("noch nicht bekannt – zeigt sich beim ersten Ersetzen");
     expect(ok).toHaveTextContent("unbekannt – wird beim ersten Setzen geprüft");
     expect(ok).toHaveTextContent(/REST\)nein/);
   });
 
   it("SITE CHMOD ausdrücklich nicht vorhanden", async () => {
-    rustAttrappe({ verbindung_testen: () => ergebnis({ faehigkeiten: { ...ergebnis().faehigkeiten, chmod: false } }) });
+    rustAttrappe({
+      verbindung_testen: () => ergebnis({ faehigkeiten: { ...ergebnis().faehigkeiten, chmod: false }, umbenennen_ueberschreibt: false }),
+    });
     render(<Verbindungstest ziel={ziel} passwort="" onZertifikat={() => {}} />);
     await userEvent.click(knopf());
     expect(await screen.findByRole("status")).toHaveTextContent(/CHMOD\)nein/);
+    expect(screen.getByRole("status")).toHaveTextContent("nein – alte Datei wird vorher gelöscht (kurz fehlt sie)");
   });
 
   it("nicht anerkanntes Zertifikat: Fingerprint zeigen und bewusst bestätigen", async () => {

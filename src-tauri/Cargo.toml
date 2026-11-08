@@ -31,3 +31,5 @@ keyring = { version = "3", features = ["apple-native"] }
 tauri = { version = "2", features = ["test"] }
 tempfile.workspace = true
 stellwerk-testserver = { path = "../crates/stellwerk-testserver" }
+# Nur für examples/ftps_diagnose.rs: FTP-Befehle mitschreiben
+log = "0.4"

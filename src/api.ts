@@ -84,6 +84,8 @@ export interface Verbindungstest {
   eintraege: number;
   faehigkeiten: { mlsd: boolean; mfmt: boolean; chmod: boolean | null; fortsetzen: boolean; utf8: boolean };
   zertifikat: { fingerprint: string; vom_system: boolean };
+  /** Aus Läufen gelernt: Ersetzt der Server beim Umbenennen? `null`: noch nicht bekannt. */
+  umbenennen_ueberschreibt: boolean | null;
 }
 
 export type Endpunkt = { typ: "lokal"; pfad: string } | ({ typ: "ftps" } & FtpsEndpunkt);

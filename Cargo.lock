@@ -4044,6 +4044,7 @@ name = "stellwerk"
 version = "0.3.0"
 dependencies = [
  "keyring",
+ "log",
  "serde",
  "serde_json",
  "stellwerk-core",
