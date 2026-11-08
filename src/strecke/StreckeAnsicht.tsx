@@ -7,6 +7,10 @@
 // Nach einer Übertragung wird die folgende Stufe neu verglichen – ihre Quelle
 // hat sich geändert.
 //
+// FTPS-Ziele werden wie lokale verglichen, aber gegen das Manifest (ohne
+// Serverkontakt). Wurde der Server noch nie gelesen, bietet die Karte
+// „Mit Server vergleichen …“ an.
+//
 // Die Vergleiche gehören dieser Ansicht: Sie gibt sie beim Verlassen in Rust frei.
 // Wie in der Vergleichsansicht startet je Auftrag genau ein Durchlauf, auch wenn
 // React im StrictMode Effekte doppelt ausführt.
@@ -33,20 +37,19 @@ export type StufenStatus =
   | { art: "fertig"; v: VergleichStart; zeit: Date }
   | { art: "fehler"; fehler: unknown }
   /** Nicht (mehr) verglichen, z. B. Vergleich in der Detailansicht abgebrochen. */
-  | { art: "offen" }
-  /** FTPS-Ziele werden erst mit dem Manifest verglichen (v0.4). */
-  | { art: "ftps" };
+  | { art: "offen" };
 
-const istFtps = (st: StufeKurz) => st.ziel.startsWith("ftps://");
+/** Auftrag der Warteschlange; `server`: FTPS-Ziel vom Server einlesen. */
+type Auftrag = { stufe: string; server: boolean };
 
 export function StreckeAnsicht({ strecke, onZurueck, onBearbeiten }: Props) {
-  const lokale = strecke.stufen.filter((st) => !istFtps(st)).map((st) => st.id);
+  const alle = strecke.stufen.map((st) => st.id);
   const [status, setStatus] = useState<Record<string, StufenStatus>>(() =>
-    Object.fromEntries(strecke.stufen.map((st) => [st.id, istFtps(st) ? { art: "ftps" } : { art: "wartet" }])),
+    Object.fromEntries(strecke.stufen.map((st) => [st.id, { art: "wartet" }])),
   );
   const [geoeffnet, setGeoeffnet] = useState<StufeKurz | null>(null);
   /** Stufen, die noch verglichen werden sollen – abgearbeitet von genau einer Schleife. */
-  const warteschlange = useRef<string[]>([]);
+  const warteschlange = useRef<Auftrag[]>([]);
   const arbeitet = useRef(false);
   const begonnen = useRef(false);
   /** Stufe, deren Vergleich gerade läuft (zum Abbrechen beim Verlassen). */
@@ -62,11 +65,11 @@ export function StreckeAnsicht({ strecke, onZurueck, onBearbeiten }: Props) {
     if (arbeitet.current) return;
     arbeitet.current = true;
     while (warteschlange.current.length > 0 && !verlassen.current) {
-      const stufe = warteschlange.current.shift()!;
+      const { stufe, server } = warteschlange.current.shift()!;
       laufend.current = stufe;
       setze(stufe, { art: "laeuft", fortschritt: null });
       try {
-        const v = await api.vergleichStarten(strecke.id, stufe, (f) => setze(stufe, { art: "laeuft", fortschritt: f }));
+        const v = await api.vergleichStarten(strecke.id, stufe, (f) => setze(stufe, { art: "laeuft", fortschritt: f }), server);
         // Nach dem Verlassen gehört der Vergleich niemandem mehr
         if (verlassen.current) void api.vergleichSchliessen(v.vergleich_id);
         else setze(stufe, { art: "fertig", v, zeit: new Date() });
@@ -78,17 +81,17 @@ export function StreckeAnsicht({ strecke, onZurueck, onBearbeiten }: Props) {
     arbeitet.current = false;
   };
 
-  const vergleichen = (stufen: string[]) => {
+  const vergleichen = (stufen: string[], server = false) => {
     for (const st of stufen) setze(st, { art: "wartet" });
-    warteschlange.current.push(...stufen);
+    warteschlange.current.push(...stufen.map((stufe) => ({ stufe, server })));
     void abarbeiten();
   };
 
-  // Beim Öffnen alle lokalen Stufen vergleichen – genau einmal, auch im StrictMode
+  // Beim Öffnen alle Stufen vergleichen – genau einmal, auch im StrictMode
   useEffect(() => {
     if (begonnen.current) return;
     begonnen.current = true;
-    vergleichen(lokale);
+    vergleichen(alle);
     // Nur beim Öffnen; die Strecke wechselt nie innerhalb einer Ansicht (key in App)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -121,7 +124,7 @@ export function StreckeAnsicht({ strecke, onZurueck, onBearbeiten }: Props) {
             // Die eigene Stufe neu, falls der Vergleich danach nicht fertig wurde; die
             // folgende immer – ihre Quelle hat sich geändert
             const folgende = strecke.stufen[strecke.stufen.indexOf(st) + 1];
-            const neu = [...(stand ? [] : [st.id]), ...(folgende && !istFtps(folgende) ? [folgende.id] : [])];
+            const neu = [...(stand ? [] : [st.id]), ...(folgende ? [folgende.id] : [])];
             vergleichen(neu);
           }
         }}
@@ -136,7 +139,7 @@ export function StreckeAnsicht({ strecke, onZurueck, onBearbeiten }: Props) {
         <button onClick={zurueck}>← Strecken</button>
         <h2>{strecke.name}</h2>
         <div className="knoepfe">
-          <button onClick={() => vergleichen(lokale)} disabled={laeuftGerade || lokale.length === 0}>
+          <button onClick={() => vergleichen(alle)} disabled={laeuftGerade || alle.length === 0}>
             Alle neu vergleichen
           </button>
           <button onClick={onBearbeiten}>Bearbeiten</button>
@@ -145,7 +148,13 @@ export function StreckeAnsicht({ strecke, onZurueck, onBearbeiten }: Props) {
       <ol className="stufen-status">
         {strecke.stufen.map((st, i) => (
           <li key={st.id} className="stufen-zeile">
-            <StufenKarte nr={i + 1} stufe={st} status={status[st.id]} onOeffnen={() => setGeoeffnet(st)} />
+            <StufenKarte
+              nr={i + 1}
+              stufe={st}
+              status={status[st.id]}
+              onOeffnen={() => setGeoeffnet(st)}
+              onMitServer={() => vergleichen([st.id], true)}
+            />
             <LaufListe strecke={strecke.id} stufe={st.id} />
           </li>
         ))}
@@ -154,11 +163,14 @@ export function StreckeAnsicht({ strecke, onZurueck, onBearbeiten }: Props) {
   );
 }
 
-type KarteProps = { nr: number; stufe: StufeKurz; status: StufenStatus; onOeffnen: () => void };
+type KarteProps = { nr: number; stufe: StufeKurz; status: StufenStatus; onOeffnen: () => void; onMitServer: () => void };
 
-function StufenKarte({ nr, stufe, status, onOeffnen }: KarteProps) {
+/** Ob ein FTPS-Ziel noch nie vom Server gelesen wurde. */
+const ohneManifest = (s: StufenStatus) => s.art === "fehler" && (s.fehler as BefehlsFehler | null)?.kategorie === "kein_manifest";
+
+function StufenKarte({ nr, stufe, status, onOeffnen, onMitServer }: KarteProps) {
   const art =
-    status.art === "fertig" ? (offen(status.v.zusammenfassung) === 0 ? "gleich" : "differenz") : status.art === "fehler" ? "fehler" : "grau";
+    status.art === "fertig" ? (offen(status.v.zusammenfassung) === 0 ? "gleich" : "differenz") : status.art === "fehler" && !ohneManifest(status) ? "fehler" : "grau";
   return (
     <div className={`stufen-karte status-${art}`}>
       <div className="stufen-kopf">
@@ -170,13 +182,17 @@ function StufenKarte({ nr, stufe, status, onOeffnen }: KarteProps) {
         <div className="pfad">→ {stufe.ziel}</div>
       </div>
       <StatusZeile status={status} />
-      {status.art !== "ftps" && (
-        <div className="knoepfe">
+      <div className="knoepfe">
+        {ohneManifest(status) ? (
+          <button className="primaer" onClick={onMitServer} title="Liest den Server einmal vollständig – verändert dort nichts">
+            Mit Server vergleichen …
+          </button>
+        ) : (
           <button className="primaer" onClick={onOeffnen} disabled={status.art === "laeuft" || status.art === "wartet"}>
             {status.art === "fertig" ? "Ansehen & übertragen …" : "Vergleichen …"}
           </button>
-        </div>
-      )}
+        )}
+      </div>
     </div>
   );
 }
@@ -188,13 +204,12 @@ function StatusZeile({ status }: { status: StufenStatus }) {
     case "laeuft":
       return <p className="hinweis">{fortschrittText(status.fortschritt)}</p>;
     case "fehler": {
+      if (ohneManifest(status)) return <p className="hinweis">Noch nie mit dem Server verglichen.</p>;
       const abbruch = (status.fehler as BefehlsFehler | null)?.kategorie === "abbruch";
       return <p className={abbruch ? "hinweis" : "meldung fehler"}>{abbruch ? "Vergleich abgebrochen." : fehlerText(status.fehler)}</p>;
     }
     case "offen":
       return <p className="hinweis">Nicht verglichen.</p>;
-    case "ftps":
-      return <p className="hinweis">FTPS-Ziel – Vergleich folgt mit dem Manifest (v0.4).</p>;
     case "fertig": {
       const z = status.v.zusammenfassung;
       return (

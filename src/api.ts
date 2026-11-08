@@ -21,6 +21,7 @@ export interface BefehlsFehler {
     | "kein_verzeichnis"
     | "schluesselbund"
     | "nicht_unterstuetzt"
+    | "kein_manifest"
     | "abbruch"
     | "nicht_bestaetigt"
     | "datenbank"
@@ -129,7 +130,8 @@ export type Warnung =
   | { art: "art_verschieden" }
   | { art: "ersatz_fehlt"; quelle: string }
   | { art: "lesefehler"; meldung: string }
-  | { art: "enthaelt_bleibendes" };
+  | { art: "enthaelt_bleibendes" }
+  | { art: "inhalt_nicht_geprueft" };
 
 export interface Eintrag {
   pfad: string;
@@ -211,6 +213,8 @@ export interface VergleichStart {
   zusammenfassung: Zusammenfassung;
   zeilen: number;
   lesefehler: Lesefehler[];
+  /** Nur bei FTPS-Zielen: Stand aus dem Manifest oder soeben vom Server gelesen. */
+  ziel_stand: "manifest" | "server" | null;
 }
 
 // --- Übertragen „Direkt“ (Spiegel von stellwerk_core::plan / ::exec) ---
@@ -312,8 +316,9 @@ export const api = {
   verbindungTesten: (ziel: Endpunkt, passwort: string) =>
     invoke<Verbindungstest>("verbindung_testen", { ziel, passwort: passwort || null }),
   /** Scannt und vergleicht eine Stufe; verändert nichts. Fortschritt kommt gedrosselt. */
-  vergleichStarten: (strecke: string, stufe: string, beiFortschritt: (f: Fortschritt) => void) =>
-    invoke<VergleichStart>("vergleich_starten", { strecke, stufe, fortschritt: new Channel(beiFortschritt) }),
+  /** `server`: FTPS-Ziel vom Server einlesen statt gegen das Manifest (lokale Ziele: ohne Wirkung). */
+  vergleichStarten: (strecke: string, stufe: string, beiFortschritt: (f: Fortschritt) => void, server = false) =>
+    invoke<VergleichStart>("vergleich_starten", { strecke, stufe, fortschritt: new Channel(beiFortschritt), server }),
   vergleichAbbrechen: (strecke: string, stufe: string) => invoke<boolean>("vergleich_abbrechen", { strecke, stufe }),
   diffSeite: (vergleichId: string, offset: number, limit: number, filter: Filter, zugeklappt: string[]) =>
     invoke<Seite>("diff_seite", { vergleichId, offset, limit, filter, zugeklappt }),

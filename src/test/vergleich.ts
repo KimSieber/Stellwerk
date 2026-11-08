@@ -44,6 +44,7 @@ export function start(teil: Partial<VergleichStart> = {}): VergleichStart {
     zusammenfassung: summe({ neu: 2, ausgewaehlt: 2, bytes_uebertragen: 3000 }),
     zeilen: 2,
     lesefehler: [],
+    ziel_stand: null,
     ...teil,
   };
 }

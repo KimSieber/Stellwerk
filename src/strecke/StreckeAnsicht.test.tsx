@@ -47,6 +47,9 @@ const STRECKE: StreckeUebersicht = {
 const GLEICH = summe({ gleich: 12 });
 const DIFF = summe({ neu: 3, geaendert: 2, loeschen: 1, konflikt: 1, ausgewaehlt: 6, bytes_uebertragen: 48_000 });
 
+const KEIN_MANIFEST = { kategorie: "kein_manifest", meldung: "Noch nie mit dem Server verglichen" };
+const NIE = "Noch nie mit dem Server verglichen.";
+
 /** Vergleich, den der Test beendet. */
 function haengend() {
   const s = { kanal: { id: 0 }, ok: (_v: VergleichStart) => {}, nein: (_e: unknown) => {} };
@@ -63,7 +66,9 @@ function haengend() {
 function rust(antworten: Antworten = {}) {
   return rustAttrappe({
     vergleich_starten: (a) => {
-      const { stufe } = a as { stufe: string };
+      const { stufe, server } = a as { stufe: string; server: boolean };
+      // Der Server wurde noch nie gelesen – erst „Mit Server vergleichen“
+      if (stufe === "server" && !server) throw KEIN_MANIFEST;
       return start({ vergleich_id: `${stufe}#1`, zusammenfassung: stufe === "eins" ? GLEICH : DIFF });
     },
     vergleich_abbrechen: () => true,
@@ -94,13 +99,14 @@ const gestartet = (aufrufe: ReturnType<typeof rust>) =>
   aufrufeVon(aufrufe, "vergleich_starten").map((a) => (a.args as { stufe: string }).stufe);
 
 describe("Streckenansicht – Status je Stufe", () => {
-  it("vergleicht beim Öffnen alle lokalen Stufen nacheinander – genau einmal, auch im StrictMode", async () => {
+  it("vergleicht beim Öffnen alle Stufen nacheinander – genau einmal, auch im StrictMode", async () => {
     const erste = haengend();
     let n = 0;
     const aufrufe = rust({
       vergleich_starten: (a) => {
         n += 1;
         if (n === 1) return erste.antwort(a);
+        if ((a as { stufe: string }).stufe === "server") throw KEIN_MANIFEST;
         return start({ vergleich_id: "zwei#1", zusammenfassung: DIFF });
       },
     });
@@ -108,8 +114,7 @@ describe("Streckenansicht – Status je Stufe", () => {
     expect(screen.getByRole("heading", { level: 2, name: "Test mit Mahlwerk" })).toBeInTheDocument();
     expect(within(zeile("Repo → Test 1")).getByText("Vergleich wird vorbereitet …")).toBeInTheDocument();
     expect(within(zeile("Test 1 → Test 2")).getByText("Vergleich wartet …")).toBeInTheDocument();
-    expect(within(zeile("Test 2 → Server")).getByText(/FTPS-Ziel – Vergleich folgt/)).toBeInTheDocument();
-    expect(within(karte("Test 2 → Server")).queryByRole("button")).toBeNull();
+    expect(within(zeile("Test 2 → Server")).getByText("Vergleich wartet …")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Alle neu vergleichen" })).toBeDisabled();
     expect(within(karte("Repo → Test 1")).getByRole("button", { name: "Vergleichen …" })).toBeDisabled();
 
@@ -119,8 +124,9 @@ describe("Streckenansicht – Status je Stufe", () => {
 
     await act(async () => erste.s.ok(start({ vergleich_id: "eins#1", zusammenfassung: GLEICH })));
     await waitFor(() => expect(within(zeile("Test 1 → Test 2")).getByText("3 neu · 2 geändert · 1 löschen · 1 Konflikt")).toBeInTheDocument());
-    expect(gestartet(aufrufe)).toEqual(["eins", "zwei"]);
-    expect(aufrufeVon(aufrufe, "vergleich_starten")[0].args).toMatchObject({ strecke: "web", stufe: "eins" });
+    await waitFor(() => expect(within(zeile("Test 2 → Server")).getByText(NIE)).toHaveClass("hinweis"));
+    expect(gestartet(aufrufe)).toEqual(["eins", "zwei", "server"]);
+    expect(aufrufeVon(aufrufe, "vergleich_starten")[0].args).toMatchObject({ strecke: "web", stufe: "eins", server: false });
 
     expect(within(zeile("Repo → Test 1")).getByText("gleich")).toBeInTheDocument();
     expect(karte("Repo → Test 1")).toHaveClass("status-gleich");
@@ -147,18 +153,30 @@ describe("Streckenansicht – Status je Stufe", () => {
     expect(screen.getByTestId("vergleich")).toHaveAttribute("data-start", "ohne");
   });
 
-  it("„Alle neu vergleichen“ vergleicht alle lokalen Stufen erneut", async () => {
+  it("„Alle neu vergleichen“ vergleicht alle Stufen erneut", async () => {
     const aufrufe = rust();
     ansicht();
     const knopf = screen.getByRole("button", { name: "Alle neu vergleichen" });
     await waitFor(() => expect(knopf).toBeEnabled());
     await userEvent.click(knopf);
-    await waitFor(() => expect(gestartet(aufrufe)).toEqual(["eins", "zwei", "eins", "zwei"]));
+    await waitFor(() => expect(gestartet(aufrufe)).toEqual(["eins", "zwei", "server", "eins", "zwei", "server"]));
   });
 
-  it("nur FTPS-Stufen: nichts zu vergleichen", () => {
+  it("FTPS noch nie gelesen: „Mit Server vergleichen …“ liest den Server, danach wie lokal", async () => {
     const aufrufe = rust();
     ansicht({ ...STRECKE, stufen: [STRECKE.stufen[2]] });
+    expect(await within(zeile("Test 2 → Server")).findByText(NIE)).toBeInTheDocument();
+    expect(karte("Test 2 → Server")).toHaveClass("status-grau");
+    expect(within(karte("Test 2 → Server")).queryByRole("button", { name: "Vergleichen …" })).toBeNull();
+    await userEvent.click(within(karte("Test 2 → Server")).getByRole("button", { name: "Mit Server vergleichen …" }));
+    expect(await within(zeile("Test 2 → Server")).findByText("3 neu · 2 geändert · 1 löschen · 1 Konflikt")).toBeInTheDocument();
+    expect(aufrufeVon(aufrufe, "vergleich_starten").map((a) => (a.args as { server: boolean }).server)).toEqual([false, true]);
+    expect(within(karte("Test 2 → Server")).getByRole("button", { name: "Ansehen & übertragen …" })).toBeEnabled();
+  });
+
+  it("ohne Stufen: nichts zu vergleichen", () => {
+    const aufrufe = rust();
+    ansicht({ ...STRECKE, stufen: [] });
     expect(screen.getByRole("button", { name: "Alle neu vergleichen" })).toBeDisabled();
     expect(gestartet(aufrufe)).toEqual([]);
   });
@@ -176,6 +194,7 @@ describe("Streckenansicht – Stufe öffnen und zurück", () => {
     const aufrufe = rust();
     const r = ansicht();
     await waitFor(() => expect(screen.getAllByRole("button", { name: "Ansehen & übertragen …" })).toHaveLength(2));
+    await waitFor(() => expect(within(zeile("Test 2 → Server")).getByText(NIE)).toBeInTheDocument());
     return { aufrufe, ...r };
   }
   const oeffnen = (stufe: string) => userEvent.click(within(karte(stufe)).getByRole("button", { name: "Ansehen & übertragen …" }));
@@ -194,7 +213,7 @@ describe("Streckenansicht – Stufe öffnen und zurück", () => {
     const laeufeVorher = aufrufeVon(aufrufe, "laeufe").length;
     await userEvent.click(screen.getByRole("button", { name: "zurück unverändert" }));
     expect(zeile("Test 1 → Test 2").querySelector(".stufen-stand")!.textContent).toBe(zeitVorher);
-    expect(gestartet(aufrufe)).toEqual(["eins", "zwei"]);
+    expect(gestartet(aufrufe)).toEqual(["eins", "zwei", "server"]);
     // Protokoll der Stufe wird neu geladen
     await waitFor(() => expect(aufrufeVon(aufrufe, "laeufe").length).toBeGreaterThan(laeufeVorher));
      vi.useRealTimers();
@@ -212,23 +231,33 @@ describe("Streckenansicht – Stufe öffnen und zurück", () => {
     vi.useRealTimers();
   });
 
-  it("nach einer Übertragung wird die folgende lokale Stufe neu verglichen, FTPS nicht", async () => {
+  it("nach einer Übertragung wird die folgende Stufe neu verglichen, auch eine FTPS-Stufe (gegen das Manifest)", async () => {
     const { aufrufe } = await fertigGeladen();
     await oeffnen("Repo → Test 1");
     await userEvent.click(screen.getByRole("button", { name: "zurück nach Übertragung" }));
-    await waitFor(() => expect(gestartet(aufrufe)).toEqual(["eins", "zwei", "zwei"]));
+    await waitFor(() => expect(gestartet(aufrufe)).toEqual(["eins", "zwei", "server", "zwei"]));
+    await waitFor(() => expect(screen.getAllByRole("button", { name: "Ansehen & übertragen …" })).toHaveLength(2));
+    await oeffnen("Test 1 → Test 2");
+    await userEvent.click(screen.getByRole("button", { name: "zurück nach Übertragung" }));
+    await waitFor(() => expect(gestartet(aufrufe)).toEqual(["eins", "zwei", "server", "zwei", "server"]));
+    expect(aufrufeVon(aufrufe, "vergleich_starten").at(-1)!.args).toMatchObject({ server: false });
+  });
+
+  it("nach einer Übertragung in der letzten Stufe: nichts weiter zu vergleichen", async () => {
+    const aufrufe = rust();
+    ansicht({ ...STRECKE, stufen: STRECKE.stufen.slice(0, 2) });
     await waitFor(() => expect(screen.getAllByRole("button", { name: "Ansehen & übertragen …" })).toHaveLength(2));
     await oeffnen("Test 1 → Test 2");
     await userEvent.click(screen.getByRole("button", { name: "zurück nach Übertragung" }));
     await new Promise((r) => setTimeout(r, 0));
-    expect(gestartet(aufrufe)).toEqual(["eins", "zwei", "zwei"]);
+    expect(gestartet(aufrufe)).toEqual(["eins", "zwei"]);
   });
 
   it("Übertragung ohne fertigen Vergleich: eigene und folgende Stufe neu", async () => {
     const { aufrufe } = await fertigGeladen();
     await oeffnen("Repo → Test 1");
     await userEvent.click(screen.getByRole("button", { name: "zurück nach Übertragung ohne Vergleich" }));
-    await waitFor(() => expect(gestartet(aufrufe)).toEqual(["eins", "zwei", "eins", "zwei"]));
+    await waitFor(() => expect(gestartet(aufrufe)).toEqual(["eins", "zwei", "server", "eins", "zwei"]));
   });
 
   it("abgebrochen zurück: Stufe gilt als nicht verglichen", async () => {
@@ -254,7 +283,7 @@ describe("Streckenansicht – Stufe öffnen und zurück", () => {
     await userEvent.click(screen.getByRole("button", { name: "zurück nach Übertragung" }));
     expect(gestartet(aufrufe)).toEqual(["eins", "zwei"]);
     await act(async () => zweite.s.ok(start({ vergleich_id: "zwei#1", zusammenfassung: DIFF })));
-    await waitFor(() => expect(gestartet(aufrufe)).toEqual(["eins", "zwei", "zwei"]));
+    await waitFor(() => expect(gestartet(aufrufe)).toEqual(["eins", "zwei", "server", "zwei"]));
   });
 });
 
@@ -293,6 +322,7 @@ describe("Streckenansicht – Verlassen", () => {
     const aufrufe = rust();
     ansicht();
     await waitFor(() => expect(screen.getAllByRole("button", { name: "Ansehen & übertragen …" })).toHaveLength(2));
+    await waitFor(() => expect(within(zeile("Test 2 → Server")).getByText(NIE)).toBeInTheDocument());
     await userEvent.click(screen.getByRole("button", { name: "← Strecken" }));
     expect(aufrufeVon(aufrufe, "vergleich_abbrechen")).toHaveLength(0);
     expect(aufrufeVon(aufrufe, "vergleich_schliessen")).toHaveLength(2);

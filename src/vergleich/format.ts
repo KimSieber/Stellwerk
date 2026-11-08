@@ -76,6 +76,8 @@ export function warnungText(w: Warnung): string {
       return `Nicht lesbar: ${w.meldung}`;
     case "enthaelt_bleibendes":
       return "Ordner bleibt, weil darin etwas bestehen bleibt";
+    case "inhalt_nicht_geprueft":
+      return "Inhalt nicht geprüft – nur Größe verglichen";
   }
 }
 

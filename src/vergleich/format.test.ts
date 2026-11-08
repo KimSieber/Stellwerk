@@ -44,6 +44,7 @@ describe("Darstellung", () => {
     expect(warnungText({ art: "ersatz_fehlt", quelle: "config.server.php" })).toContain("„config.server.php“ fehlt");
     expect(warnungText({ art: "lesefehler", meldung: "kein Zugriff" })).toBe("Nicht lesbar: kein Zugriff");
     expect(warnungText({ art: "enthaelt_bleibendes" })).toContain("bleibt");
+    expect(warnungText({ art: "inhalt_nicht_geprueft" })).toBe("Inhalt nicht geprüft – nur Größe verglichen");
   });
 
   it("Tooltip: Pfad, Regel, Hinweise", () => {

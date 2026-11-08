@@ -68,8 +68,10 @@ describe("api – jeder Befehl mit richtigem Namen und Parametern", () => {
     await expect(api.vergleichStarten("s", "a", (f) => meldungen.push(f))).resolves.toEqual(start);
     expect(meldungen).toEqual([{ phase: "ziel", anzahl: 7 }]);
     expect(aufrufe[0].cmd).toBe("vergleich_starten");
-    expect(aufrufe[0].args).toMatchObject({ strecke: "s", stufe: "a" });
+    expect(aufrufe[0].args).toMatchObject({ strecke: "s", stufe: "a", server: false });
     expect((aufrufe[0].args as { fortschritt: unknown }).fortschritt).toBeInstanceOf(Channel);
+    await api.vergleichStarten("s", "a", () => {}, true);
+    expect(aufrufe[1].args).toMatchObject({ server: true });
   });
 
   it("vergleichAbbrechen", async () => {
