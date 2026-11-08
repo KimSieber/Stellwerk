@@ -543,3 +543,48 @@ describe("Vergleichsansicht – Übertragen", () => {
     expect(zurueck).toHaveBeenCalledWith(start(), true);
   });
 });
+
+describe("Vergleichsansicht – FTPS-Ziel", () => {
+  const ftps = (ziel_stand: "manifest" | "server") => start({ ziel: "ftps://ftp.example.de:21/web/", ziel_stand });
+  const server = (aufrufe: ReturnType<typeof rust>) =>
+    aufrufeVon(aufrufe, "vergleich_starten").map((a) => (a.args as { server: boolean }).server);
+
+  it("noch nie gelesen: „Mit Server vergleichen …“ liest den Server", async () => {
+    const aufrufe = rust({
+      vergleich_starten: (a) => {
+        if (!(a as { server: boolean }).server) throw { kategorie: "kein_manifest", meldung: "x" };
+        return ftps("server");
+      },
+    });
+    ansicht();
+    expect(await screen.findByText("Noch nie mit dem Server verglichen.")).toHaveClass("hinweis");
+    await userEvent.click(screen.getByRole("button", { name: "Mit Server vergleichen …" }));
+    expect(await screen.findByText("Stand des Servers: soeben vollständig gelesen.")).toBeInTheDocument();
+    expect(server(aufrufe)).toEqual([false, true]);
+  });
+
+  it("gegen das Manifest: Hinweis, „Mit Server vergleichen“, „Schnell vergleichen“ ohne Server; Übertragen gesperrt", async () => {
+    const aufrufe = rust({ vergleich_starten: (a) => ftps((a as { server: boolean }).server ? "server" : "manifest") });
+    ansicht();
+    expect(await screen.findByText(/letzter bekannter Stand – der Server wurde nicht gelesen/)).toBeInTheDocument();
+    const uebertragen = screen.getByRole("button", { name: "Übertragen …" });
+    expect(uebertragen).toBeDisabled();
+    expect(uebertragen).toHaveAttribute("title", "Übertragen zum Server folgt im nächsten Schritt");
+    expect(screen.queryByRole("button", { name: "Neu vergleichen" })).toBeNull();
+    await userEvent.click(screen.getByRole("button", { name: "Mit Server vergleichen" }));
+    expect(await screen.findByText("Stand des Servers: soeben vollständig gelesen.")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Schnell vergleichen" }));
+    expect(await screen.findByText(/letzter bekannter Stand/)).toBeInTheDocument();
+    expect(server(aufrufe)).toEqual([false, true, false]);
+  });
+
+  it("lokales Ziel: „Neu vergleichen“, kein „Mit Server vergleichen“, kein Hinweis", async () => {
+    rust();
+    ansicht();
+    expect(await screen.findByText("/Users/kim/Dev/web")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Neu vergleichen" })).not.toHaveAttribute("title");
+    expect(screen.queryByRole("button", { name: "Mit Server vergleichen" })).toBeNull();
+    expect(document.querySelector(".ziel-stand")).toBeNull();
+    expect(screen.getByRole("button", { name: "Übertragen …" })).toBeEnabled();
+  });
+});

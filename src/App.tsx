@@ -37,7 +37,6 @@ export default function App() {
         {ansicht.art === "liste" ? (
           <StreckenListe
             onNeu={() => setAnsicht({ art: "editor" })}
-            onOeffnen={(id) => setAnsicht({ art: "editor", id })}
             onAnzeigen={(strecke) => setAnsicht({ art: "strecke", strecke })}
           />
         ) : ansicht.art === "strecke" ? (

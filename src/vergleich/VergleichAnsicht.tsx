@@ -7,6 +7,10 @@
 // gibt ihn in Rust nicht frei. Abbrechen geschieht nur über „Zurück“ – nie beim
 // Abbau der Komponente: React baut im StrictMode jede Ansicht zur Probe ab und
 // wieder auf. Rust hält je Stufe ohnehin höchstens einen Vergleich.
+//
+// FTPS-Ziel: „Schnell vergleichen“ vergleicht gegen das Manifest (ohne Serverkontakt),
+// „Mit Server vergleichen“ liest den Server vollständig. In der Oberfläche heißt das
+// Manifest „letzter bekannter Stand“. Übertragen folgt im nächsten Schritt.
 
 import { useEffect, useRef, useState } from "react";
 
@@ -51,6 +55,8 @@ type Zustand =
 
 export function VergleichAnsicht({ strecke, stufe, titel, start, onZurueck }: Props) {
   const [lauf, setLauf] = useState(0);
+  /** Ob der nächste Lauf den Server liest (nur FTPS-Ziele). */
+  const mitServer = useRef(false);
   const [zustand, setZustand] = useState<Zustand>(start ? { art: "fertig", v: start } : { art: "laeuft", fortschritt: null });
   // Bleiben beim Neu-Vergleichen erhalten (z. B. nach „Regel setzen“)
   const [filter, setFilter] = useState<Filter>("alle");
@@ -74,7 +80,7 @@ export function VergleichAnsicht({ strecke, stufe, titel, start, onZurueck }: Pr
     let l = laufRef.current;
     if (l?.nummer !== lauf) {
       setZustand({ art: "laeuft", fortschritt: null });
-      l = { nummer: lauf, ergebnis: api.vergleichStarten(strecke, stufe, (f) => melden.current!(f)) };
+      l = { nummer: lauf, ergebnis: api.vergleichStarten(strecke, stufe, (f) => melden.current!(f), mitServer.current) };
       laufRef.current = l;
     }
     l.ergebnis
@@ -89,7 +95,11 @@ export function VergleichAnsicht({ strecke, stufe, titel, start, onZurueck }: Pr
     };
   }, [strecke, stufe, lauf]);
 
-  const neu = () => setLauf((n) => n + 1);
+  const neu = (server = false) => {
+    mitServer.current = server;
+    setLauf((n) => n + 1);
+  };
+  const ftps = zustand.art === "fertig" && zustand.v.ziel_stand !== null;
   const zurueck = () => {
     verlassen.current = true;
     if (zustand.art === "laeuft") void api.vergleichAbbrechen(strecke, stufe);
@@ -105,20 +115,34 @@ export function VergleichAnsicht({ strecke, stufe, titel, start, onZurueck }: Pr
           {zustand.art === "laeuft" ? (
             <button onClick={() => void api.vergleichAbbrechen(strecke, stufe)}>Abbrechen</button>
           ) : (
-            <button onClick={neu}>Neu vergleichen</button>
+            <>
+              <button
+                onClick={() => neu()}
+                title={ftps ? "Ohne Serverkontakt – gegen den letzten bekannten Stand des Servers, wie Stellwerk ihn kennt" : undefined}
+              >
+                {ftps ? "Schnell vergleichen" : "Neu vergleichen"}
+              </button>
+              {ftps && (
+                <button onClick={() => neu(true)} title="Liest den Server vollständig – verändert dort nichts">
+                  Mit Server vergleichen
+                </button>
+              )}
+            </>
           )}
           <button
             className="primaer"
-            disabled={zustand.art !== "fertig"}
-            title="Ausgewähltes ins Ziel übertragen – vorher wird der Plan zur Bestätigung gezeigt"
-            onClick={zustand.art === "fertig" ? () => setUebertragen(zustand.v.vergleich_id) : undefined}
+            disabled={zustand.art !== "fertig" || ftps}
+            title={
+              ftps ? "Übertragen zum Server folgt im nächsten Schritt" : "Ausgewähltes ins Ziel übertragen – vorher wird der Plan zur Bestätigung gezeigt"
+            }
+            onClick={zustand.art === "fertig" && !ftps ? () => setUebertragen(zustand.v.vergleich_id) : undefined}
           >
             Übertragen …
           </button>
         </div>
       </div>
       {zustand.art === "laeuft" && <p className="hinweis fortschritt">{fortschrittText(zustand.fortschritt)}</p>}
-      {zustand.art === "fehler" && <Fehler fehler={zustand.fehler} />}
+      {zustand.art === "fehler" && <Fehler fehler={zustand.fehler} onMitServer={() => neu(true)} />}
       {regelFehler && <p className="meldung fehler">Regel nicht gespeichert: {regelFehler}</p>}
       {zustand.art === "fertig" && (
         <Ergebnis
@@ -154,8 +178,18 @@ export function VergleichAnsicht({ strecke, stufe, titel, start, onZurueck }: Pr
   );
 }
 
-function Fehler({ fehler }: { fehler: unknown }) {
-  const abbruch = (fehler as BefehlsFehler | null)?.kategorie === "abbruch";
+function Fehler({ fehler, onMitServer }: { fehler: unknown; onMitServer: () => void }) {
+  const kategorie = (fehler as BefehlsFehler | null)?.kategorie;
+  if (kategorie === "kein_manifest")
+    return (
+      <div className="meldung">
+        <p className="hinweis">Noch nie mit dem Server verglichen.</p>
+        <button className="primaer" onClick={onMitServer} title="Liest den Server einmal vollständig – verändert dort nichts">
+          Mit Server vergleichen …
+        </button>
+      </div>
+    );
+  const abbruch = kategorie === "abbruch";
   return <p className={abbruch ? "hinweis" : "meldung fehler"}>{abbruch ? "Vergleich abgebrochen." : fehlerText(fehler)}</p>;
 }
 
@@ -227,6 +261,13 @@ function Ergebnis({ v, strecke, stufe, filter, setFilter, zugeklappt, setZugekla
           <code title={v.ziel}>{v.ziel}</code>
         </fieldset>
       </div>
+      {v.ziel_stand && (
+        <p className="hinweis ziel-stand">
+          {v.ziel_stand === "server"
+            ? "Stand des Servers: soeben vollständig gelesen."
+            : "Stand des Servers: letzter bekannter Stand – der Server wurde nicht gelesen. „Mit Server vergleichen“ prüft ihn."}
+        </p>
+      )}
       <Summen s={summe} />
       {v.lesefehler.length > 0 && (
         <details className="lesefehler">

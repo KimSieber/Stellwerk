@@ -9,13 +9,11 @@ import { api, fehlerText, type Problem, type StreckeUebersicht } from "../api";
  */
 type Props = {
   onNeu: () => void;
-  /** Strecke bearbeiten (Editor). */
-  onOeffnen: (id: string) => void;
   /** Streckenansicht öffnen. */
   onAnzeigen: (strecke: StreckeUebersicht) => void;
 };
 
-export function StreckenListe({ onNeu, onOeffnen, onAnzeigen }: Props) {
+export function StreckenListe({ onNeu, onAnzeigen }: Props) {
   const liste = useQuery({ queryKey: ["strecken"], queryFn: api.streckenListe });
   const ort = useQuery({ queryKey: ["konfig_ort"], queryFn: api.konfigOrt });
 
@@ -54,7 +52,6 @@ export function StreckenListe({ onNeu, onOeffnen, onAnzeigen }: Props) {
             <StreckeKarte
               key={s.id}
               strecke={s}
-              onOeffnen={() => onOeffnen(s.id)}
               onAnzeigen={() => onAnzeigen(s)}
             />
           ))}
@@ -66,11 +63,10 @@ export function StreckenListe({ onNeu, onOeffnen, onAnzeigen }: Props) {
 
 type KarteProps = {
   strecke: StreckeUebersicht;
-  onOeffnen: () => void;
   onAnzeigen: () => void;
 };
 
-function StreckeKarte({ strecke, onOeffnen, onAnzeigen }: KarteProps) {
+function StreckeKarte({ strecke, onAnzeigen }: KarteProps) {
   if (strecke.fehler) {
     return (
       <article className="karte defekt">
@@ -110,16 +106,6 @@ function StreckeKarte({ strecke, onOeffnen, onAnzeigen }: KarteProps) {
         ))}
       </ol>
       <Probleme probleme={strecke.probleme} />
-      <button
-        className="karte-knopf"
-        onClick={(e) => {
-          e.stopPropagation();
-          onOeffnen();
-        }}
-        onKeyDown={(e) => e.stopPropagation()}
-      >
-        Bearbeiten
-      </button>
     </article>
   );
 }

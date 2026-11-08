@@ -96,7 +96,6 @@ button.primaer { background: var(--signal); border-color: var(--signal); color: 
 button.leise { border-color: transparent; background: transparent; color: var(--text-leise); }
 button.link { border: none; background: none; color: var(--blau); padding: 2px; }
 @media (prefers-color-scheme: dark) { button.link { color: #8fb4ec; } }
-.karte-knopf { margin-top: 12px; }
 
 /* --- Editor ------------------------------------------------------------- */
 .editor { display: grid; gap: 16px; max-width: 1100px; }

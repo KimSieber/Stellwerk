@@ -22,7 +22,7 @@ const mailwerk: StreckeUebersicht = {
 describe("Startseite – Strecken", () => {
   it("zeigt den Ladezustand", () => {
     rustAttrappe({ strecken_liste: () => new Promise(() => {}), konfig_ort: () => ORT });
-    mitQuery(<StreckenListe onNeu={vi.fn()} onOeffnen={vi.fn()} onAnzeigen={vi.fn()} />);
+    mitQuery(<StreckenListe onNeu={vi.fn()} onAnzeigen={vi.fn()} />);
     expect(screen.getByText("Strecken werden geladen …")).toBeInTheDocument();
   });
 
@@ -33,26 +33,26 @@ describe("Startseite – Strecken", () => {
       },
       konfig_ort: () => ORT,
     });
-    mitQuery(<StreckenListe onNeu={vi.fn()} onOeffnen={vi.fn()} onAnzeigen={vi.fn()} />);
+    mitQuery(<StreckenListe onNeu={vi.fn()} onAnzeigen={vi.fn()} />);
     expect(await screen.findByText("Konfigurationsfehler in config.toml: kaputt")).toHaveClass("fehler");
   });
 
   it("zeigt bei leerer Liste den Konfigurationsort", async () => {
     rustAttrappe({ strecken_liste: () => [], konfig_ort: () => ORT });
-    mitQuery(<StreckenListe onNeu={vi.fn()} onOeffnen={vi.fn()} onAnzeigen={vi.fn()} />);
+    mitQuery(<StreckenListe onNeu={vi.fn()} onAnzeigen={vi.fn()} />);
     expect(await screen.findByText("Noch keine Strecke angelegt.")).toBeInTheDocument();
     expect(await screen.findByText(`${ORT}/strecken/`)).toBeInTheDocument();
   });
 
   it("zeigt Platzhalter, solange der Konfigurationsort fehlt", async () => {
     rustAttrappe({ strecken_liste: () => [], konfig_ort: () => new Promise(() => {}) });
-    mitQuery(<StreckenListe onNeu={vi.fn()} onOeffnen={vi.fn()} onAnzeigen={vi.fn()} />);
+    mitQuery(<StreckenListe onNeu={vi.fn()} onAnzeigen={vi.fn()} />);
     expect(await screen.findByText("…/strecken/")).toBeInTheDocument();
   });
 
   it("zeigt Strecken als Karten mit nummerierten Stufen", async () => {
     rustAttrappe({ strecken_liste: () => [mailwerk], konfig_ort: () => ORT });
-    mitQuery(<StreckenListe onNeu={vi.fn()} onOeffnen={vi.fn()} onAnzeigen={vi.fn()} />);
+    mitQuery(<StreckenListe onNeu={vi.fn()} onAnzeigen={vi.fn()} />);
 
     const karte = (await screen.findByRole("heading", { name: "Mailwerk Webseite" })).closest("article")!;
     const k = within(karte);
@@ -79,7 +79,7 @@ describe("Startseite – Strecken", () => {
       ],
     };
     rustAttrappe({ strecken_liste: () => [mitProblemen], konfig_ort: () => ORT });
-    mitQuery(<StreckenListe onNeu={vi.fn()} onOeffnen={vi.fn()} onAnzeigen={vi.fn()} />);
+    mitQuery(<StreckenListe onNeu={vi.fn()} onAnzeigen={vi.fn()} />);
 
     const fehler = (await screen.findByText("Pfad fehlt", { exact: false })).closest("li")!;
     expect(fehler).toHaveClass("fehler");
@@ -97,7 +97,7 @@ describe("Startseite – Strecken", () => {
       fehler: "Konfigurationsfehler in kaputt.toml: unerwartetes Dateiende",
     };
     rustAttrappe({ strecken_liste: () => [defekt, mailwerk], konfig_ort: () => ORT });
-    mitQuery(<StreckenListe onNeu={vi.fn()} onOeffnen={vi.fn()} onAnzeigen={vi.fn()} />);
+    mitQuery(<StreckenListe onNeu={vi.fn()} onAnzeigen={vi.fn()} />);
 
     const karte = (await screen.findByRole("heading", { name: "kaputt" })).closest("article")!;
     expect(karte).toHaveClass("defekt");
@@ -116,7 +116,7 @@ describe("Startseite – Strecken", () => {
       },
       konfig_ort: () => ORT,
     });
-    mitQuery(<StreckenListe onNeu={vi.fn()} onOeffnen={vi.fn()} onAnzeigen={vi.fn()} />);
+    mitQuery(<StreckenListe onNeu={vi.fn()} onAnzeigen={vi.fn()} />);
     const knopf = await screen.findByRole("button", { name: "Neu laden" });
     expect(knopf).toBeEnabled();
 
@@ -132,25 +132,18 @@ describe("Startseite – Strecken", () => {
   it("neue Strecke anlegen – oben und bei leerer Liste", async () => {
     rustAttrappe({ strecken_liste: () => [], konfig_ort: () => ORT });
     const neu = vi.fn();
-    mitQuery(<StreckenListe onNeu={neu} onOeffnen={vi.fn()} onAnzeigen={vi.fn()} />);
+    mitQuery(<StreckenListe onNeu={neu} onAnzeigen={vi.fn()} />);
     await userEvent.click(await screen.findByRole("button", { name: "Erste Strecke anlegen" }));
     await userEvent.click(screen.getByRole("button", { name: "+ Neue Strecke" }));
     expect(neu).toHaveBeenCalledTimes(2);
   });
 
-  it("Bearbeiten öffnet den Editor – nicht die Streckenansicht; defekte Dateien lassen sich nicht öffnen", async () => {
+  it("kein „Bearbeiten“ auf der Startseite (erst Strecke wählen); defekte Dateien lassen sich nicht öffnen", async () => {
     const defekt: StreckeUebersicht = { id: "kaputt", name: null, stufen: [], probleme: [], fehler: "kaputt" };
     rustAttrappe({ strecken_liste: () => [defekt, mailwerk], konfig_ort: () => ORT });
-    const oeffnen = vi.fn();
-    const anzeigen = vi.fn();
-    mitQuery(<StreckenListe onNeu={vi.fn()} onOeffnen={oeffnen} onAnzeigen={anzeigen} />);
-    const knoepfe = await screen.findAllByRole("button", { name: "Bearbeiten" });
-    expect(knoepfe).toHaveLength(1);
-    await userEvent.click(knoepfe[0]);
-    expect(oeffnen).toHaveBeenCalledWith("mailwerk-web");
-    knoepfe[0].focus();
-    await userEvent.keyboard("{Enter}");
-    expect(anzeigen).not.toHaveBeenCalled();
+    mitQuery(<StreckenListe onNeu={vi.fn()} onAnzeigen={vi.fn()} />);
+    expect(await screen.findByRole("button", { name: "Mailwerk Webseite öffnen" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Bearbeiten" })).toBeNull();
     expect(screen.getByText(/von Hand korrigiert/)).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "kaputt öffnen" })).toBeNull();
   });
@@ -158,7 +151,7 @@ describe("Startseite – Strecken", () => {
   it("Klick oder Tastatur auf die Karte öffnet die Strecke; keine Knöpfe „Vergleichen“ mehr", async () => {
     rustAttrappe({ strecken_liste: () => [mailwerk], konfig_ort: () => ORT });
     const anzeigen = vi.fn();
-    mitQuery(<StreckenListe onNeu={vi.fn()} onOeffnen={vi.fn()} onAnzeigen={anzeigen} />);
+    mitQuery(<StreckenListe onNeu={vi.fn()} onAnzeigen={anzeigen} />);
     const karte = await screen.findByRole("button", { name: "Mailwerk Webseite öffnen" });
     expect(screen.queryByRole("button", { name: /vergleichen/ })).toBeNull();
     await userEvent.click(within(karte).getByText("Entwicklung → Spiegel"));

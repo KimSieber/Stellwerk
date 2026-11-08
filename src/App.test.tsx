@@ -41,16 +41,7 @@ describe("App", () => {
     expect(await screen.findByRole("heading", { level: 2, name: "Strecken" })).toBeInTheDocument();
   });
 
-  it("Startseite → Bearbeiten → zurück", async () => {
-    rust();
-    mitQuery(<App />);
-    await userEvent.click(await screen.findByRole("button", { name: "Bearbeiten" }));
-    expect(await screen.findByLabelText("Kennung")).toHaveValue("mailwerk-web");
-    await userEvent.click(screen.getByRole("button", { name: "← Strecken" }));
-    expect(await screen.findByRole("heading", { level: 2, name: "Strecken" })).toBeInTheDocument();
-  });
-
-  it("Startseite → Strecke → Bearbeiten, und Strecke → zurück", async () => {
+  it("Startseite → Strecke → Bearbeiten → zurück, und Strecke → zurück", async () => {
     const aufrufe = rust();
     mitQuery(<App />);
     await userEvent.click(await screen.findByRole("button", { name: "Mailwerk Webseite öffnen" }));
@@ -62,6 +53,8 @@ describe("App", () => {
     await userEvent.click(await screen.findByRole("button", { name: "Mailwerk Webseite öffnen" }));
     await userEvent.click(screen.getByRole("button", { name: "Bearbeiten" }));
     expect(await screen.findByLabelText("Kennung")).toHaveValue("mailwerk-web");
+    await userEvent.click(screen.getByRole("button", { name: "← Strecken" }));
+    expect(await screen.findByRole("heading", { level: 2, name: "Strecken" })).toBeInTheDocument();
   });
 
   it("neue Strecke: nach dem Anlegen wird sie zum Bearbeiten geöffnet", async () => {
