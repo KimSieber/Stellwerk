@@ -57,4 +57,4 @@ Konfiguration und Laufzeitdaten: `~/Library/Application Support/de.sieber-bw.ste
 
 ## Lizenz
 
-Noch offen (Veröffentlichung als Open Source geplant).
+MIT – siehe [LICENSE](LICENSE).

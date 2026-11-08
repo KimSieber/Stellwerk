@@ -177,7 +177,7 @@ Geplante Crates: `suppaftp` (FTPS), später `russh`/`ssh2` (SFTP), `keyring` (Sc
 
 ## 11. Offene Punkte
 
-- Lizenz (Open Source: MIT / Apache-2.0?)
+- ~~Lizenz (Open Source: MIT / Apache-2.0?)~~ – entschieden: MIT (siehe `LICENSE`)
 - Sprache der Oberfläche/Doku (DE, EN, beides)
 - Datenmodell im Detail (Strecke, Stufe, Endpunkt, Regel, Manifest, Journal)
 - UI-Entwurf (Startseite Strecken, Vergleichsansicht, Phasen-Ablauf)

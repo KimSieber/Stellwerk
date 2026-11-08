@@ -4,7 +4,8 @@
 .AppleDouble
 .Spotlight-V100
 .Trashes
-Icon[]
+Icon[
+]
 
 # Windows
 Thumbs.db
@@ -50,3 +51,4 @@ logs/
 
 # Interne Arbeitsunterlagen (Übergaben für neue Chats) – nicht ins Repository
 docs/intern/
+Webseite/
