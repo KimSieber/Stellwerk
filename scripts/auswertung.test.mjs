@@ -53,6 +53,12 @@ const rot = (ausgabe) => ({ code: 1, ausgabe });
 describe("Auswertung der Prüfung", () => {
   it("entfernt Farbzeichen", () => {
     expect(ohneFarben("\x1b[32m✓\x1b[39m grün\x1b[2K")).toBe("✓ grün");
+    // So schreiben die Rust-Testprogramme mit `--color always`
+    expect(ohneFarben("test result: \x1b[32mok\x1b[m\x0f. 52 passed; 0 failed")).toBe("test result: ok. 52 passed; 0 failed");
+    expect(rustAuswerten("test result: \x1b[32mok\x1b[m\x0f. 52 passed; 0 failed; 0 ignored")).toMatchObject({ bestanden: 52, fehler: 0 });
+    // … und so auf dem Mac (Zeichensatz-Umschaltung ESC ( B), auch bei FAILED
+    const mac = "test a ... \x1b[31mFAILED\x1b(B\x1b[m\ntest result: \x1b[32mok\x1b(B\x1b[m. 60 passed; 1 failed; 0 ignored";
+    expect(rustAuswerten(mac)).toMatchObject({ bestanden: 60, fehler: 1, fehlgeschlagen: ["a"] });
   });
 
   it("Vitest grün und rot", () => {

@@ -172,6 +172,19 @@ export function laufText(l: Lauf): { text: string; art: "ok" | "warnung" | "fehl
   const e = l.ergebnis;
   if (l.phase === "geplant" || l.phase === "laeuft" || e === null) return { text: "nicht abgeschlossen", art: "fehler" };
   const von = `${zahl.format(e.erledigt)} von ${anzahl(n, "Schritt", "Schritten")}`;
+  // Umschalten: wartende und zurückgenommene Läufe
+  if (l.phase === "hochgeladen") {
+    if (e.fehler.length > 0) return { text: `Hochladen unvollständig · ${anzahl(e.fehler.length, "Fehler", "Fehler")}`, art: "fehler" };
+    return { text: "hochgeladen · wartet auf Umschalten", art: "warnung" };
+  }
+  if (l.phase === "umgeschaltet") {
+    const f = e.umschalten?.fehler.length ?? 0;
+    if (f > 0) return { text: `Umschalten angehalten · ${anzahl(f, "Fehler", "Fehler")}`, art: "fehler" };
+    return { text: "umgeschaltet · wartet auf Übernehmen", art: "warnung" };
+  }
+  if (l.phase === "zurueckgerollt") return { text: "zurückgerollt", art: "warnung" };
+  const reste = e.uebernehmen?.fehler.length ?? 0;
+  if (reste > 0) return { text: `übernommen · ${anzahl(reste, "Rest", "Reste")} nicht entfernt`, art: "warnung" };
   if (e.abgebrochen) return { text: `abgebrochen · ${von}`, art: "warnung" };
   if (e.fehler.length > 0) return { text: `${anzahl(e.fehler.length, "Fehler", "Fehler")} · ${von}`, art: "fehler" };
   if (e.journal_fehler !== null) return { text: `Journal unvollständig · ${von}`, art: "fehler" };
@@ -183,4 +196,7 @@ export const JOURNAL_TEXT: Record<JournalStatus, string> = {
   erledigt: "erledigt",
   fehler: "Fehler",
   uebersprungen: "nicht ausgeführt",
+  hochgeladen: "hochgeladen",
+  umgeschaltet: "umgeschaltet",
+  zurueckgerollt: "zurückgenommen",
 };

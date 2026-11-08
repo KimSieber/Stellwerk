@@ -70,6 +70,11 @@ pub trait ZielVerbindung: Send {
     fn datei_loeschen(&mut self, p: &RelPath) -> Result<()>;
     /// Löscht einen Ordner nur, wenn er leer ist. Schon weg ist in Ordnung.
     fn ordner_loeschen(&mut self, p: &RelPath) -> Result<()>;
+    /// Benennt eine Datei um („Umschalten“). `ersetzen`: Eine Datei unter `nach`
+    /// wird ersetzt; sonst ist sie ein Fehler.
+    fn umbenennen(&mut self, von: &RelPath, nach: &RelPath, ersetzen: bool) -> Result<()>;
+    /// Liegt unter `p` eine Datei (kein Ordner)?
+    fn ist_datei(&mut self, p: &RelPath) -> Result<bool>;
     /// Bemerkenswertes seit dem letzten Abruf, fürs Journal – z. B. dass die
     /// Datenverbindung wiederholt werden musste. Die Ausführung fragt nach jeder Operation.
     fn hinweis(&mut self) -> Option<String> {

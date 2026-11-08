@@ -633,6 +633,12 @@ impl ZielVerbindung for MitHinweis<'_> {
     fn ordner_loeschen(&mut self, p: &RelPath) -> stellwerk_core::Result<()> {
         self.innen.ordner_loeschen(p)
     }
+    fn umbenennen(&mut self, _: &RelPath, _: &RelPath, _: bool) -> stellwerk_core::Result<()> {
+        unreachable!("nicht in „Direkt“")
+    }
+    fn ist_datei(&mut self, _: &RelPath) -> stellwerk_core::Result<bool> {
+        unreachable!("nicht in „Direkt“")
+    }
     fn hinweis(&mut self) -> Option<String> {
         self.zuletzt.take()
     }

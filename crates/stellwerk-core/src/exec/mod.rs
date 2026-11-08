@@ -20,6 +20,8 @@
 //!   ab und räumen ihre Temporärdatei weg.
 //! - Gelöscht wird nur, was der Plan nennt; Ordner nur, wenn sie leer sind.
 
+pub mod umschalten;
+
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Mutex};

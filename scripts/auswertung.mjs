@@ -2,10 +2,12 @@
 // zu einer Zusammenfassung auf einen Blick. Reine Funktionen – getestet in
 // auswertung.test.mjs. Das Starten der Befehle übernimmt pruefen.mjs.
 
-/** Farb- und Steuerzeichen (ANSI) entfernen. */
+/** Farb- und Steuerzeichen (ANSI) entfernen – auch die Zeichensatz-Umschaltung, die die
+ *  Rust-Testprogramme mit `--color always` hinter jedes „ok“ setzen: unter Linux `\x0f`,
+ *  auf dem Mac `ESC ( B`. */
 export function ohneFarben(text) {
   // eslint-disable-next-line no-control-regex
-  return text.replace(/\x1b\[[0-9;?]*[A-Za-z]/g, "");
+  return text.replace(/\x1b\[[0-9;?]*[A-Za-z]/g, "").replace(/\x1b[()][A-Za-z0-9]/g, "").replace(/[\x0e\x0f]/g, "");
 }
 
 /**

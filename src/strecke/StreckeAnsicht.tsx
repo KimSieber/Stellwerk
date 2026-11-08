@@ -16,6 +16,11 @@
 // nur in dieser Übersicht, nicht in der geöffneten Vergleichsansicht, und nie
 // während schon verglichen wird. FTPS auch hier nur gegen den letzten bekannten Stand.
 //
+// „Umschalten“: Wartet auf einer Stufe ein Lauf (hochgeladen bzw. umgeschaltet), ist
+// sie gesperrt – die Karte zeigt den Lauf mit den möglichen nächsten Schritten
+// (Umschalten/Abbrechen bzw. Übernehmen/Rollback). Danach wird die Stufe – und die
+// folgende, deren Quelle sich geändert hat – neu verglichen.
+//
 // Die Vergleiche gehören dieser Ansicht: Sie gibt sie beim Verlassen in Rust frei.
 // Wie in der Vergleichsansicht startet je Auftrag genau ein Durchlauf, auch wenn
 // React im StrictMode Effekte doppelt ausführt.
@@ -23,8 +28,19 @@
 import { useEffect, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 
-import { api, fehlerText, type BefehlsFehler, type Fortschritt, type StreckeUebersicht, type StufeKurz, type VergleichStart } from "../api";
-import { fortschrittText, groesse, JOURNAL_TEXT, laufText, laufZeit, offen, OP_TEXT, stufenText, uhrzeit } from "../vergleich/format";
+import {
+  api,
+  fehlerText,
+  type BefehlsFehler,
+  type Fortschritt,
+  type Lauf,
+  type LaufStand,
+  type Schritt,
+  type StreckeUebersicht,
+  type StufeKurz,
+  type VergleichStart,
+} from "../api";
+import { anzahl, fortschrittText, groesse, JOURNAL_TEXT, laufText, laufZeit, offen, OP_TEXT, stufenText, uhrzeit } from "../vergleich/format";
 import { VergleichAnsicht } from "../vergleich/VergleichAnsicht";
 
 /** So viele Läufe je Stufe werden gezeigt. */
@@ -56,6 +72,8 @@ export function StreckeAnsicht({ strecke, onZurueck, onBearbeiten }: Props) {
     Object.fromEntries(strecke.stufen.map((st) => [st.id, { art: "wartet" }])),
   );
   const [geoeffnet, setGeoeffnet] = useState<StufeKurz | null>(null);
+  /** Rückmeldung nach dem letzten Schritt eines wartenden Laufs, je Stufe. */
+  const [meldungen, setMeldungen] = useState<Record<string, string>>({});
   /** Stufen, die noch verglichen werden sollen – abgearbeitet von genau einer Schleife. */
   const warteschlange = useRef<Auftrag[]>([]);
   const arbeitet = useRef(false);
@@ -184,6 +202,14 @@ export function StreckeAnsicht({ strecke, onZurueck, onBearbeiten }: Props) {
               status={status[st.id]}
               onOeffnen={() => setGeoeffnet(st)}
               onMitServer={() => vergleichen([st.id], true)}
+              strecke={strecke.id}
+              meldung={meldungen[st.id]}
+              onWeiter={(stand) => {
+                setMeldungen((m) => ({ ...m, [st.id]: schrittMeldung(stand) }));
+                void queryClient.invalidateQueries({ queryKey: ["laeufe", strecke.id, st.id] });
+                const folgende = strecke.stufen[i + 1];
+                vergleichen([...(wartet(stand.phase) ? [] : [st.id]), ...(folgende ? [folgende.id] : [])]);
+              }}
             />
             <LaufListe strecke={strecke.id} stufe={st.id} />
           </li>
@@ -193,14 +219,35 @@ export function StreckeAnsicht({ strecke, onZurueck, onBearbeiten }: Props) {
   );
 }
 
-type KarteProps = { nr: number; stufe: StufeKurz; status: StufenStatus; onOeffnen: () => void; onMitServer: () => void };
+type KarteProps = {
+  nr: number;
+  stufe: StufeKurz;
+  status: StufenStatus;
+  onOeffnen: () => void;
+  onMitServer: () => void;
+  strecke: string;
+  onWeiter: (stand: LaufStand) => void;
+  /** Rückmeldung nach dem letzten Schritt eines wartenden Laufs. */
+  meldung?: string;
+};
 
 /** Ob ein FTPS-Ziel noch nie vom Server gelesen wurde. */
 const ohneManifest = (s: StufenStatus) => s.art === "fehler" && (s.fehler as BefehlsFehler | null)?.kategorie === "kein_manifest";
+/** Ob auf der Stufe ein Lauf wartet („Umschalten“) – sie ist dann gesperrt. */
+const laufOffen = (s: StufenStatus) => s.art === "fehler" && (s.fehler as BefehlsFehler | null)?.kategorie === "lauf_offen";
+/** Phasen, in denen ein Lauf auf den nächsten Schritt wartet. */
+const wartet = (phase: Lauf["phase"]) => phase === "hochgeladen" || phase === "umgeschaltet";
 
-function StufenKarte({ nr, stufe, status, onOeffnen, onMitServer }: KarteProps) {
-  const art =
-    status.art === "fertig" ? (offen(status.v.zusammenfassung) === 0 ? "gleich" : "differenz") : status.art === "fehler" && !ohneManifest(status) ? "fehler" : "grau";
+function StufenKarte({ nr, stufe, status, onOeffnen, onMitServer, strecke, onWeiter, meldung }: KarteProps) {
+  const art = laufOffen(status)
+    ? "offen"
+    : status.art === "fertig"
+      ? offen(status.v.zusammenfassung) === 0
+        ? "gleich"
+        : "differenz"
+      : status.art === "fehler" && !ohneManifest(status)
+        ? "fehler"
+        : "grau";
   return (
     <div className={`stufen-karte status-${art}`}>
       <div className="stufen-kopf">
@@ -211,6 +258,105 @@ function StufenKarte({ nr, stufe, status, onOeffnen, onMitServer }: KarteProps) 
         <div className="pfad">{stufe.quelle}</div>
         <div className="pfad">→ {stufe.ziel}</div>
       </div>
+      {meldung && <p className="meldung schritt-meldung">{meldung}</p>}
+      {laufOffen(status) ? (
+        <OffenerLauf strecke={strecke} stufe={stufe.id} onWeiter={onWeiter} />
+      ) : (
+        <StufenKnoepfe status={status} onOeffnen={onOeffnen} onMitServer={onMitServer} />
+      )}
+    </div>
+  );
+}
+
+const SCHRITT_TEXT: Record<Schritt, string> = { umschalten: "Umschalten", uebernehmen: "Übernehmen", rollback: "Rollback", abbrechen: "Abbrechen" };
+
+/** Was der Knopf am Ziel tut (Tooltip). */
+const SCHRITT_TITEL: Record<Schritt, string> = {
+  umschalten: "Benennt in einem Zug um: Original → .bak, Schattendatei → Original; zu löschende Dateien → .bak",
+  uebernehmen: "Entfernt die Sicherungen (.bak) und zu löschende Ordner – danach ist kein Rollback mehr möglich",
+  rollback: "Stellt den alten Stand wieder her: Sicherungen zurück, neue Dateien und Schattendateien weg",
+  abbrechen: "Entfernt die Schattendateien und neu angelegte Ordner – die Live-Seite war nie berührt",
+};
+
+/** Was gerade am Ziel liegt und was als Nächstes geht. */
+function erklaerung(l: Lauf): string {
+  const e = l.ergebnis!;
+  if (l.phase === "hochgeladen") {
+    return e.fehler.length === 0
+      ? "Neue und geänderte Dateien liegen als Schattendateien (….dpl-…) am Ziel – die Live-Seite ist unverändert."
+      : "Nicht alles wurde hochgeladen – deshalb wird nicht umgeschaltet. Die Live-Seite ist unverändert; Einzelheiten im Protokoll.";
+  }
+  return (e.umschalten?.fehler.length ?? 0) === 0
+    ? "Die neuen Dateien sind live. Die bisherigen liegen als Sicherung (….bak-…) daneben, bis du übernimmst."
+    : "Beim Umschalten ist ein Fehler aufgetreten – es wurde angehalten, ein Teil ist schon umgeschaltet. Einzelheiten im Protokoll.";
+}
+
+/** Rückmeldung nach dem letzten Schritt eines Laufs. */
+export function schrittMeldung(s: LaufStand): string {
+  const fehler = s.fehler.length > 0 ? ` – ${anzahl(s.fehler.length, "Fehler", "Fehler")}, Einzelheiten im Protokoll` : "";
+  const text: Record<LaufStand["phase"], string> = {
+    umgeschaltet: "Umgeschaltet",
+    fertig: "Übernommen – die Sicherungen sind entfernt",
+    zurueckgerollt: "Zurückgerollt – der alte Stand ist wiederhergestellt",
+    abgebrochen: "Abgebrochen – die Schattendateien sind entfernt",
+    hochgeladen: "Hochgeladen",
+    geplant: "",
+    laeuft: "",
+  };
+  return text[s.phase] + fehler;
+}
+
+/** Mögliche nächste Schritte eines wartenden Laufs – nach Fehlern nur zurück. */
+function moeglich(l: Lauf): Schritt[] {
+  const e = l.ergebnis!;
+  if (l.phase === "hochgeladen") return e.fehler.length === 0 ? ["umschalten", "abbrechen"] : ["abbrechen"];
+  return (e.umschalten?.fehler.length ?? 0) === 0 ? ["uebernehmen", "rollback"] : ["rollback"];
+}
+
+/** Ein wartender Lauf mit seinen nächsten Schritten. */
+function OffenerLauf({ strecke, stufe, onWeiter }: { strecke: string; stufe: string; onWeiter: (s: LaufStand) => void }) {
+  const laeufe = useQuery({ queryKey: ["laeufe", strecke, stufe], queryFn: () => api.laeufe(strecke, stufe, LAEUFE_LIMIT) });
+  const [laeuft, setLaeuft] = useState<Schritt | null>(null);
+  const [fehler, setFehler] = useState<string | null>(null);
+  const l = laeufe.data?.find((l) => wartet(l.phase));
+  if (!l) return <p className="hinweis">Ein Lauf wartet auf den nächsten Schritt …</p>;
+  const ausfuehren = (s: Schritt) => {
+    setLaeuft(s);
+    setFehler(null);
+    api
+      .laufWeiter(l.id, s)
+      .then(onWeiter)
+      .catch((e) => setFehler(fehlerText(e)))
+      .finally(() => setLaeuft(null));
+  };
+  return (
+    <>
+      <p className="stufen-stand">
+        <span className="marke" aria-hidden="true">●</span> <b>{laufText(l).text}</b>
+        <span className="hinweis"> · Lauf {laufZeit(l.gestartet)}</span>
+      </p>
+      <p className="hinweis klein">{erklaerung(l)}</p>
+      {fehler && <p className="meldung fehler">{fehler}</p>}
+      <div className="knoepfe">
+        {moeglich(l).map((s, i) => (
+          <button
+            key={s}
+            className={i === 0 ? "primaer" : undefined}
+            title={SCHRITT_TITEL[s]}
+            disabled={laeuft !== null}
+            onClick={() => ausfuehren(s)}
+          >
+            {laeuft === s ? `${SCHRITT_TEXT[s]} …` : SCHRITT_TEXT[s]}
+          </button>
+        ))}
+      </div>
+    </>
+  );
+}
+
+function StufenKnoepfe({ status, onOeffnen, onMitServer }: { status: StufenStatus; onOeffnen: () => void; onMitServer: () => void }) {
+  return (
+    <>
       <StatusZeile status={status} />
       <div className="knoepfe">
         {ohneManifest(status) ? (
@@ -223,7 +369,7 @@ function StufenKarte({ nr, stufe, status, onOeffnen, onMitServer }: KarteProps) 
           </button>
         )}
       </div>
-    </div>
+    </>
   );
 }
 

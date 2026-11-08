@@ -57,7 +57,7 @@ impl From<StellwerkError> for BefehlsFehler {
     }
 }
 
-type Antwort<T> = Result<T, BefehlsFehler>;
+pub(crate) type Antwort<T> = Result<T, BefehlsFehler>;
 
 /// Konfigurationsprüfung und Prüfung der lokalen Ordner zusammen.
 fn alle_probleme(s: &Strecke, global: &GlobalConfig) -> Vec<Problem> {
@@ -247,7 +247,7 @@ pub struct VerbindungstestAntwort {
 }
 
 /// Schlüssel in `stufen_status`: Ersetzt der Server beim Umbenennen (`ja`/`nein`)?
-const UMBENENNEN_UEBERSCHREIBT: &str = "umbenennen_ueberschreibt";
+pub(crate) const UMBENENNEN_UEBERSCHREIBT: &str = "umbenennen_ueberschreibt";
 
 /// Strecke und Stufe aus dem Konto `stellwerk:<strecke>:<stufe>`.
 fn stufe_aus_konto(konto: &str) -> Option<(&str, &str)> {
@@ -259,7 +259,7 @@ fn stufe_aus_konto(konto: &str) -> Option<(&str, &str)> {
 }
 
 /// Gelerntes `umbenennen_ueberschreibt` der Stufe; Unbekanntes gilt als nicht gelernt.
-fn gelernt_umbenennen(db: &Datenbank, strecke: &str, stufe: &str) -> Result<Option<bool>, StellwerkError> {
+pub(crate) fn gelernt_umbenennen(db: &Datenbank, strecke: &str, stufe: &str) -> Result<Option<bool>, StellwerkError> {
     Ok(match db.status(strecke, stufe, UMBENENNEN_UEBERSCHREIBT)?.as_deref() {
         Some("ja") => Some(true),
         Some("nein") => Some(false),
@@ -268,7 +268,7 @@ fn gelernt_umbenennen(db: &Datenbank, strecke: &str, stufe: &str) -> Result<Opti
 }
 
 /// Passwort aus dem Schlüsselbund; fehlt es → „nicht gefunden“ mit Hinweis.
-fn hinterlegtes_passwort(state: &AppState, konto: &str) -> Result<String, StellwerkError> {
+pub(crate) fn hinterlegtes_passwort(state: &AppState, konto: &str) -> Result<String, StellwerkError> {
     state
         .tresor
         .lesen(konto)?
@@ -314,6 +314,7 @@ pub async fn vergleich_starten(
     fortschritt: Channel<Fortschritt>,
     server: Option<bool>,
 ) -> Antwort<VergleichStart> {
+    offen_pruefen(&state, &strecke, &stufe)?;
     let s = state.store.strecke_laden(&strecke)?;
     let global = state.store.global_laden()?;
     let schluessel = format!("{strecke}/{stufe}");
@@ -506,6 +507,8 @@ pub struct PlanVorschau {
     pub ziel: String,
     /// So viele Dateien werden gleichzeitig geschrieben.
     pub worker: usize,
+    /// Modus der Stufe („Umschalten“: erst Schattendateien, dann umbenennen).
+    pub modus: Modus,
 }
 
 /// Erstellt den Plan aus der aktuellen Auswahl und merkt ihn für `lauf_starten`.
@@ -521,11 +524,7 @@ pub fn plan_erstellen(state: State<'_, AppState>, vergleich_id: String) -> Antwo
             .position(|st| st.id == o.stufe)
             .ok_or_else(|| StellwerkError::NichtGefunden(format!("Stufe „{}“ – bitte neu vergleichen", o.stufe)))?;
         let st = &s.stufen[i];
-        if st.modus == Modus::Umschalten {
-            return Err(StellwerkError::NichtUnterstuetzt(
-                "„Mit Umschalten“ kommt in einer späteren Version – für diese Stufe bitte „Direkt“ wählen".into(),
-            ));
-        }
+        offen_pruefen(&state, &o.strecke, &o.stufe)?;
         let gleiche_ordner = ziel_kennung(&st.ziel) == o.ziel
             && effektive_quelle(&s, i) == Some(Quelle::Lokal { pfad: o.quelle.clone() });
         if !gleiche_ordner {
@@ -541,6 +540,7 @@ pub fn plan_erstellen(state: State<'_, AppState>, vergleich_id: String) -> Antwo
             quelle: o.quelle.display().to_string(),
             ziel: o.ziel.display().to_string(),
             worker: worker_fuer(&st.ziel),
+            modus: st.modus,
         };
         o.plan = Some(plan);
         Ok(vorschau)
@@ -551,6 +551,59 @@ pub fn plan_erstellen(state: State<'_, AppState>, vergleich_id: String) -> Antwo
 pub struct LaufAntwort {
     pub lauf_id: String,
     pub ergebnis: LaufErgebnis,
+    /// Phase nach dem Start – bei „Umschalten manuell“ `hochgeladen`.
+    pub phase: LaufPhase,
+}
+
+/// Wartet auf der Stufe ein Lauf auf seinen nächsten Schritt, ist sie gesperrt.
+pub(crate) fn offen_pruefen(state: &AppState, strecke: &str, stufe: &str) -> Result<(), StellwerkError> {
+    match state.datenbank.lock().unwrap().offener_lauf(strecke, stufe)? {
+        Some(l) => Err(StellwerkError::LaufOffen(format!(
+            "Auf dieser Stufe wartet ein Lauf auf „{}“ – bitte erst in der Streckenansicht abschließen",
+            if l.phase == LaufPhase::Hochgeladen { "Umschalten" } else { "Übernehmen" }
+        ))),
+        None => Ok(()),
+    }
+}
+
+/// Das Ziel einer Stufe als Endpunkt – FTPS mit Passwort und Gelerntem.
+pub(crate) enum ZielEp {
+    Lokal(Lokal),
+    Ftps(Ftps),
+}
+
+impl ZielEp {
+    pub(crate) fn neu(state: &AppState, ziel: &Endpunkt, strecke: &str, stufe: &str) -> Result<Self, StellwerkError> {
+        Ok(match ziel {
+            Endpunkt::Ftps(f) => {
+                let gelernt = gelernt_umbenennen(&state.datenbank.lock().unwrap(), strecke, stufe)?;
+                Self::Ftps(Ftps::new(f, &hinterlegtes_passwort(state, &f.konto_ref)?)?.mit_umbenennen_ueberschreibt(gelernt))
+            }
+            Endpunkt::Lokal { pfad } => Self::Lokal(Lokal::new(pfad)),
+        })
+    }
+
+    pub(crate) fn ep(&self) -> &dyn ZielEndpunkt {
+        match self {
+            Self::Lokal(l) => l,
+            Self::Ftps(f) => f,
+        }
+    }
+
+    pub(crate) fn ftps(&self) -> Option<&Ftps> {
+        match self {
+            Self::Lokal(_) => None,
+            Self::Ftps(f) => Some(f),
+        }
+    }
+
+    /// Gelerntes (Überschreiben beim Umbenennen) speichern, sobald bekannt.
+    pub(crate) fn gelerntes_speichern(&self, db: &Datenbank, strecke: &str, stufe: &str) -> Result<(), StellwerkError> {
+        match self.ftps().and_then(Ftps::umbenennen_ueberschreibt) {
+            Some(g) => db.status_setzen(strecke, stufe, UMBENENNEN_UEBERSCHREIBT, if g { "ja" } else { "nein" }, jetzt_ms()),
+            None => Ok(()),
+        }
+    }
 }
 
 /// Führt den zuletzt bestätigten Plan aus („Direkt“). Schreibt nur ins Ziel (E3).
@@ -574,39 +627,45 @@ pub async fn lauf_starten(
     if plan.hat_loeschungen() && !loeschen_bestaetigt {
         return Err(StellwerkError::NichtBestaetigt(format!("{} Löschungen", plan.loeschliste.len())).into());
     }
-    let ziel = ziel_der_stufe(&state, &strecke, &stufe, &ziel)?;
+    let (ziel, modus) = ziel_der_stufe(&state, &strecke, &stufe, &ziel)?;
+    offen_pruefen(&state, &strecke, &stufe)?;
     let schluessel = format!("{strecke}/{stufe}");
     let abbruch = state
         .laeufe
         .anmelden(&schluessel)
         .ok_or_else(|| StellwerkError::Vorhanden(format!("Übertragung für „{schluessel}“ läuft bereits")))?;
-    let ergebnis = uebertragen(&state, &plan, &strecke, &stufe, &quelle, &ziel, bei_fehler_stoppen, &abbruch, &fortschritt);
+    let ergebnis = if modus.schaltet_um() {
+        crate::umschalten::starten(&state, &plan, (&strecke, &stufe), modus, &quelle, &ziel, bei_fehler_stoppen, &abbruch, &fortschritt)
+    } else {
+        uebertragen(&state, &plan, &strecke, &stufe, &quelle, &ziel, bei_fehler_stoppen, &abbruch, &fortschritt)
+    };
     state.laeufe.abmelden(&schluessel);
     Ok(ergebnis?)
 }
 
 /// So viele Dateien werden gleichzeitig geschrieben.
-fn worker_fuer(ziel: &Endpunkt) -> usize {
+pub(crate) fn worker_fuer(ziel: &Endpunkt) -> usize {
     match ziel {
         Endpunkt::Lokal { .. } => standard_worker(),
         Endpunkt::Ftps(_) => FTPS_WORKER,
     }
 }
 
-/// Ziel der Stufe, wie es jetzt konfiguriert ist – es muss dasselbe sein wie beim Vergleich.
-fn ziel_der_stufe(state: &AppState, strecke: &str, stufe: &str, kennung: &Path) -> Result<Endpunkt, StellwerkError> {
+/// Ziel und Modus der Stufe, wie sie jetzt konfiguriert ist – das Ziel muss
+/// dasselbe sein wie beim Vergleich.
+pub(crate) fn ziel_der_stufe(state: &AppState, strecke: &str, stufe: &str, kennung: &Path) -> Result<(Endpunkt, Modus), StellwerkError> {
     let s = state.store.strecke_laden(strecke)?;
     s.stufen
         .into_iter()
         .find(|st| st.id == stufe)
-        .map(|st| st.ziel)
-        .filter(|z| ziel_kennung(z) == kennung)
+        .map(|st| (st.ziel, st.modus))
+        .filter(|(z, _)| ziel_kennung(z) == kennung)
         .ok_or_else(|| StellwerkError::NichtUnterstuetzt("Ziel der Stufe wurde seit dem Vergleich geändert – bitte neu vergleichen".into()))
 }
 
 /// Nach einer erledigten Operation am Server: den letzten bekannten Stand (Manifest)
 /// fortschreiben – Datei mit Hash und Zeit der Quelle, neuer Ordner, Gelöschtes heraus.
-fn manifest_fortschreiben(
+pub(crate) fn manifest_fortschreiben(
     db: &Datenbank,
     ort: (&str, &str, &str),
     op: &Operation,
@@ -633,7 +692,7 @@ fn manifest_fortschreiben(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn uebertragen(
+pub(crate) fn uebertragen(
     state: &AppState,
     plan: &Plan,
     strecke: &str,
@@ -647,18 +706,8 @@ fn uebertragen(
     let db = &state.datenbank;
     let worker = worker_fuer(ziel);
     // Alles, was scheitern kann, bevor der Lauf angelegt wird
-    let (ftps, lokal) = match ziel {
-        Endpunkt::Ftps(f) => {
-            let gelernt = gelernt_umbenennen(&db.lock().unwrap(), strecke, stufe)?;
-            let ftps = Ftps::new(f, &hinterlegtes_passwort(state, &f.konto_ref)?)?.mit_umbenennen_ueberschreibt(gelernt);
-            (Some(ftps), None)
-        }
-        Endpunkt::Lokal { pfad } => (None, Some(Lokal::new(pfad))),
-    };
-    let ziel_ep: &dyn ZielEndpunkt = match &ftps {
-        Some(f) => f,
-        None => lokal.as_ref().expect("lokales Ziel"),
-    };
+    let zep = ZielEp::neu(state, ziel, strecke, stufe)?;
+    let (ziel_ep, ftps) = (zep.ep(), zep.ftps());
     let ziel = ziel_kennung(ziel);
     let lauf_id = db.lock().unwrap().lauf_anlegen(strecke, stufe, Modus::Direkt, plan, jetzt_ms())?;
     let ort = (strecke, stufe, lauf_id.as_str());
@@ -710,16 +759,14 @@ fn uebertragen(
     };
     let zusammen = json!(ergebnis);
     let db = db.lock().unwrap();
-    if let Some(gelernt) = ftps.as_ref().and_then(Ftps::umbenennen_ueberschreibt) {
-        db.status_setzen(strecke, stufe, UMBENENNEN_UEBERSCHREIBT, if gelernt { "ja" } else { "nein" }, jetzt_ms())?;
-    }
+    zep.gelerntes_speichern(&db, strecke, stufe)?;
     db.lauf_phase(&lauf_id, phase, jetzt_ms(), Some(&zusammen))?;
     db.protokollieren(&eintrag(ort, ebene, "lauf_beendet", None, zusammen))?;
-    Ok(LaufAntwort { lauf_id, ergebnis })
+    Ok(LaufAntwort { lauf_id, ergebnis, phase })
 }
 
 /// Protokolleintrag zu einem Lauf; `ort` = (Strecke, Stufe, Lauf).
-fn eintrag<'a>(
+pub(crate) fn eintrag<'a>(
     ort: (&'a str, &'a str, &'a str),
     ebene: ProtokollEbene,
     aktion: &'a str,

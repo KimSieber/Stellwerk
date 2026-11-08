@@ -62,7 +62,7 @@ fn neueres_schema_wird_nicht_angefasst() {
     Datenbank::oeffnen(&datei).unwrap().verbindung().pragma_update(None, "user_version", 99).unwrap();
     let e = Datenbank::oeffnen(&datei).err().unwrap();
     assert_eq!(e.kategorie(), "datenbank");
-    assert!(e.to_string().contains("Schema 99, diese Version kennt nur bis 4"), "{e}");
+    assert!(e.to_string().contains("Schema 99, diese Version kennt nur bis 5"), "{e}");
     assert!(e.to_string().contains("x.sqlite"), "{e}");
 }
 
@@ -332,12 +332,12 @@ fn datenbank_aus_v0_3_wird_hochgestuft_laeufe_bleiben() {
         let mut d = Datenbank::oeffnen(&datei).unwrap();
         let id = d.lauf_anlegen("web", "spiegel", Modus::Direkt, &plan(), T).unwrap();
         // Zustand wie v0.3: Schema 1 ohne die neuen Tabellen
-        d.verbindung().execute_batch("DROP TABLE manifest; DROP TABLE stufen_status; ALTER TABLE journal DROP COLUMN hinweis; PRAGMA user_version = 1;").unwrap();
+        d.verbindung().execute_batch("DROP TABLE manifest; DROP TABLE stufen_status; ALTER TABLE journal DROP COLUMN hinweis; ALTER TABLE journal DROP COLUMN hash; ALTER TABLE journal DROP COLUMN mtime_ns; DROP TABLE manifest_sicherung; PRAGMA user_version = 1;").unwrap();
         id
     };
     let d = Datenbank::oeffnen(&datei).unwrap();
     let v: i64 = d.verbindung().pragma_query_value(None, "user_version", |r| r.get(0)).unwrap();
-    assert_eq!(v, 4);
+    assert_eq!(v, 5);
     assert_eq!(d.journal(&id).unwrap().len(), 4, "Läufe bleiben erhalten");
     assert!(d.manifest("web", "server").unwrap().is_empty());
     d.status_setzen("web", "server", "k", "v", T).unwrap();
@@ -363,7 +363,7 @@ fn datenbank_mit_schema_2_wird_hochgestuft_manifest_bleibt() {
         // Zustand nach Paket 3: Spalte hieß mtime_ms
         d.verbindung()
             .execute_batch(
-                "ALTER TABLE manifest RENAME COLUMN mtime_ns TO mtime_ms; ALTER TABLE journal DROP COLUMN hinweis; PRAGMA user_version = 2;
+                "ALTER TABLE manifest RENAME COLUMN mtime_ns TO mtime_ms; ALTER TABLE journal DROP COLUMN hinweis; ALTER TABLE journal DROP COLUMN hash; ALTER TABLE journal DROP COLUMN mtime_ns; DROP TABLE manifest_sicherung; PRAGMA user_version = 2;
                  INSERT INTO manifest VALUES ('s', 'server', 'a', 0, 1, NULL, 5, NULL);",
             )
             .unwrap();
@@ -381,7 +381,7 @@ fn datenbank_mit_schema_3_erhaelt_hinweise_im_journal() {
         let id = d.lauf_anlegen("web", "spiegel", Modus::Direkt, &plan(), T).unwrap();
         d.journal_setzen(&id, 1, JournalStatus::Fehler, Some("weg"), None, T + 1).unwrap();
         // Zustand wie v0.4: Journal ohne Hinweis
-        d.verbindung().execute_batch("ALTER TABLE journal DROP COLUMN hinweis; PRAGMA user_version = 3;").unwrap();
+        d.verbindung().execute_batch("ALTER TABLE journal DROP COLUMN hinweis; ALTER TABLE journal DROP COLUMN hash; ALTER TABLE journal DROP COLUMN mtime_ns; DROP TABLE manifest_sicherung; PRAGMA user_version = 3;").unwrap();
         id
     };
     let d = Datenbank::oeffnen(&datei).unwrap();
@@ -455,4 +455,37 @@ fn gelerntes_je_stufe() {
     d.verbindung().execute_batch("DROP TABLE stufen_status").unwrap();
     assert_eq!(d.status("s", "server", "x").unwrap_err().kategorie(), "datenbank");
     assert_eq!(d.status_setzen("s", "server", "x", "y", T).unwrap_err().kategorie(), "datenbank");
+}
+
+// --- Schema 5: Umschalten (v0.5) ---------------------------------------------
+
+#[test]
+fn umschalten_hash_im_journal_offener_lauf_und_manifest_sicherung() {
+    let mut d = db();
+    let id = d.lauf_anlegen("web", "server", Modus::UmschaltenManuell, &plan(), T).unwrap();
+    assert!(d.offener_lauf("web", "server").unwrap().is_none());
+    d.journal_uebertragen(&id, 1, Hash([7; 32]), Some(42)).unwrap();
+    let j = d.journal(&id).unwrap();
+    assert_eq!((j[1].hash, j[1].mtime_ns, j[0].hash), (Some(Hash([7; 32])), Some(42), None));
+    assert!(d.journal_uebertragen(&id, 9, Hash([7; 32]), None).unwrap_err().to_string().contains("Journal-Eintrag 9"));
+
+    for (phase, offen) in [(LaufPhase::Hochgeladen, true), (LaufPhase::Umgeschaltet, true), (LaufPhase::Zurueckgerollt, false)] {
+        d.lauf_phase(&id, phase, T + 1, None).unwrap();
+        assert_eq!(d.offener_lauf("web", "server").unwrap().map(|l| l.id), offen.then(|| id.clone()), "{phase:?}");
+        assert_eq!((phase.ist_offen(), phase.ist_beendet()), (offen, !offen));
+    }
+    assert!(Modus::UmschaltenManuell.schaltet_um() && Modus::Umschalten.schaltet_um() && !Modus::Direkt.schaltet_um());
+
+    // Sichern, ändern, zurücksetzen; Sicherung verwerfen
+    d.manifest_setzen("web", "server", &m("a.txt", 3)).unwrap();
+    d.manifest_sichern("web", "server", &id).unwrap();
+    d.manifest_sichern("web", "server", &id).unwrap();
+    d.manifest_setzen("web", "server", &m("b.txt", 4)).unwrap();
+    d.manifest_entfernen("web", "server", &p("a.txt")).unwrap();
+    d.manifest_zuruecksetzen("web", "server", &id).unwrap();
+    assert_eq!(d.manifest("web", "server").unwrap(), vec![m("a.txt", 3)]);
+    d.manifest_sichern("web", "server", &id).unwrap();
+    d.manifest_sicherung_verwerfen(&id).unwrap();
+    d.manifest_zuruecksetzen("web", "server", &id).unwrap();
+    assert!(d.manifest("web", "server").unwrap().is_empty(), "ohne Sicherung bleibt nichts");
 }

@@ -16,8 +16,10 @@ type Props = {
   stufe: string;
   /** Geschlossen, ohne etwas zu übertragen. */
   onAbbrechen: () => void;
-  /** Nach dem Lauf geschlossen – die Ansicht vergleicht neu (Erfolgskontrolle). */
-  onFertig: () => void;
+  /** Nach dem Lauf geschlossen – die Ansicht vergleicht neu (Erfolgskontrolle).
+   *  `wartet`: Der Lauf wartet auf den nächsten Schritt („Umschalten“) – die Stufe ist
+   *  gesperrt, weiter geht es in der Streckenansicht. */
+  onFertig: (wartet: boolean) => void;
 };
 
 type Zustand =
@@ -69,7 +71,7 @@ export function UebertragenDialog({ vergleichId, strecke, stufe, onAbbrechen, on
           <>
             <p className="meldung fehler">{zustand.text}</p>
             <div className="knoepfe">
-              <button className="primaer" onClick={zustand.nachLauf ? onFertig : onAbbrechen}>
+              <button className="primaer" onClick={zustand.nachLauf ? () => onFertig(false) : onAbbrechen}>
                 Schließen
               </button>
             </div>
@@ -177,6 +179,7 @@ function Bestaetigung({ plan, loeschenOk, setLoeschenOk, stoppen, setStoppen, on
         Die Quelle wird nur gelesen. Jede Datei wird erst vollständig geschrieben und dann umbenannt; bis zu{" "}
         {plan.worker} gleichzeitig.
       </p>
+      {plan.modus !== "direkt" && <p className="hinweis klein modus-hinweis">{MODUS_HINWEIS[plan.modus]}</p>}
       <div className="knoepfe">
         <button onClick={onAbbrechen}>Abbrechen</button>
         <button className="primaer" disabled={leer || (loeschen > 0 && !loeschenOk)} onClick={onStarten}>
@@ -187,6 +190,22 @@ function Bestaetigung({ plan, loeschenOk, setLoeschenOk, stoppen, setStoppen, on
   );
 }
 
+const MODUS_HINWEIS = {
+  umschalten:
+    "Mit Umschalten (automatisch): Alles entsteht erst als Schattendatei, dann wird in einem Zug umgeschaltet. Geht etwas schief, bleibt der Lauf offen – Abbrechen oder Rollback in der Streckenansicht.",
+  umschalten_manuell:
+    "Mit Umschalten (manuell): Alles entsteht erst als Schattendatei – die Live-Seite bleibt unverändert. Umschalten, Übernehmen oder Rollback danach in der Streckenansicht.",
+} as const;
+
+/** Hinweis nach dem Start, wenn der Lauf noch auf etwas wartet („Umschalten“). */
+const PHASE_HINWEIS: Partial<Record<LaufAntwort["phase"], { text: string; art: string }>> = {
+  hochgeladen: {
+    text: "Hochgeladen als Schattendateien – die Live-Seite ist unverändert. Umschalten (oder Abbrechen) in der Streckenansicht.",
+    art: "warnung",
+  },
+  umgeschaltet: { text: "Umschalten angehalten – Rollback in der Streckenansicht.", art: "fehler" },
+};
+
 function Balken({ f }: { f: ExecFortschritt | null }) {
   const anteil = f ? f.fertig / Math.max(f.gesamt, 1) : 0;
   return (
@@ -196,7 +215,8 @@ function Balken({ f }: { f: ExecFortschritt | null }) {
   );
 }
 
-function Ergebnis({ antwort, onFertig }: { antwort: LaufAntwort; onFertig: () => void }) {
+function Ergebnis({ antwort, onFertig }: { antwort: LaufAntwort; onFertig: (wartet: boolean) => void }) {
+  const wartet = antwort.phase === "hochgeladen" || antwort.phase === "umgeschaltet";
   const e = antwort.ergebnis;
   const ok = e.fehler.length === 0 && e.uebersprungen === 0 && !e.abgebrochen && e.journal_fehler === null;
   return (
@@ -205,6 +225,9 @@ function Ergebnis({ antwort, onFertig }: { antwort: LaufAntwort; onFertig: () =>
         {ok ? "✓ " : ""}
         {anzahl(e.erledigt, "Schritt", "Schritte")} erledigt · {groesse(e.bytes)} übertragen
       </p>
+      {PHASE_HINWEIS[antwort.phase] && (
+        <p className={`meldung ${PHASE_HINWEIS[antwort.phase]!.art}`}>{PHASE_HINWEIS[antwort.phase]!.text}</p>
+      )}
       {e.abgebrochen && <p className="meldung warnung">Abgebrochen – Begonnenes wurde sauber beendet, der Rest nicht ausgeführt.</p>}
       {e.gestoppt && <p className="meldung warnung">Nach dem ersten Fehler angehalten.</p>}
       {e.uebersprungen > 0 && <p className="hinweis">{anzahl(e.uebersprungen, "Schritt", "Schritte")} nicht ausgeführt.</p>}
@@ -223,8 +246,8 @@ function Ergebnis({ antwort, onFertig }: { antwort: LaufAntwort; onFertig: () =>
       )}
       <p className="hinweis klein">Lauf {antwort.lauf_id} · jeder Schritt steht im Journal.</p>
       <div className="knoepfe">
-        <button className="primaer" onClick={onFertig}>
-          Schließen und neu vergleichen
+        <button className="primaer" onClick={() => onFertig(wartet)}>
+          {wartet ? "Weiter in der Streckenansicht" : "Schließen und neu vergleichen"}
         </button>
       </div>
     </>

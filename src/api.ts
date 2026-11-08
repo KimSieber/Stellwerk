@@ -28,6 +28,7 @@ export interface BefehlsFehler {
     | "verbindung"
     | "anmeldung"
     | "keine_rechte"
+    | "lauf_offen"
     | "zertifikat"
     | "io";
   meldung: string;
@@ -105,7 +106,7 @@ export type Rechte =
 export interface Stufe {
   id: string;
   name: string;
-  modus: "direkt" | "umschalten";
+  modus: Modus;
   quelle: Quelle;
   ziel: Endpunkt;
   rechte?: Rechte;
@@ -243,6 +244,7 @@ export interface PlanVorschau {
   quelle: string;
   ziel: string;
   worker: number;
+  modus: Modus;
 }
 
 export type OpArt = "ordner_anlegen" | "kopieren" | "ueberschreiben" | "rechte_setzen" | "datei_loeschen" | "ordner_loeschen";
@@ -265,21 +267,48 @@ export interface LaufErgebnis {
   journal_fehler: string | null;
 }
 
-export type LaufPhase = "geplant" | "laeuft" | "fertig" | "abgebrochen";
-export type JournalStatus = "offen" | "erledigt" | "fehler" | "uebersprungen";
+/** Deployment-Modus einer Stufe. */
+export type Modus = "direkt" | "umschalten" | "umschalten_manuell";
+
+export type LaufPhase = "geplant" | "laeuft" | "fertig" | "abgebrochen" | "hochgeladen" | "umgeschaltet" | "zurueckgerollt";
+export type JournalStatus = "offen" | "erledigt" | "fehler" | "uebersprungen" | "hochgeladen" | "umgeschaltet" | "zurueckgerollt";
+
+/** Ergebnis einer Phase von „Umschalten“ (Umschalten, Übernehmen, Rollback, Abbrechen). */
+export interface PhasenErgebnis {
+  erledigt: number;
+  fehler: { nr: number; pfad: string; meldung: string }[];
+  gestoppt: boolean;
+}
+
+/** Ergebnis eines Laufs; bei „Umschalten“ zusätzlich je Phase. */
+export type LaufErgebnisGesamt = LaufErgebnis & {
+  umschalten?: PhasenErgebnis;
+  uebernehmen?: PhasenErgebnis;
+  rollback?: PhasenErgebnis;
+  abbrechen?: PhasenErgebnis;
+};
+
+/** Nächster Schritt eines wartenden Laufs. */
+export type Schritt = "umschalten" | "uebernehmen" | "rollback" | "abbrechen";
+
+export interface LaufStand {
+  lauf_id: string;
+  phase: LaufPhase;
+  fehler: { pfad: string; meldung: string }[];
+}
 
 /** Ein Lauf aus der Datenbank (Protokoll der Streckenansicht). */
 export interface Lauf {
   id: string;
   strecke_id: string;
   stufe_id: string;
-  modus: "direkt" | "umschalten";
+  modus: Modus;
   phase: LaufPhase;
   /** Millisekunden seit 1970. */
   gestartet: number;
   beendet: number | null;
   zusammenfassung: PlanZusammenfassung;
-  ergebnis: LaufErgebnis | null;
+  ergebnis: LaufErgebnisGesamt | null;
 }
 
 /** Ein Schritt eines Laufs. */
@@ -300,6 +329,8 @@ export interface JournalZeile {
 export interface LaufAntwort {
   lauf_id: string;
   ergebnis: LaufErgebnis;
+  /** Phase nach dem Start – bei „Umschalten manuell“ `hochgeladen`. */
+  phase: LaufPhase;
 }
 
 // --- Commands ---
@@ -353,6 +384,8 @@ export const api = {
       fortschritt: new Channel(beiFortschritt),
     }),
   laufAbbrechen: (strecke: string, stufe: string) => invoke<boolean>("lauf_abbrechen", { strecke, stufe }),
+  /** Nächster Schritt eines wartenden Laufs („Umschalten“). */
+  laufWeiter: (laufId: string, schritt: Schritt) => invoke<LaufStand>("lauf_weiter", { laufId, schritt }),
   /** Läufe einer Stufe, neueste zuerst. */
   laeufe: (strecke: string, stufe: string, limit: number) => invoke<Lauf[]>("laeufe", { strecke, stufe, limit }),
   /** Jeder Schritt eines Laufs. */

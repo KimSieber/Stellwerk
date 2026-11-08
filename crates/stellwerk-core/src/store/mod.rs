@@ -30,7 +30,7 @@ use crate::plan::{OpArt, Plan, PlanZusammenfassung};
 pub const DATEINAME: &str = "stellwerk.sqlite";
 
 /// Stand des Schemas (`PRAGMA user_version`).
-const SCHEMA_VERSION: i64 = 4;
+const SCHEMA_VERSION: i64 = 5;
 
 const SCHEMA: &str = "
 CREATE TABLE lauf (
@@ -108,6 +108,26 @@ const SCHEMA_3: &str = "ALTER TABLE manifest RENAME COLUMN mtime_ms TO mtime_ns;
 /// Schema 4 (v0.5): Hinweis je Operation im Journal (z. B. wiederholte Datenverbindung).
 const SCHEMA_4: &str = "ALTER TABLE journal ADD COLUMN hinweis TEXT;";
 
+/// Schema 5 (v0.5, Umschalten): Hash und Zeit der Quelle je hochgeladener Datei (für
+/// den letzten bekannten Stand beim späteren Umschalten) und die Sicherung des
+/// Manifests vor dem Umschalten (für den Rollback).
+const SCHEMA_5: &str = "
+ALTER TABLE journal ADD COLUMN hash BLOB;
+ALTER TABLE journal ADD COLUMN mtime_ns INTEGER;
+CREATE TABLE manifest_sicherung (
+  lauf_id TEXT NOT NULL,
+  strecke_id TEXT NOT NULL,
+  stufe_id TEXT NOT NULL,
+  pfad TEXT NOT NULL,
+  ist_ordner INTEGER NOT NULL,
+  groesse INTEGER NOT NULL,
+  hash BLOB,
+  mtime_ns INTEGER,
+  eintrag_lauf_id TEXT,
+  PRIMARY KEY (lauf_id, pfad)
+);
+";
+
 /// Ein Eintrag im Manifest: so liegt der Pfad nach Stellwerks letztem Lauf am Ziel.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ManifestEintrag {
@@ -124,7 +144,7 @@ pub struct ManifestEintrag {
 }
 
 /// Phase eines Laufs. „Direkt“ kennt geplant → läuft → fertig/abgebrochen;
-/// die Phasen von „Umschalten“ kommen mit v0.5 hinzu.
+/// „Umschalten“ zusätzlich hochgeladen → umgeschaltet → fertig/zurückgerollt.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum LaufPhase {
@@ -132,11 +152,21 @@ pub enum LaufPhase {
     Laeuft,
     Fertig,
     Abgebrochen,
+    /// Schattendateien liegen am Ziel – wartet auf „Umschalten“ (oder „Abbrechen“).
+    Hochgeladen,
+    /// Umgeschaltet, Sicherungen liegen am Ziel – wartet auf „Übernehmen“ oder „Rollback“.
+    Umgeschaltet,
+    Zurueckgerollt,
 }
 
 impl LaufPhase {
     pub fn ist_beendet(self) -> bool {
-        matches!(self, LaufPhase::Fertig | LaufPhase::Abgebrochen)
+        matches!(self, LaufPhase::Fertig | LaufPhase::Abgebrochen | LaufPhase::Zurueckgerollt)
+    }
+
+    /// Wartet auf den nächsten Schritt – die Stufe ist so lange gesperrt.
+    pub fn ist_offen(self) -> bool {
+        matches!(self, LaufPhase::Hochgeladen | LaufPhase::Umgeschaltet)
     }
 }
 
@@ -149,6 +179,12 @@ pub enum JournalStatus {
     Fehler,
     /// Nicht ausgeführt – Lauf abgebrochen oder eine Voraussetzung ist fehlgeschlagen.
     Uebersprungen,
+    /// Umschalten: als Schattendatei hochgeladen (bzw. Ordner/Rechte erledigt).
+    Hochgeladen,
+    /// Umschalten: umgeschaltet, Sicherung liegt noch am Ziel.
+    Umgeschaltet,
+    /// Umschalten: zurückgenommen (Rollback oder Abbrechen).
+    Zurueckgerollt,
 }
 
 /// Schwere eines Protokolleintrags.
@@ -187,6 +223,11 @@ pub struct JournalZeile {
     /// Bemerkenswertes ohne Fehler, z. B. „Datenverbindung 1-mal mit neuem Port wiederholt“.
     pub hinweis: Option<String>,
     pub aktualisiert: i64,
+    /// Umschalten: Hash und Zeit der Quelle der hochgeladenen Datei (nur intern).
+    #[serde(skip)]
+    pub hash: Option<Hash>,
+    #[serde(skip)]
+    pub mtime_ns: Option<i64>,
 }
 
 /// Neuer Protokolleintrag.
@@ -267,7 +308,7 @@ impl Datenbank {
             let version: i64 = conn.pragma_query_value(None, "user_version", |r| r.get(0))?;
             if version < SCHEMA_VERSION {
                 // Fehlende Stufen nacheinander; vorhandene Daten bleiben erhalten
-                let schritte = [SCHEMA, SCHEMA_2, SCHEMA_3, SCHEMA_4];
+                let schritte = [SCHEMA, SCHEMA_2, SCHEMA_3, SCHEMA_4, SCHEMA_5];
                 let fehlend = schritte[version.max(0) as usize..].concat();
                 conn.execute_batch(&format!("BEGIN; {fehlend} PRAGMA user_version = {SCHEMA_VERSION}; COMMIT;"))?;
             }
@@ -353,7 +394,66 @@ impl Datenbank {
         gefunden(n, || format!("Journal-Eintrag {nr} von Lauf „{lauf_id}“"))
     }
 
+    /// Umschalten: Hash und Zeit der Quelle einer hochgeladenen Datei merken.
+    pub fn journal_uebertragen(&self, lauf_id: &str, nr: usize, hash: Hash, mtime_ns: Option<i64>) -> Result<()> {
+        let n = self
+            .conn
+            .execute(
+                "UPDATE journal SET hash = ?3, mtime_ns = ?4 WHERE lauf_id = ?1 AND nr = ?2",
+                params![lauf_id, nr as i64, hash.0.to_vec(), mtime_ns],
+            )
+            .map_err(db)?;
+        gefunden(n, || format!("Journal-Eintrag {nr} von Lauf „{lauf_id}“"))
+    }
+
+    /// Der neueste Lauf der Stufe, der auf seinen nächsten Schritt wartet (Umschalten).
+    pub fn offener_lauf(&self, strecke_id: &str, stufe_id: &str) -> Result<Option<Lauf>> {
+        self.conn
+            .query_row(
+                &format!(
+                    "SELECT {LAUF_SPALTEN} FROM lauf WHERE strecke_id = ?1 AND stufe_id = ?2 AND phase IN ('hochgeladen', 'umgeschaltet')
+                     ORDER BY gestartet DESC, id DESC LIMIT 1"
+                ),
+                params![strecke_id, stufe_id],
+                lauf_aus,
+            )
+            .optional()
+            .map_err(db)
+    }
+
     // --- Manifest -----------------------------------------------------------
+
+    /// Sichert das Manifest einer Stufe für den Lauf (vor dem Umschalten).
+    pub fn manifest_sichern(&mut self, strecke_id: &str, stufe_id: &str, lauf_id: &str) -> Result<()> {
+        let tx = self.conn.transaction().map_err(db)?;
+        tx.execute("DELETE FROM manifest_sicherung WHERE lauf_id = ?1", [lauf_id]).map_err(db)?;
+        tx.execute(
+            "INSERT INTO manifest_sicherung SELECT ?3, strecke_id, stufe_id, pfad, ist_ordner, groesse, hash, mtime_ns, lauf_id
+             FROM manifest WHERE strecke_id = ?1 AND stufe_id = ?2",
+            params![strecke_id, stufe_id, lauf_id],
+        )
+        .map_err(db)?;
+        tx.commit().map_err(db)
+    }
+
+    /// Rollback: das gesicherte Manifest zurück; die Sicherung entfällt.
+    pub fn manifest_zuruecksetzen(&mut self, strecke_id: &str, stufe_id: &str, lauf_id: &str) -> Result<()> {
+        let tx = self.conn.transaction().map_err(db)?;
+        tx.execute("DELETE FROM manifest WHERE strecke_id = ?1 AND stufe_id = ?2", params![strecke_id, stufe_id]).map_err(db)?;
+        tx.execute(
+            "INSERT INTO manifest SELECT strecke_id, stufe_id, pfad, ist_ordner, groesse, hash, mtime_ns, eintrag_lauf_id
+             FROM manifest_sicherung WHERE lauf_id = ?1",
+            [lauf_id],
+        )
+        .map_err(db)?;
+        tx.execute("DELETE FROM manifest_sicherung WHERE lauf_id = ?1", [lauf_id]).map_err(db)?;
+        tx.commit().map_err(db)
+    }
+
+    /// Übernommen: die Sicherung wird nicht mehr gebraucht.
+    pub fn manifest_sicherung_verwerfen(&self, lauf_id: &str) -> Result<()> {
+        self.conn.execute("DELETE FROM manifest_sicherung WHERE lauf_id = ?1", [lauf_id]).map(drop).map_err(db)
+    }
 
     /// Trägt einen Pfad ein oder ersetzt ihn.
     pub fn manifest_setzen(&self, strecke_id: &str, stufe_id: &str, e: &ManifestEintrag) -> Result<()> {
@@ -445,7 +545,7 @@ impl Datenbank {
         let mut stmt = self
             .conn
             .prepare(
-                "SELECT nr, op, pfad, quelle, modus, groesse, status, fehler, hinweis, aktualisiert
+                "SELECT nr, op, pfad, quelle, modus, groesse, status, fehler, hinweis, aktualisiert, hash, mtime_ns
                  FROM journal WHERE lauf_id = ?1 ORDER BY nr",
             )
             .map_err(db)?;
@@ -462,6 +562,8 @@ impl Datenbank {
                     fehler: r.get(7)?,
                     hinweis: r.get(8)?,
                     aktualisiert: r.get(9)?,
+                    hash: hash_aus(r, 10)?,
+                    mtime_ns: r.get(11)?,
                 })
             })
             .map_err(db)?;
@@ -552,14 +654,17 @@ fn manifest_einfuegen(conn: &Connection, strecke_id: &str, stufe_id: &str, e: &M
     .map(drop)
 }
 
+fn hash_aus(r: &Row, spalte: usize) -> rusqlite::Result<Option<Hash>> {
+    let hash: Option<Vec<u8>> = r.get(spalte)?;
+    hash.map(|h| <[u8; 32]>::try_from(h.as_slice()).map(Hash).map_err(|e| umwandlung(spalte, e))).transpose()
+}
+
 fn manifest_aus(r: &Row) -> rusqlite::Result<ManifestEintrag> {
-    let hash: Option<Vec<u8>> = r.get(3)?;
-    let hash = hash.map(|h| <[u8; 32]>::try_from(h.as_slice()).map(Hash).map_err(|e| umwandlung(3, e))).transpose()?;
     Ok(ManifestEintrag {
         pfad: pfad_aus(r, 0)?,
         ist_ordner: r.get(1)?,
         groesse: r.get::<_, i64>(2)? as u64,
-        hash,
+        hash: hash_aus(r, 3)?,
         mtime_ns: r.get(4)?,
         lauf_id: r.get(5)?,
     })

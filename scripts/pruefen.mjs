@@ -15,7 +15,9 @@ const ORDNER = "target/pruefen";
 const TEILE = [
   ["build", "Build", "npm run build"],
   ["frontend", "Frontend-Tests mit Abdeckung", "npm run abdeckung"],
-  ["rust", "Rust-Tests mit Abdeckung", "npm run abdeckung:rust"],
+  // Erstes `--color always`: cargo und llvm-cov (Abdeckungstabelle), zweites: die Testprogramme
+  // („… ok“ grün) – beide schalten Farben sonst ab, weil die Ausgabe durch eine Pipe läuft
+  ["rust", "Rust-Tests mit Abdeckung", "npm run abdeckung:rust -- --color always -- --color always"],
 ];
 
 function ausfuehren(befehl) {

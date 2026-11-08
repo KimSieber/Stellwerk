@@ -135,7 +135,23 @@ describe("Streckenansicht", () => {
     );
   });
 
+  it("Läufe mit Umschalten: wartend, angehalten, zurückgerollt, Reste", () => {
+    const z = { ordner_anlegen: 1, kopieren: 2, ueberschreiben: 1, rechte: 0, dateien_loeschen: 1, ordner_loeschen: 1, bytes: 10 };
+    const e = { erledigt: 4, fehler: [], uebersprungen: 0, abgebrochen: false, gestoppt: false, bytes: 10, journal_fehler: null };
+    const l: Lauf = { id: "l", strecke_id: "s", stufe_id: "t", modus: "umschalten_manuell", phase: "hochgeladen", gestartet: 0, beendet: null, zusammenfassung: z, ergebnis: e };
+    const f = { nr: 1, pfad: "a", meldung: "m" };
+    expect(laufText(l)).toEqual({ text: "hochgeladen · wartet auf Umschalten", art: "warnung" });
+    expect(laufText({ ...l, ergebnis: { ...e, fehler: [{ ...f, art: "kopieren" }] } })).toEqual({ text: "Hochladen unvollständig · 1 Fehler", art: "fehler" });
+    expect(laufText({ ...l, phase: "umgeschaltet" })).toEqual({ text: "umgeschaltet · wartet auf Übernehmen", art: "warnung" });
+    const angehalten = { ...e, umschalten: { erledigt: 1, fehler: [f, f], gestoppt: true } };
+    expect(laufText({ ...l, phase: "umgeschaltet", ergebnis: angehalten })).toEqual({ text: "Umschalten angehalten · 2 Fehler", art: "fehler" });
+    expect(laufText({ ...l, phase: "zurueckgerollt" })).toEqual({ text: "zurückgerollt", art: "warnung" });
+    const reste = { ...e, uebernehmen: { erledigt: 1, fehler: [f], gestoppt: false } };
+    expect(laufText({ ...l, phase: "fertig", ergebnis: reste })).toEqual({ text: "übernommen · 1 Rest nicht entfernt", art: "warnung" });
+    expect(laufText({ ...l, phase: "fertig", ergebnis: { ...e, uebernehmen: { erledigt: 3, fehler: [], gestoppt: false } } }).art).toBe("ok");
+  });
+
   it("Journal-Status", () => {
-    expect(Object.values(JOURNAL_TEXT)).toEqual(["offen", "erledigt", "Fehler", "nicht ausgeführt"]);
+    expect(Object.values(JOURNAL_TEXT)).toEqual(["offen", "erledigt", "Fehler", "nicht ausgeführt", "hochgeladen", "umgeschaltet", "zurückgenommen"]);
   });
 });

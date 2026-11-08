@@ -44,7 +44,8 @@ export function StufeEditor(props: {
           wert={stufe.modus}
           optionen={[
             ["direkt", "Direkt"],
-            ["umschalten", "Mit Umschalten"],
+            ["umschalten", "Umschalten automatisch"],
+            ["umschalten_manuell", "Umschalten manuell"],
           ]}
           onChange={(modus) => setze({ modus })}
         />

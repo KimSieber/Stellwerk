@@ -723,15 +723,7 @@ fn plan_nur_wenn_die_stufe_noch_passt() {
     let plan = || a.aufruf("plan_erstellen", json!({ "vergleichId": id })).unwrap_err();
     let mut s = strecke_json(&a.wurzel);
 
-    // „Mit Umschalten“ gibt es lokal noch nicht
-    s["stufen"][0]["modus"] = json!("umschalten");
-    a.aufruf("strecke_speichern", json!({ "strecke": s })).unwrap();
-    let e = plan();
-    assert_eq!(e["kategorie"], "nicht_unterstuetzt");
-    assert!(e["meldung"].as_str().unwrap().contains("„Mit Umschalten“"), "{e}");
-
     // Zielordner seit dem Vergleich geändert
-    s["stufen"][0]["modus"] = json!("direkt");
     let anderes = a.wurzel.join("daten/anderes");
     std::fs::create_dir_all(&anderes).unwrap();
     s["stufen"][0]["ziel"]["pfad"] = json!(anderes);
@@ -1191,4 +1183,259 @@ fn ftps_rechte_nach_stufen_einstellung_aendern_den_letzten_stand_nicht() {
     }
     let pfade: Vec<_> = db(&a).manifest("ftps-web", "server").unwrap().into_iter().map(|e| e.pfad.as_str().to_string()).collect();
     assert_eq!(pfade, ["gleich.css", "index.php"]);
+}
+
+// --- Umschalten (v0.5) -------------------------------------------------------
+
+/// Vergleichsdaten mit einer zu überschreibenden Datei; Stufe im angegebenen Modus.
+fn mit_umschalten(a: &Testapp, modus: &str) {
+    mit_vergleichsdaten(a);
+    std::fs::write(a.wurzel.join("daten/spiegel/index.php"), "alt-alt").unwrap();
+    let mut s = strecke_json(&a.wurzel);
+    s["stufen"][0]["modus"] = json!(modus);
+    a.aufruf("strecke_speichern", json!({ "strecke": s })).unwrap();
+}
+
+fn weiter(a: &Testapp, lauf: &Value, schritt: &str) -> Result<Value, Value> {
+    a.aufruf("lauf_weiter", json!({ "laufId": lauf, "schritt": schritt }))
+}
+
+fn spiegel(a: &Testapp) -> std::collections::BTreeMap<String, String> {
+    let z = a.wurzel.join("daten/spiegel");
+    walkdir_dateien(&z)
+}
+
+fn walkdir_dateien(wurzel: &std::path::Path) -> std::collections::BTreeMap<String, String> {
+    let mut m = std::collections::BTreeMap::new();
+    let mut offen = vec![wurzel.to_path_buf()];
+    while let Some(d) = offen.pop() {
+        for e in std::fs::read_dir(&d).unwrap() {
+            let p = e.unwrap().path();
+            let rel = p.strip_prefix(wurzel).unwrap().display().to_string();
+            if p.is_dir() {
+                m.insert(rel + "/", String::new());
+                offen.push(p);
+            } else {
+                m.insert(rel, std::fs::read_to_string(&p).unwrap());
+            }
+        }
+    }
+    m
+}
+
+fn journal_status(a: &Testapp, lauf: &Value) -> Vec<String> {
+    let j = a.aufruf("lauf_journal", json!({ "laufId": lauf })).unwrap();
+    j.as_array().unwrap().iter().map(|z| z["status"].as_str().unwrap().to_string()).collect()
+}
+
+#[test]
+fn umschalten_automatisch_in_einem_zug() {
+    let a = app();
+    mit_umschalten(&a, "umschalten");
+    let (id, vorschau) = vergleichen_und_planen(&a);
+    assert_eq!(vorschau["modus"], "umschalten");
+    let r = uebertragen(&a, &id, true, false).unwrap();
+    assert_eq!(r["phase"], "fertig", "{r}");
+    assert_eq!(
+        spiegel(&a),
+        std::collections::BTreeMap::from([("css/".into(), String::new()), ("css/site.css".into(), "c".into()), ("index.php".into(), "neu".into())])
+    );
+    let lauf = r["lauf_id"].clone();
+    assert!(journal_status(&a, &lauf).iter().all(|s| s == "erledigt"), "{:?}", journal_status(&a, &lauf));
+    let aktionen: Vec<String> = protokoll(&a, lauf.as_str().unwrap()).into_iter().map(|(akt, _)| akt).collect();
+    assert_eq!(aktionen, ["lauf_gestartet", "hochgeladen", "umgeschaltet", "uebernommen"]);
+    let l = a.aufruf("laeufe", json!({ "strecke": "mailwerk-web", "stufe": "spiegel", "limit": 1 })).unwrap();
+    assert_eq!((l[0]["modus"].clone(), l[0]["phase"].clone()), (json!("umschalten"), json!("fertig")));
+    assert_eq!(l[0]["ergebnis"]["uebernehmen"]["erledigt"], 2, "{}", l[0]["ergebnis"]);
+    // Danach wieder frei
+    starten(&a);
+}
+
+#[test]
+fn umschalten_manuell_sperrt_die_stufe_bis_zum_rollback() {
+    let a = app();
+    mit_umschalten(&a, "umschalten_manuell");
+    let vorher = spiegel(&a);
+    let (id, _) = vergleichen_und_planen(&a);
+    let r = uebertragen(&a, &id, true, false).unwrap();
+    assert_eq!(r["phase"], "hochgeladen");
+    let lauf = r["lauf_id"].clone();
+    assert_eq!(spiegel(&a)["index.php"], "alt-alt", "Live unverändert");
+    assert!(spiegel(&a).contains_key(&format!("index.php.dpl-{}", lauf.as_str().unwrap())));
+
+    // Gesperrt: kein Vergleich, kein Plan
+    let e = a.aufruf("vergleich_starten", json!({ "strecke": "mailwerk-web", "stufe": "spiegel", "fortschritt": KANAL })).unwrap_err();
+    assert_eq!(e["kategorie"], "lauf_offen");
+    assert!(e["meldung"].as_str().unwrap().contains("„Umschalten“"), "{e}");
+    assert_eq!(a.aufruf("plan_erstellen", json!({ "vergleichId": id })).unwrap_err()["kategorie"], "lauf_offen");
+
+    // Falsche Schritte
+    for schritt in ["uebernehmen", "rollback"] {
+        let e = weiter(&a, &lauf, schritt).unwrap_err();
+        assert!(e["meldung"].as_str().unwrap().contains("nicht möglich"), "{e}");
+    }
+    let s = weiter(&a, &lauf, "umschalten").unwrap();
+    assert_eq!((s["phase"].clone(), s["fehler"].clone()), (json!("umgeschaltet"), json!([])));
+    assert_eq!(spiegel(&a)["index.php"], "neu");
+    let e = a.aufruf("vergleich_starten", json!({ "strecke": "mailwerk-web", "stufe": "spiegel", "fortschritt": KANAL })).unwrap_err();
+    assert!(e["meldung"].as_str().unwrap().contains("„Übernehmen“"), "{e}");
+    for schritt in ["umschalten", "abbrechen"] {
+        assert_eq!(weiter(&a, &lauf, schritt).unwrap_err()["kategorie"], "nicht_unterstuetzt");
+    }
+
+    let s = weiter(&a, &lauf, "rollback").unwrap();
+    assert_eq!(s["phase"], "zurueckgerollt");
+    assert_eq!(spiegel(&a), vorher);
+    assert!(journal_status(&a, &lauf).iter().any(|st| st == "zurueckgerollt"));
+    assert_eq!(weiter(&a, &lauf, "rollback").unwrap_err()["kategorie"], "nicht_unterstuetzt", "beendet");
+    starten(&a);
+}
+
+#[test]
+fn umschalten_manuell_uebernehmen_und_abbrechen() {
+    let a = app();
+    mit_umschalten(&a, "umschalten_manuell");
+    let (id, _) = vergleichen_und_planen(&a);
+    let lauf = uebertragen(&a, &id, true, false).unwrap()["lauf_id"].clone();
+    weiter(&a, &lauf, "umschalten").unwrap();
+    assert_eq!(weiter(&a, &lauf, "uebernehmen").unwrap()["phase"], "fertig");
+    assert!(journal_status(&a, &lauf).iter().all(|s| s == "erledigt"));
+    assert!(!spiegel(&a).keys().any(|k| k.contains(".bak-") || k.contains(".dpl-")));
+
+    // Neuer Lauf, gleich abbrechen
+    std::fs::write(a.wurzel.join("daten/quelle/neu2.txt"), "n").unwrap();
+    let vorher = spiegel(&a);
+    let (id, _) = vergleichen_und_planen(&a);
+    let lauf = uebertragen(&a, &id, true, false).unwrap()["lauf_id"].clone();
+    assert_eq!(weiter(&a, &lauf, "abbrechen").unwrap()["phase"], "abgebrochen");
+    assert_eq!(spiegel(&a), vorher);
+
+    assert_eq!(weiter(&a, &json!("gibtsnicht"), "abbrechen").unwrap_err()["kategorie"], "nicht_gefunden");
+}
+
+#[test]
+fn umschalten_fehler_beim_hochladen_und_beim_umschalten() {
+    let a = app();
+    mit_umschalten(&a, "umschalten");
+    // Hochladen scheitert an einer verschwundenen Quelle: nie umschalten, Lauf bleibt offen
+    let (id, _) = vergleichen_und_planen(&a);
+    std::fs::remove_file(a.wurzel.join("daten/quelle/css/site.css")).unwrap();
+    let r = uebertragen(&a, &id, true, false).unwrap();
+    assert_eq!(r["phase"], "hochgeladen");
+    assert_eq!(r["ergebnis"]["fehler"].as_array().unwrap().len(), 1);
+    let lauf = r["lauf_id"].clone();
+    assert_eq!(spiegel(&a)["index.php"], "alt-alt");
+    assert!(weiter(&a, &lauf, "umschalten").unwrap_err()["meldung"].as_str().unwrap().contains("nicht möglich"));
+    weiter(&a, &lauf, "abbrechen").unwrap();
+
+    // Umschalten scheitert: eine neue Datei ist inzwischen am Ziel – gestoppt, Rollback möglich
+    std::fs::write(a.wurzel.join("daten/quelle/css/site.css"), "c").unwrap();
+    let vorher = spiegel(&a);
+    let (id, _) = vergleichen_und_planen(&a);
+    std::fs::create_dir_all(a.wurzel.join("daten/spiegel/css")).unwrap();
+    std::fs::write(a.wurzel.join("daten/spiegel/css/site.css"), "fremd").unwrap();
+    let r = uebertragen(&a, &id, true, false).unwrap();
+    assert_eq!(r["phase"], "umgeschaltet", "{r}");
+    let lauf = r["lauf_id"].clone();
+    assert!(weiter(&a, &lauf, "uebernehmen").unwrap_err()["meldung"].as_str().unwrap().contains("nicht möglich"));
+    let s = weiter(&a, &lauf, "rollback").unwrap();
+    assert_eq!(s["phase"], "zurueckgerollt");
+    let mut erwartet = vorher;
+    erwartet.insert("css/".into(), String::new());
+    erwartet.insert("css/site.css".into(), "fremd".into());
+    assert_eq!(spiegel(&a), erwartet, "die fremde Datei bleibt unberührt");
+}
+
+#[test]
+fn umschalten_ziel_geaendert_oder_laeuft_schon() {
+    let a = app();
+    mit_umschalten(&a, "umschalten_manuell");
+    let (id, _) = vergleichen_und_planen(&a);
+    let lauf = uebertragen(&a, &id, true, false).unwrap()["lauf_id"].clone();
+    // Gleichzeitig läuft schon etwas auf der Stufe
+    let state = a.fenster.state::<AppState>();
+    let _halter = state.laeufe.anmelden("mailwerk-web/spiegel").unwrap();
+    assert_eq!(weiter(&a, &lauf, "umschalten").unwrap_err()["kategorie"], "vorhanden");
+    state.laeufe.abmelden("mailwerk-web/spiegel");
+    // Ziel der Stufe geändert
+    let mut s = strecke_json(&a.wurzel);
+    s["stufen"][0]["modus"] = json!("umschalten_manuell");
+    let anderes = a.wurzel.join("daten/anderes");
+    std::fs::create_dir_all(&anderes).unwrap();
+    s["stufen"][0]["ziel"]["pfad"] = json!(anderes);
+    a.aufruf("strecke_speichern", json!({ "strecke": s })).unwrap();
+    let e = weiter(&a, &lauf, "umschalten").unwrap_err();
+    assert!(e["meldung"].as_str().unwrap().contains("seit dem Hochladen geändert"), "{e}");
+}
+
+#[test]
+fn umschalten_abbruch_beim_hochladen_raeumt_auf() {
+    let a = app();
+    mit_umschalten(&a, "umschalten");
+    let block = vec![1u8; 1 << 20];
+    let mut f = std::fs::File::create(a.wurzel.join("daten/quelle/gross.bin")).unwrap();
+    for _ in 0..64 {
+        std::io::Write::write_all(&mut f, &block).unwrap();
+    }
+    drop(f);
+    let vorher = spiegel(&a);
+    let (id, _) = vergleichen_und_planen(&a);
+    let r = std::thread::scope(|s| {
+        let (fenster, id) = (&a.fenster, &id);
+        let lauf = s.spawn(move || {
+            let args = json!({ "vergleichId": id, "loeschenBestaetigt": true, "beiFehlerStoppen": false, "fortschritt": KANAL });
+            aufruf_im(fenster, "lauf_starten", args).unwrap()
+        });
+        while a.aufruf("lauf_abbrechen", json!({ "strecke": "mailwerk-web", "stufe": "spiegel" })).unwrap() != json!(true) {
+            std::thread::yield_now();
+        }
+        lauf.join().unwrap()
+    });
+    assert_eq!(r["phase"], "abgebrochen", "{r}");
+    assert_eq!(spiegel(&a), vorher);
+}
+
+#[test]
+fn umschalten_ftps_letzter_bekannter_stand() {
+    let a = app();
+    let s = stellwerk_testserver::starten(Default::default());
+    ftps_strecke(&a, &s);
+    std::fs::create_dir_all(s.wurzel().join("weg/innen")).unwrap();
+    std::fs::write(s.wurzel().join("weg/innen/x.txt"), "x").unwrap();
+    let q = a.wurzel.join("daten/quelle");
+    std::fs::create_dir_all(q.join("css")).unwrap();
+    std::fs::write(q.join("css/site.css"), "body{}").unwrap();
+    passwort_hinterlegen(&a);
+    let mut st = a.aufruf("strecke_laden", json!({ "id": "ftps-web" })).unwrap();
+    st["stufen"][0]["modus"] = json!("umschalten_manuell");
+    a.aufruf("strecke_speichern", json!({ "strecke": st })).unwrap();
+    let pfade = |a: &Testapp| db(a).manifest("ftps-web", "server").unwrap().into_iter().map(|e| e.pfad.to_string()).collect::<Vec<_>>();
+
+    let (id, _) = ftps_planen(&a, true);
+    let vorher = pfade(&a);
+    let lauf = uebertragen(&a, &id, true, false).unwrap()["lauf_id"].clone();
+    assert_eq!(pfade(&a), vorher, "Hochladen ändert den bekannten Stand nicht");
+    weiter(&a, &lauf, "umschalten").unwrap();
+    let nach = pfade(&a);
+    assert!(nach.contains(&"css/site.css".to_string()) && nach.contains(&"css".to_string()) && !nach.contains(&"alt.txt".to_string()), "{nach:?}");
+    let hash = db(&a).manifest("ftps-web", "server").unwrap().into_iter().find(|e| e.pfad.as_str() == "index.php").unwrap().hash;
+    assert!(hash.is_some(), "Hash aus dem Hochladen");
+    weiter(&a, &lauf, "rollback").unwrap();
+    assert_eq!(pfade(&a), vorher, "Rollback setzt den bekannten Stand zurück");
+
+    // Automatisch bis zum Übernehmen: gelöschte Ordner fallen heraus
+    st["stufen"][0]["modus"] = json!("umschalten");
+    a.aufruf("strecke_speichern", json!({ "strecke": st })).unwrap();
+    let (id, _) = ftps_planen(&a, true);
+    let r = uebertragen(&a, &id, true, false).unwrap();
+    assert_eq!(r["phase"], "fertig", "{r}");
+    let nach = pfade(&a);
+    assert!(!nach.iter().any(|p| p.starts_with("weg")), "{nach:?}");
+    assert_eq!(std::fs::read_to_string(s.wurzel().join("index.php")).unwrap(), "neu");
+}
+
+#[test]
+fn lauf_weiter_mit_unbekanntem_schritt_wird_abgewiesen() {
+    let a = app();
+    assert!(a.aufruf("lauf_weiter", json!({ "laufId": "x", "schritt": 5 })).is_err());
 }

@@ -129,6 +129,18 @@ impl ZielVerbindung for LokaleVerbindung<'_> {
             r => r.map_err(io(&z)),
         }
     }
+
+    fn umbenennen(&mut self, von: &RelPath, nach: &RelPath, ersetzen: bool) -> Result<()> {
+        let (v, n) = (self.ziel.pfad(von), self.ziel.pfad(nach));
+        if !ersetzen && fs::symlink_metadata(&n).is_ok() {
+            return Err(StellwerkError::Vorhanden(format!("{} – am Ziel inzwischen vorhanden, bitte neu vergleichen", n.display())));
+        }
+        fs::rename(&v, &n).map_err(io(&n))
+    }
+
+    fn ist_datei(&mut self, p: &RelPath) -> Result<bool> {
+        Ok(fs::symlink_metadata(self.ziel.pfad(p)).is_ok_and(|m| m.is_file()))
+    }
 }
 
 fn ist_echter_ordner(p: &Path) -> bool {

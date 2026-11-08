@@ -4,10 +4,10 @@ import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
-import type { JournalZeile, Lauf, StreckeUebersicht, VergleichStart } from "../api";
+import type { JournalZeile, Lauf, LaufStand, StreckeUebersicht, VergleichStart } from "../api";
 import { aufrufeVon, rustAttrappe, type Antworten } from "../test/hilfen";
 import { kanalSenden, start, summe } from "../test/vergleich";
-import { NEU_VERGLEICHEN_NACH_MS, StreckeAnsicht } from "./StreckeAnsicht";
+import { NEU_VERGLEICHEN_NACH_MS, schrittMeldung, StreckeAnsicht } from "./StreckeAnsicht";
 
 // Die Vergleichsansicht ist eigens getestet; hier zählt nur, was sie zurückmeldet.
 vi.mock("../vergleich/VergleichAnsicht", () => ({
@@ -508,5 +508,120 @@ describe("Streckenansicht – Protokoll je Stufe", () => {
     expect(await p.findByText("Journal kaputt")).toHaveClass("fehler");
     await userEvent.click(p.getByText(/4 Schritte/));
     expect(p.getAllByText("…").length).toBeGreaterThan(0);
+  });
+});
+
+describe("Streckenansicht – wartender Lauf (Umschalten)", () => {
+  const plan = { ordner_anlegen: 0, kopieren: 1, ueberschreiben: 1, rechte: 0, dateien_loeschen: 0, ordner_loeschen: 0, bytes: 10 };
+  const ergebnis = { erledigt: 2, fehler: [], uebersprungen: 0, abgebrochen: false, gestoppt: false, bytes: 10, journal_fehler: null };
+  const LAUF_OFFEN = { kategorie: "lauf_offen", meldung: "Auf dieser Stufe wartet ein Lauf" };
+  const lauf = (stufe: string, teil: Partial<Lauf>): Lauf => ({
+    id: `${stufe}-lauf`,
+    strecke_id: "web",
+    stufe_id: stufe,
+    modus: "umschalten_manuell",
+    phase: "hochgeladen",
+    gestartet: new Date(2026, 10, 8, 19, 5).getTime(),
+    beendet: null,
+    zusammenfassung: plan,
+    ergebnis,
+    ...teil,
+  });
+
+  /** Stufe `gesperrt` hat einen wartenden Lauf, solange `stand.phase` wartet. */
+  function mitLauf(gesperrt: string, anfang: Partial<Lauf>, weiter: (schritt: string) => unknown = () => ({ phase: "fertig" })) {
+    const stand = { lauf: lauf(gesperrt, anfang) };
+    const aufrufe = rust({
+      vergleich_starten: (a) => {
+        const { stufe } = a as { stufe: string };
+        if (stufe === gesperrt && (stand.lauf.phase === "hochgeladen" || stand.lauf.phase === "umgeschaltet")) throw LAUF_OFFEN;
+        return start({ vergleich_id: `${stufe}#1`, zusammenfassung: GLEICH });
+      },
+      laeufe: (a) => ((a as { stufe: string }).stufe === gesperrt ? [stand.lauf] : []),
+      lauf_weiter: async (a) => {
+        const r = (await weiter((a as { schritt: string }).schritt)) as { phase: Lauf["phase"] };
+        stand.lauf = { ...stand.lauf, phase: r.phase };
+        return { lauf_id: stand.lauf.id, fehler: [], ...r };
+      },
+    });
+    return { aufrufe, stand };
+  }
+  const knoepfeIn = (stufe: string) => within(karte(stufe)).getAllByRole("button").map((b) => b.textContent);
+
+  it("manuell: Umschalten, dann Übernehmen – danach wird neu verglichen", async () => {
+    const { aufrufe } = mitLauf("eins", {}, (s) => ({ phase: s === "umschalten" ? "umgeschaltet" : "fertig" }));
+    ansicht({ ...STRECKE, stufen: STRECKE.stufen.slice(0, 2) });
+    expect(await within(karte("Repo → Test 1")).findByText("hochgeladen · wartet auf Umschalten")).toBeInTheDocument();
+    expect(karte("Repo → Test 1")).toHaveClass("status-offen");
+    expect(karte("Repo → Test 1")).toHaveTextContent("Lauf 08.11.2026, 19:05");
+    expect(knoepfeIn("Repo → Test 1")).toEqual(["Umschalten", "Abbrechen"]);
+    expect(karte("Repo → Test 1")).toHaveTextContent("liegen als Schattendateien (….dpl-…) am Ziel – die Live-Seite ist unverändert");
+    expect(within(karte("Repo → Test 1")).getByRole("button", { name: "Umschalten" })).toHaveAttribute("title", expect.stringContaining("Original → .bak"));
+
+    await userEvent.click(within(karte("Repo → Test 1")).getByRole("button", { name: "Umschalten" }));
+    expect(aufrufeVon(aufrufe, "lauf_weiter")[0].args).toEqual({ laufId: "eins-lauf", schritt: "umschalten" });
+    expect(await within(karte("Repo → Test 1")).findByText("umgeschaltet · wartet auf Übernehmen")).toBeInTheDocument();
+    expect(knoepfeIn("Repo → Test 1")).toEqual(["Übernehmen", "Rollback"]);
+    expect(karte("Repo → Test 1")).toHaveTextContent("Die neuen Dateien sind live.");
+    expect(within(karte("Repo → Test 1")).getByText("Umgeschaltet")).toHaveClass("schritt-meldung");
+    // Noch gesperrt: nur die folgende Stufe neu (ihre Quelle hat sich geändert)
+    await waitFor(() => expect(gestartet(aufrufe)).toEqual(["eins", "zwei", "zwei"]));
+
+    await userEvent.click(within(karte("Repo → Test 1")).getByRole("button", { name: "Übernehmen" }));
+    await waitFor(() => expect(gestartet(aufrufe)).toEqual(["eins", "zwei", "zwei", "eins", "zwei"]));
+    expect(await within(zeile("Repo → Test 1")).findByText("gleich")).toBeInTheDocument();
+    expect(within(karte("Repo → Test 1")).getByText("Übernommen – die Sicherungen sind entfernt")).toBeInTheDocument();
+  });
+
+  it("nach Fehlern nur zurück; Fehler des Schritts wird gezeigt; letzte Stufe ohne Folgestufe", async () => {
+    let antworten: (s: string) => unknown = () => {
+      throw { kategorie: "nicht_unterstuetzt", meldung: "Das Ziel der Stufe wurde seit dem Hochladen geändert" };
+    };
+    const fehler = [{ nr: 0, art: "kopieren" as const, pfad: "a", meldung: "m" }];
+    const { aufrufe, stand } = mitLauf("server", { ergebnis: { ...ergebnis, fehler } }, (s) => antworten(s));
+    ansicht({ ...STRECKE, stufen: [STRECKE.stufen[2]] });
+    expect(await within(karte("Test 2 → Server")).findByText("Hochladen unvollständig · 1 Fehler")).toBeInTheDocument();
+    expect(knoepfeIn("Test 2 → Server")).toEqual(["Abbrechen"]);
+    expect(karte("Test 2 → Server")).toHaveTextContent("Nicht alles wurde hochgeladen – deshalb wird nicht umgeschaltet.");
+    await userEvent.click(within(karte("Test 2 → Server")).getByRole("button", { name: "Abbrechen" }));
+    expect(await within(karte("Test 2 → Server")).findByText(/seit dem Hochladen geändert/)).toHaveClass("fehler");
+
+    // Umschalten angehalten: nur Rollback; während des Schritts sind die Knöpfe gesperrt
+    let fertig = (_: unknown) => {};
+    antworten = () => new Promise((ok) => (fertig = ok));
+    stand.lauf = lauf("server", { phase: "umgeschaltet", ergebnis: { ...ergebnis, umschalten: { erledigt: 0, fehler: [{ nr: 0, pfad: "a", meldung: "m" }], gestoppt: true } } });
+    await act(async () => {
+      await userEvent.click(screen.getByRole("button", { name: "Alle neu vergleichen" }));
+    });
+    expect(await within(karte("Test 2 → Server")).findByText("Umschalten angehalten · 1 Fehler")).toBeInTheDocument();
+    expect(knoepfeIn("Test 2 → Server")).toEqual(["Rollback"]);
+    expect(karte("Test 2 → Server")).toHaveTextContent("es wurde angehalten, ein Teil ist schon umgeschaltet");
+    await userEvent.click(within(karte("Test 2 → Server")).getByRole("button", { name: "Rollback" }));
+    expect(within(karte("Test 2 → Server")).getByRole("button", { name: "Rollback …" })).toBeDisabled();
+    await act(async () => fertig({ phase: "zurueckgerollt", fehler: [{ pfad: "a", meldung: "m" }] }));
+    expect(await screen.findByText("Zurückgerollt – der alte Stand ist wiederhergestellt – 1 Fehler, Einzelheiten im Protokoll")).toBeInTheDocument();
+    await waitFor(() => expect(gestartet(aufrufe).at(-1)).toBe("server"));
+    expect(await within(zeile("Test 2 → Server")).findByText("gleich")).toBeInTheDocument();
+  });
+
+  it("Rückmeldungen nach jedem Schritt", () => {
+    const m = (phase: LaufStand["phase"]) => schrittMeldung({ lauf_id: "l", phase, fehler: [] });
+    expect(["hochgeladen", "abgebrochen", "geplant", "laeuft"].map((p) => m(p as LaufStand["phase"]))).toEqual([
+      "Hochgeladen",
+      "Abgebrochen – die Schattendateien sind entfernt",
+      "",
+      "",
+    ]);
+  });
+
+  it("solange der Lauf noch nicht geladen ist", async () => {
+    rust({
+      vergleich_starten: () => {
+        throw LAUF_OFFEN;
+      },
+      laeufe: () => new Promise(() => {}),
+    });
+    ansicht({ ...STRECKE, stufen: [STRECKE.stufen[0]] });
+    expect(await screen.findByText("Ein Lauf wartet auf den nächsten Schritt …")).toBeInTheDocument();
   });
 });

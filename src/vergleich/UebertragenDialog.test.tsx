@@ -15,6 +15,7 @@ function plan(teil: Partial<PlanVorschau> = {}): PlanVorschau {
     quelle: "/Users/kim/Dev/web",
     ziel: "/Users/kim/Server/web",
     worker: 8,
+    modus: "direkt",
     ...teil,
   };
 }
@@ -152,7 +153,7 @@ describe("Übertragen – Lauf", () => {
     await userEvent.click(hintergrund());
     expect(onAbbrechen).not.toHaveBeenCalled();
 
-    await act(async () => s.fertig({ lauf_id: "mw5ha39c", ergebnis: ergebnis() }));
+    await act(async () => s.fertig({ lauf_id: "mw5ha39c", ergebnis: ergebnis(), phase: "fertig" }));
     expect(screen.getByText("✓ 4 Schritte erledigt · 3 KB übertragen")).toHaveClass("ok");
     expect(screen.getByText("Lauf mw5ha39c · jeder Schritt steht im Journal.")).toBeInTheDocument();
     // Späte Fortschrittsmeldungen ändern nichts mehr
@@ -179,7 +180,7 @@ describe("Übertragen – Lauf", () => {
     expect(screen.getByText("Wird abgebrochen – laufende Dateien werden sauber beendet …")).toBeInTheDocument();
     expect(knopf("Abbrechen")).toBeDisabled();
 
-    await act(async () => s.fertig({ lauf_id: "l", ergebnis: ergebnis({ erledigt: 1, uebersprungen: 2, abgebrochen: true, bytes: 0 }) }));
+    await act(async () => s.fertig({ lauf_id: "l", ergebnis: ergebnis({ erledigt: 1, uebersprungen: 2, abgebrochen: true, bytes: 0 }), phase: "abgebrochen" }));
     expect(screen.getByText("1 Schritt erledigt · 0 B übertragen")).not.toHaveClass("ok");
     expect(screen.getByText(/^Abgebrochen/)).toBeInTheDocument();
     expect(screen.getByText("2 Schritte nicht ausgeführt.")).toBeInTheDocument();
@@ -192,7 +193,7 @@ describe("Übertragen – Lauf", () => {
     ];
     dialog({
       plan_erstellen: () => OHNE_LOESCHEN,
-      lauf_starten: () => ({ lauf_id: "l", ergebnis: ergebnis({ erledigt: 2, fehler, gestoppt: true, journal_fehler: "Platte voll" }) }),
+      lauf_starten: () => ({ lauf_id: "l", ergebnis: ergebnis({ erledigt: 2, fehler, gestoppt: true, journal_fehler: "Platte voll" }), phase: "fertig" }),
     });
     await userEvent.click(await screen.findByRole("button", { name: "Übertragen" }));
     expect(await screen.findByText("2 Fehler")).toBeInTheDocument();
@@ -215,5 +216,20 @@ describe("Übertragen – Lauf", () => {
     expect(onAbbrechen).not.toHaveBeenCalled();
     await userEvent.click(knopf("Schließen"));
     expect(onFertig).toHaveBeenCalled();
+  });
+
+  it("Umschalten: Hinweis zum Modus und zum Stand nach dem Hochladen", async () => {
+    for (const [modus, phase, text, art] of [
+      ["umschalten_manuell", "hochgeladen", "Hochgeladen als Schattendateien – die Live-Seite ist unverändert.", "warnung"],
+      ["umschalten", "umgeschaltet", "Umschalten angehalten – Rollback in der Streckenansicht.", "fehler"],
+    ] as const) {
+      const { r, onFertig } = dialog({ plan_erstellen: () => plan({ ...OHNE_LOESCHEN, modus }), lauf_starten: () => ({ lauf_id: "l", ergebnis: ergebnis(), phase }) });
+      expect(await screen.findByText(/^Mit Umschalten/)).toHaveClass("modus-hinweis");
+      await userEvent.click(knopf("Übertragen"));
+      expect(await screen.findByText(new RegExp(`^${text}`))).toHaveClass(art);
+      await userEvent.click(knopf("Weiter in der Streckenansicht"));
+      expect(onFertig).toHaveBeenCalledWith(true);
+      r.unmount();
+    }
   });
 });

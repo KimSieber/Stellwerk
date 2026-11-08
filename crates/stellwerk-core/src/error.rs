@@ -64,6 +64,11 @@ pub enum StellwerkError {
     #[error("{0}")]
     KeineRechte(String),
 
+    /// Auf der Stufe wartet ein Lauf („Umschalten“) auf seinen nächsten Schritt –
+    /// bis dahin wird dort weder verglichen noch übertragen.
+    #[error("{0}")]
+    LaufOffen(String),
+
     /// Das Serverzertifikat wird nicht anerkannt. `fingerprint` (SHA-256) kann
     /// nach Prüfung bewusst bestätigt werden (ARCHITEKTUR Kap. 11).
     #[error("Zertifikat nicht anerkannt: {meldung} (SHA-256 {fingerprint})")]
@@ -95,6 +100,7 @@ impl StellwerkError {
             Self::Verbindung(_) => "verbindung",
             Self::Anmeldung(_) => "anmeldung",
             Self::KeineRechte(_) => "keine_rechte",
+            Self::LaufOffen(_) => "lauf_offen",
             Self::Zertifikat { .. } => "zertifikat",
             Self::Io { .. } => "io",
         }

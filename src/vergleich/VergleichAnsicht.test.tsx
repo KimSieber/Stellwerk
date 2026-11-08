@@ -529,7 +529,7 @@ describe("Vergleichsansicht – Übertragen", () => {
   });
 
   it("nach der Übertragung wird automatisch neu verglichen; Zurück meldet die Übertragung", async () => {
-    const aufrufe = rust({ plan_erstellen: () => vorschau, lauf_starten: () => ({ lauf_id: "l1", ergebnis }) });
+    const aufrufe = rust({ plan_erstellen: () => vorschau, lauf_starten: () => ({ lauf_id: "l1", ergebnis, phase: "fertig" }) });
     const zurueck = vi.fn();
     ansicht(zurueck);
     await screen.findByText("/Users/kim/Dev/web");
@@ -541,6 +541,22 @@ describe("Vergleichsansicht – Übertragen", () => {
     await screen.findByText("/Users/kim/Dev/web");
     await userEvent.click(screen.getByRole("button", { name: "← Zurück" }));
     expect(zurueck).toHaveBeenCalledWith(start(), true);
+  });
+  it("Umschalten manuell: nach dem Hochladen geht es in der Streckenansicht weiter", async () => {
+    const aufrufe = rust({
+      plan_erstellen: () => ({ ...vorschau, modus: "umschalten_manuell" }),
+      lauf_starten: () => ({ lauf_id: "l1", ergebnis, phase: "hochgeladen" }),
+      vergleich_schliessen: () => null,
+    });
+    const zurueck = vi.fn();
+    ansicht(zurueck);
+    await screen.findByText("/Users/kim/Dev/web");
+    await userEvent.click(screen.getByRole("button", { name: "Übertragen …" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Übertragen" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Weiter in der Streckenansicht" }));
+    expect(zurueck).toHaveBeenCalledWith(null, true);
+    expect(aufrufeVon(aufrufe, "vergleich_starten")).toHaveLength(1);
+    expect(aufrufeVon(aufrufe, "vergleich_schliessen")[0].args).toEqual({ vergleichId: "web/spiegel#1" });
   });
 });
 

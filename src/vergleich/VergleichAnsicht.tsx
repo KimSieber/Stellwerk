@@ -165,10 +165,15 @@ export function VergleichAnsicht({ strecke, stufe, titel, start, onZurueck }: Pr
           strecke={strecke}
           stufe={stufe}
           onAbbrechen={() => setUebertragen(null)}
-          onFertig={() => {
+          onFertig={(wartet) => {
             uebertragenWorden.current = true;
             setUebertragen(null);
-            neu();
+            if (wartet) {
+              // Die Stufe ist gesperrt, bis der Lauf abgeschlossen ist – das geht nur in der Streckenansicht
+              verlassen.current = true;
+              void api.vergleichSchliessen(uebertragen);
+              onZurueck(null, true);
+            } else neu();
           }}
         />
       )}

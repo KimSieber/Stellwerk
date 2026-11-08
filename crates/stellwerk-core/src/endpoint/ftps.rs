@@ -457,7 +457,7 @@ impl FtpsVerbindung<'_> {
     }
 
     /// Datei vorhanden? (`SIZE` gelingt)
-    fn ist_datei(&mut self, abs: &str) -> bool {
+    fn hat_datei(&mut self, abs: &str) -> bool {
         self.ftp.size(abs).is_ok()
     }
 
@@ -478,13 +478,13 @@ impl FtpsVerbindung<'_> {
             // Ohne Erfolg bleibt die Zeit des Servers – das Manifest kennt die richtige
             let _ = self.ftp.custom_command(format!("MFMT {} {tmp}", mfmt_zeit(geaendert)), &[Status::File]);
         }
-        self.umbenennen(tmp, ziel, neu)?;
+        self.umbenennen_absolut(tmp, ziel, neu)?;
         Ok(geschrieben)
     }
 
     /// `RNFR/RNTO`. Beim Ersetzen: Überschreibt der Server nicht, wird die alte Datei
     /// gelöscht und sofort umbenannt; das Ergebnis wird für die Stufe gelernt.
-    fn umbenennen(&mut self, tmp: &str, ziel: &str, neu: bool) -> Result<()> {
+    fn umbenennen_absolut(&mut self, tmp: &str, ziel: &str, neu: bool) -> Result<()> {
         let gelernt = &self.ziel.umbenennen_ueberschreibt;
         let bekannt = *gelernt.lock().expect("Gelerntes");
         if !neu && bekannt == Some(false) {
@@ -498,7 +498,7 @@ impl FtpsVerbindung<'_> {
                 }
                 Ok(())
             }
-            Err(_) if !neu && self.ist_datei(ziel) => {
+            Err(_) if !neu && self.hat_datei(ziel) => {
                 self.ftp.rm(ziel).am(ziel)?;
                 self.ftp.rename(tmp, ziel).am(ziel)?;
                 *gelernt.lock().expect("Gelerntes") = Some(false);
@@ -520,7 +520,7 @@ impl ZielVerbindung for FtpsVerbindung<'_> {
 
     fn datei_schreiben(&mut self, p: &RelPath, q: QuellDatei, neu: bool, lauf_id: &str, abbruch: &AtomicBool) -> Result<Geschrieben> {
         let ziel = self.ziel.absolut(p.as_str());
-        if neu && self.ist_datei(&ziel) {
+        if neu && self.hat_datei(&ziel) {
             return Err(StellwerkError::Vorhanden(format!("{ziel} – am Server inzwischen vorhanden, bitte neu vergleichen")));
         }
         let (ordner, name) = ziel.rsplit_once('/').expect("absoluter Pfad");
@@ -545,7 +545,7 @@ impl ZielVerbindung for FtpsVerbindung<'_> {
             Err(_) if self.ist_ordner(&abs) => {
                 Err(StellwerkError::NichtUnterstuetzt(format!("{abs} ist inzwischen ein Ordner – bitte neu vergleichen")))
             }
-            Err(_) if !self.ist_datei(&abs) => Ok(()),
+            Err(_) if !self.hat_datei(&abs) => Ok(()),
             Err(e) => Err(schreibfehler(e, &abs)),
         }
     }
@@ -556,6 +556,19 @@ impl ZielVerbindung for FtpsVerbindung<'_> {
             Err(_) if !self.ist_ordner(&abs) => Ok(()),
             r => r.am(&abs),
         }
+    }
+
+    fn umbenennen(&mut self, von: &RelPath, nach: &RelPath, ersetzen: bool) -> Result<()> {
+        let (v, n) = (self.ziel.absolut(von.as_str()), self.ziel.absolut(nach.as_str()));
+        if !ersetzen && self.hat_datei(&n) {
+            return Err(StellwerkError::Vorhanden(format!("{n} – am Server inzwischen vorhanden, bitte neu vergleichen")));
+        }
+        self.umbenennen_absolut(&v, &n, !ersetzen)
+    }
+
+    fn ist_datei(&mut self, p: &RelPath) -> Result<bool> {
+        let abs = self.ziel.absolut(p.as_str());
+        Ok(self.hat_datei(&abs))
     }
 
     fn hinweis(&mut self) -> Option<String> {

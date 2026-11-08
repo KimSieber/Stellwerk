@@ -53,13 +53,22 @@ pub struct Stufe {
     pub regeln: RegelEbene,
 }
 
-/// Deployment-Modus (KONZEPT Kap. 7).
+/// Deployment-Modus (KONZEPT Kap. 7, Entscheidungen v0.5).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Modus {
     #[default]
     Direkt,
+    /// Umschalten automatisch: Hochladen, Umschalten und Übernehmen in einem Zug.
     Umschalten,
+    /// Umschalten manuell: jede Phase per Knopf.
+    UmschaltenManuell,
+}
+
+impl Modus {
+    pub fn schaltet_um(self) -> bool {
+        self != Modus::Direkt
+    }
 }
 
 /// Umgang mit Dropbox-Dateien „nur online“ (KONZEPT Kap. 8).
