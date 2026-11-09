@@ -331,6 +331,9 @@ fn pruefe_sftp(f: &SftpEndpunkt, ort: &str, p: &mut Vec<Problem>) {
     if f.konto_ref.trim().is_empty() {
         p.push(Problem::fehler(format!("{ort}.konto_ref"), "Schlüsselbund-Verweis fehlt"));
     }
+    if f.schluessel.as_deref().is_some_and(|k| !k.starts_with('/') && !k.starts_with("~/")) {
+        p.push(Problem::fehler(format!("{ort}.schluessel"), "SSH-Schlüssel: Pfad muss mit '/' oder '~/' beginnen"));
+    }
     if f.hostschluessel.as_deref().is_some_and(|h| !h.starts_with("SHA256:") || h.len() < 50) {
         p.push(Problem::fehler(format!("{ort}.hostschluessel"), "Host-Schlüssel ist kein SHA-256-Fingerabdruck (SHA256:…)"));
     }

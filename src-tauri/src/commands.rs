@@ -306,7 +306,8 @@ pub async fn smb_verbindung_testen(
 
 /// „Verbindung testen“ für einen SFTP-Server (v0.7.2): Host-Schlüssel, Anmeldung,
 /// Ordner – liest nur. Ist der Host-Schlüssel nicht bestätigt, kommt sein Fingerabdruck
-/// im Fehler (`fingerprint`) zum Bestätigen. Passwort: eingegeben, sonst aus dem Schlüsselbund.
+/// im Fehler (`fingerprint`) zum Bestätigen. Passwort bzw. Passphrase des SSH-Schlüssels (v0.7.2b):
+/// eingegeben, sonst aus dem Schlüsselbund.
 #[tauri::command]
 pub async fn sftp_verbindung_testen(
     state: State<'_, AppState>,
@@ -316,11 +317,10 @@ pub async fn sftp_verbindung_testen(
     let Endpunkt::Sftp(ziel) = ziel else {
         return Err(StellwerkError::NichtUnterstuetzt("Dieser Verbindungstest gilt nur für SFTP-Server".into()).into());
     };
-    let passwort = match passwort.filter(|p| !p.is_empty()) {
-        Some(p) => p,
-        None => hinterlegtes_passwort(&state, &ziel.konto_ref)?,
+    let sftp = match passwort.filter(|p| !p.is_empty()) {
+        Some(p) => Sftp::new(&ziel, &p),
+        None => sftp_zugang(&state, &ziel)?,
     };
-    let sftp = Sftp::new(&ziel, &passwort);
     let test = tauri::async_runtime::spawn_blocking(move || sftp.verbindung_testen()).await.expect("Verbindungstest beendet");
     Ok(test?)
 }
@@ -362,6 +362,16 @@ pub(crate) fn hinterlegtes_passwort(state: &AppState, konto: &str) -> Result<Str
         .tresor
         .lesen(konto)?
         .ok_or_else(|| StellwerkError::NichtGefunden("Passwort – bitte eingeben (im Schlüsselbund ist keines hinterlegt)".into()))
+}
+
+/// Zugang zu einem SFTP-Server mit dem Passwort aus dem Schlüsselbund – oder bei einem
+/// SSH-Schlüssel (v0.7.2b) mit dessen Passphrase; die darf fehlen.
+pub(crate) fn sftp_zugang(state: &AppState, e: &stellwerk_core::model::SftpEndpunkt) -> Result<Sftp, StellwerkError> {
+    let geheim = match e.schluessel {
+        Some(_) => state.tresor.lesen(&e.konto_ref)?.unwrap_or_default(),
+        None => hinterlegtes_passwort(state, &e.konto_ref)?,
+    };
+    Ok(Sftp::new(e, &geheim))
 }
 
 #[tauri::command]
@@ -780,7 +790,7 @@ impl ServerEp {
     pub(crate) fn neu(state: &AppState, q: &Quelle) -> Result<Option<Self>, StellwerkError> {
         Ok(match q {
             Quelle::Ftps(f) => Some(Self::Ftps(Ftps::new(f, &hinterlegtes_passwort(state, &f.konto_ref)?)?)),
-            Quelle::Sftp(f) => Some(Self::Sftp(Sftp::new(f, &hinterlegtes_passwort(state, &f.konto_ref)?))),
+            Quelle::Sftp(f) => Some(Self::Sftp(sftp_zugang(state, f)?)),
             _ => None,
         })
     }
@@ -823,7 +833,7 @@ impl ZielEp {
             }
             Endpunkt::Lokal { pfad } => Self::Lokal(Lokal::new(pfad)),
             Endpunkt::Smb(e) => Self::Smb(Smb::new(e, &hinterlegtes_passwort(state, &e.konto_ref)?)),
-            Endpunkt::Sftp(e) => Self::Sftp(Sftp::new(e, &hinterlegtes_passwort(state, &e.konto_ref)?)),
+            Endpunkt::Sftp(e) => Self::Sftp(sftp_zugang(state, e)?),
         })
     }
 
@@ -944,7 +954,7 @@ impl QuellEp {
                 Ok(Self::Ftps { ftps, zeiten, kennung: kennung.to_path_buf() })
             }
             Some(Quelle::Sftp(e)) if Path::new(&sftp_kennung(&e)) == kennung => {
-                let sftp = Sftp::new(&e, &hinterlegtes_passwort(state, &e.konto_ref)?);
+                let sftp = sftp_zugang(state, &e)?;
                 Ok(Self::Sftp { sftp, kennung: kennung.to_path_buf() })
             }
             Some(Quelle::Smb(e)) if Path::new(&smb_kennung(&e)) == kennung => {

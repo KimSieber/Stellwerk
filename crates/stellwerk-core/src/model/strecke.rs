@@ -157,7 +157,8 @@ pub struct SmbEndpunkt {
 }
 
 /// SFTP-Server (SSH File Transfer Protocol, v0.7.2). Wie bei FTPS kein Passwort –
-/// nur `konto_ref` in den Schlüsselbund (E7).
+/// nur `konto_ref` in den Schlüsselbund (E7). Mit `schluessel` (v0.7.2b) meldet sich
+/// Stellwerk per SSH-Schlüssel an; im Schlüsselbund steht dann dessen Passphrase.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SftpEndpunkt {
@@ -172,6 +173,10 @@ pub struct SftpEndpunkt {
     /// Eintrag verbindet Stellwerk nicht – der Schlüssel muss erst bestätigt werden.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hostschluessel: Option<String>,
+    /// Privater SSH-Schlüssel (Pfad, `~/` erlaubt) statt Passwort (v0.7.2b). Nur der
+    /// Pfad steht in der Konfiguration, nie der Schlüssel.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub schluessel: Option<String>,
 }
 
 fn sftp_port() -> u16 {

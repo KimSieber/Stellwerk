@@ -32,6 +32,7 @@ fn endpunkt(s: &SftpServer, rel: &str) -> SftpEndpunkt {
         benutzer: BENUTZER.into(),
         konto_ref: "k".into(),
         hostschluessel: Some(s.fingerprint.clone()),
+        schluessel: None,
     }
 }
 
@@ -269,4 +270,32 @@ fn schreibgeschuetzter_ordner() {
         assert!(matches!(e, Err(StellwerkError::KeineRechte(_))), "{e:?}");
     }
     assert_eq!(SFTP_WORKER, 2);
+}
+
+// --- Anmeldung per SSH-Schlüssel (v0.7.2b) ---------------------------------------
+
+fn mit_schluessel(s: &SftpServer, name: &str, passphrase: &str) -> stellwerk_core::Result<stellwerk_core::endpoint::sftp::SftpVerbindungstest> {
+    let e = SftpEndpunkt { schluessel: Some(stellwerk_testserver::sftp::schluessel(name).display().to_string()), ..endpunkt(s, "") };
+    Sftp::new(&e, passphrase).verbindung_testen()
+}
+
+#[test]
+fn anmeldung_per_schluessel() {
+    let s = stellwerk_testserver::sftp::starten();
+    s.ordner("");
+    // Ohne und mit Passphrase
+    assert!(mit_schluessel(&s, "ohne", "").is_ok());
+    // Ein altes Passwort im Schlüsselbund stört einen Schlüssel ohne Passphrase nicht
+    assert!(mit_schluessel(&s, "ohne", "altes-passwort").is_ok());
+    assert!(mit_schluessel(&s, "mit", stellwerk_testserver::sftp::PASSPHRASE).is_ok());
+    // Falsche oder fehlende Passphrase
+    let e = mit_schluessel(&s, "mit", "falsch").unwrap_err();
+    assert!(matches!(&e, StellwerkError::Anmeldung(m) if m.contains("Passphrase falsch")), "{e}");
+    assert!(matches!(mit_schluessel(&s, "mit", ""), Err(StellwerkError::Anmeldung(_))));
+    // Schlüssel, den der Server nicht kennt
+    let e = mit_schluessel(&s, "fremd", "").unwrap_err();
+    assert!(matches!(&e, StellwerkError::Anmeldung(m) if m.contains("kennt diesen SSH-Schlüssel nicht")), "{e}");
+    // Datei fehlt
+    let e = mit_schluessel(&s, "gibt-es-nicht", "").unwrap_err();
+    assert!(matches!(&e, StellwerkError::NichtGefunden(m) if m.contains("SSH-Schlüssel")), "{e}");
 }

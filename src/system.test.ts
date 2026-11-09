@@ -21,6 +21,15 @@ describe("system", () => {
     await expect(system.ordnerWaehlen()).resolves.toBeNull();
   });
 
+  it("schluesselWaehlen startet in ~/.ssh; Abbruch", async () => {
+    const a = rustAttrappe({ "plugin:path|resolve_directory": () => "/Users/kim", "plugin:dialog|open": () => "/Users/kim/.ssh/stellwerk" });
+    await expect(system.schluesselWaehlen()).resolves.toBe("/Users/kim/.ssh/stellwerk");
+    const opt = (aufrufeVon(a, "plugin:dialog|open")[0].args as { options: Record<string, unknown> }).options;
+    expect(opt).toMatchObject({ directory: false, multiple: false, defaultPath: "/Users/kim/.ssh" });
+    rustAttrappe({ "plugin:path|resolve_directory": () => "/Users/kim", "plugin:dialog|open": () => null });
+    await expect(system.schluesselWaehlen()).resolves.toBeNull();
+  });
+
   it("oeffnen und version", async () => {
     const a = rustAttrappe({ "plugin:opener|open_url": () => null, "plugin:app|version": () => "0.1.0" });
     await system.oeffnen("https://stellwerk.sieber-bw.de");

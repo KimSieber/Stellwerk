@@ -1881,6 +1881,16 @@ fn sftp_verbindung_testen_mit_host_schluessel() {
     assert_eq!(a.aufruf("sftp_verbindung_testen", json!({ "ziel": sftp_ep(&s, "web", "k", true) })).unwrap_err()["kategorie"], "nicht_gefunden");
     a.aufruf("passwort_speichern", json!({ "konto": "k", "passwort": pw })).unwrap();
     assert!(a.aufruf("sftp_verbindung_testen", json!({ "ziel": sftp_ep(&s, "web", "k", true), "passwort": "" })).is_ok());
+    // SSH-Schlüssel (v0.7.2b): ohne Passphrase auch ohne Eintrag im Schlüsselbund …
+    let mut mit_schluessel = sftp_ep(&s, "web", "ohne-eintrag", true);
+    mit_schluessel["schluessel"] = json!(stellwerk_testserver::sftp::schluessel("ohne"));
+    assert!(a.aufruf("sftp_verbindung_testen", json!({ "ziel": mit_schluessel })).is_ok());
+    // … mit Passphrase aus dem Schlüsselbund
+    mit_schluessel["schluessel"] = json!(stellwerk_testserver::sftp::schluessel("mit"));
+    mit_schluessel["konto_ref"] = json!("pp");
+    assert_eq!(a.aufruf("sftp_verbindung_testen", json!({ "ziel": mit_schluessel })).unwrap_err()["kategorie"], "anmeldung");
+    a.aufruf("passwort_speichern", json!({ "konto": "pp", "passwort": stellwerk_testserver::sftp::PASSPHRASE })).unwrap();
+    assert!(a.aufruf("sftp_verbindung_testen", json!({ "ziel": mit_schluessel })).is_ok());
     // Anderes Ziel, ungültige Angaben
     let e = a.aufruf("sftp_verbindung_testen", json!({ "ziel": { "typ": "lokal", "pfad": "/tmp" } })).unwrap_err();
     assert_eq!(e["kategorie"], "nicht_unterstuetzt");

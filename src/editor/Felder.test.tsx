@@ -4,8 +4,9 @@ import userEvent from "@testing-library/user-event";
 
 import type { Endpunkt, Quelle, Stufe } from "../api";
 import { aufrufeVon, mitQuery, rustAttrappe, Zustand } from "../test/hilfen";
-import { AblageKontext, AuswahlFeld, EndpunktFelder, PfadFeld, ProblemeKontext, QuelleFelder, TextFeld, ZielFelder } from "./Felder";
+import { AblageKontext, AuswahlFeld, EndpunktFelder, PasswortFeld, PfadFeld, ProblemeKontext, QuelleFelder, TextFeld, ZielFelder } from "./Felder";
 import { neueStufe } from "./modell";
+import { system } from "../system";
 
 describe("Feld und Meldungen", () => {
   it("zeigt nur die Meldungen zum eigenen Ort", () => {
@@ -285,6 +286,36 @@ describe("SFTP-Server (v0.7.2)", () => {
     expect(screen.queryByLabelText("Passwort")).toBeNull();
   });
 
+  it("Anmeldung per SSH-Schlüssel (v0.7.2b): Pfad tippen oder wählen, zurück auf Passwort", async () => {
+    const wahl = vi.spyOn(system, "schluesselWaehlen").mockResolvedValueOnce("/Users/kim/.ssh/stellwerk").mockResolvedValueOnce(null);
+    rustAttrappe({ passwort_vorhanden: () => false });
+    let zuletzt: Endpunkt = sftp;
+    mitQuery(
+      <Zustand<Endpunkt>
+        start={sftp}
+        beobachter={(w) => (zuletzt = w)}
+        kind={(w, s) => <EndpunktFelder wert={w} ort="z" onChange={s} passwort={{ wert: "", onChange: () => {} }} />}
+      />,
+    );
+    expect(await screen.findByLabelText("Passwort")).toBeInTheDocument();
+    expect(screen.queryByLabelText("SSH-Schlüssel")).toBeNull();
+    await userEvent.selectOptions(screen.getByLabelText("Anmeldung"), "SSH-Schlüssel");
+    expect(zuletzt).toEqual({ ...sftp, schluessel: "" });
+    expect(screen.getByLabelText("Passphrase")).toHaveAttribute("type", "password");
+    expect(screen.getByText(/nur nötig, wenn der Schlüssel eine hat/)).toBeInTheDocument();
+    await userEvent.type(screen.getByLabelText("SSH-Schlüssel"), " ~/.ssh/k");
+    expect(zuletzt).toMatchObject({ schluessel: "~/.ssh/k" });
+    await userEvent.click(screen.getByRole("button", { name: "Wählen …" }));
+    await waitFor(() => expect(zuletzt).toMatchObject({ schluessel: "/Users/kim/.ssh/stellwerk" }));
+    // Abbruch im Dialog ändert nichts
+    await userEvent.click(screen.getByRole("button", { name: "Wählen …" }));
+    expect(wahl).toHaveBeenCalledTimes(2);
+    expect(zuletzt).toMatchObject({ schluessel: "/Users/kim/.ssh/stellwerk" });
+    await userEvent.selectOptions(screen.getByLabelText("Anmeldung"), "Passwort");
+    expect(zuletzt).toEqual({ ...sftp, schluessel: undefined });
+    wahl.mockRestore();
+  });
+
   it("ZielFelder: SFTP-Server wählen, mit Passwort", async () => {
     rustAttrappe({ passwort_vorhanden: () => false });
     let zuletzt: Endpunkt = { typ: "lokal", pfad: "/a" };
@@ -337,5 +368,15 @@ describe("Passwort", () => {
     await userEvent.click(screen.getByRole("button", { name: "Ändern" }));
     expect(screen.getByLabelText("Passwort")).toHaveAttribute("placeholder", "Neues Passwort");
     expect(screen.getByText(/ersetzt beim Speichern das bisherige/)).toBeInTheDocument();
+  });
+
+  it("Passphrase eines SSH-Schlüssels (v0.7.2b): bereits hinterlegt", async () => {
+    rustAttrappe({ passwort_vorhanden: () => true });
+    mitQuery(<PasswortFeld konto="k" ort="z.passwort" name="Passphrase" wert="" onChange={() => {}} />);
+    expect(await screen.findByText("Im Schlüsselbund hinterlegt ✓")).toBeInTheDocument();
+    expect(screen.getByText("Passphrase")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Ändern" }));
+    expect(screen.getByLabelText("Passphrase")).toHaveAttribute("placeholder", "Neue Passphrase");
+    expect(screen.getByText("Die neue Passphrase ersetzt beim Speichern die bisherige.")).toBeInTheDocument();
   });
 });

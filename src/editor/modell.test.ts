@@ -271,5 +271,6 @@ describe("SFTP-Server (v0.7.2)", () => {
     ]);
     expect(ortLesbar("stufen[0].ziel.pfad", s)).toBe("Stufe 1 „A“ › Ziel › Serverpfad");
     expect(ortLesbar("stufen[0].ziel.hostschluessel", s)).toBe("Stufe 1 „A“ › Ziel › Host-Schlüssel");
+    expect(ortLesbar("stufen[0].ziel.schluessel", s)).toBe("Stufe 1 „A“ › Ziel › SSH-Schlüssel");
   });
 });

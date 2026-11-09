@@ -363,7 +363,7 @@ fn smb_ordner_werden_nicht_lokal_geprueft() {
 // --- SFTP-Server (v0.7.2) ------------------------------------------------------
 
 fn sftp(host: &str, port: u16, pfad: &str, benutzer: &str, konto: &str) -> SftpEndpunkt {
-    SftpEndpunkt { host: host.into(), port, pfad: pfad.into(), benutzer: benutzer.into(), konto_ref: konto.into(), hostschluessel: None }
+    SftpEndpunkt { host: host.into(), port, pfad: pfad.into(), benutzer: benutzer.into(), konto_ref: konto.into(), hostschluessel: None, schluessel: None }
 }
 
 #[test]
@@ -387,6 +387,11 @@ fn sftp_jedes_feld() {
     for (h, ok) in [(fp.as_str(), true), ("SHA256:kurz", false), (&format!("MD5:{}", "A".repeat(50))[..], false)] {
         s.stufen[1].ziel = Endpunkt::Sftp(SftpEndpunkt { hostschluessel: Some(h.into()), ..sftp("h", 22, "/x", "b", "k") });
         assert_eq!(fehler_orte(&s).is_empty(), ok, "{h}");
+    }
+    // SSH-Schlüssel (v0.7.2b): absoluter Pfad oder im Benutzerordner
+    for (k, ok) in [("/Users/kim/.ssh/stellwerk", true), ("~/.ssh/stellwerk", true), ("", false), (".ssh/stellwerk", false)] {
+        s.stufen[1].ziel = Endpunkt::Sftp(SftpEndpunkt { schluessel: Some(k.into()), ..sftp("h", 22, "/x", "b", "k") });
+        assert_eq!(fehler_orte(&s), if ok { vec![] } else { vec!["stufen[1].ziel.schluessel".to_string()] }, "{k}");
     }
     // Als Quelle genauso
     s.stufen[1].ziel = Endpunkt::Sftp(sftp("h", 22, "/x", "b", "k"));

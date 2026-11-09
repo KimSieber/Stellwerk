@@ -14,7 +14,7 @@
 
 use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpStream, ToSocketAddrs};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -39,6 +39,10 @@ const SFTP_FEHLT: i32 = 2;
 const SFTP_VERWEIGERT: i32 = 3;
 const SFTP_PFAD_FEHLT: i32 = 10;
 const SSH_ANMELDUNG: i32 = -18;
+/// libssh2: Schlüsseldatei nicht lesbar (falsche Passphrase, unbekanntes Format).
+const SSH_DATEI: i32 = -16;
+/// libssh2: Server hat den Schlüssel nicht anerkannt.
+const SSH_UNBESTAETIGT: i32 = -19;
 
 /// Ergebnis von „Verbindung testen“.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
@@ -111,6 +115,27 @@ fn fehler(ort: &str, e: &ssh2::Error) -> StellwerkError {
     }
 }
 
+/// Fehler der Anmeldung per SSH-Schlüssel (v0.7.2b) in verständlichen Worten.
+fn schluessel_fehler(ort: &str, e: &ssh2::Error) -> StellwerkError {
+    match e.code() {
+        ErrorCode::Session(SSH_DATEI) => {
+            StellwerkError::Anmeldung(format!("{ort}: SSH-Schlüssel nicht lesbar – Passphrase falsch oder Format unbekannt"))
+        }
+        ErrorCode::Session(SSH_ANMELDUNG | SSH_UNBESTAETIGT) => {
+            StellwerkError::Anmeldung(format!("{ort}: Der Server kennt diesen SSH-Schlüssel nicht (oder den Benutzer)"))
+        }
+        _ => fehler(ort, e),
+    }
+}
+
+/// Pfad des privaten Schlüssels; `~/` steht für den Benutzerordner.
+fn schluessel_pfad(p: &str) -> PathBuf {
+    match (p.strip_prefix("~/"), std::env::var_os("HOME")) {
+        (Some(rest), Some(home)) => PathBuf::from(home).join(rest),
+        _ => PathBuf::from(p),
+    }
+}
+
 fn mit_ort<T>(ort: &str, r: std::result::Result<T, ssh2::Error>) -> Result<T> {
     r.map_err(|e| fehler(ort, &e))
 }
@@ -164,13 +189,26 @@ impl Sftp {
         sess.set_timeout(u32::try_from(self.zeitlimit.as_millis()).unwrap_or(u32::MAX));
         mit_ort(&ort, sess.handshake())?;
         self.schluessel_pruefen(&sess)?;
-        mit_ort(&ort, sess.userauth_password(&self.ziel.benutzer, &self.passwort))?;
+        self.anmeldung(&sess, &ort)?;
         let sftp = mit_ort(&ort, sess.sftp())?;
         let s = Sitzung { sess, sftp };
         if !s.ist_ordner(&self.ziel.pfad) {
             return Err(StellwerkError::NichtGefunden(format!("Serverpfad {} auf {ort}", self.ziel.pfad)));
         }
         Ok(s)
+    }
+
+    /// Mit Passwort oder – wenn eingetragen – mit SSH-Schlüssel (v0.7.2b); dann ist
+    /// `passwort` dessen Passphrase (leer: ohne).
+    fn anmeldung(&self, sess: &Session, ort: &str) -> Result<()> {
+        let Some(datei) = self.ziel.schluessel.as_deref().map(schluessel_pfad) else {
+            return mit_ort(ort, sess.userauth_password(&self.ziel.benutzer, &self.passwort));
+        };
+        if !datei.is_file() {
+            return Err(StellwerkError::NichtGefunden(format!("SSH-Schlüssel {}", datei.display())));
+        }
+        let passphrase = Some(self.passwort.as_str()).filter(|p| !p.is_empty());
+        sess.userauth_pubkey_file(&self.ziel.benutzer, None, &datei, passphrase).map_err(|e| schluessel_fehler(ort, &e))
     }
 
     /// Nur mit dem bestätigten Host-Schlüssel weiter.
@@ -456,6 +494,23 @@ mod tests {
     use super::*;
 
     #[test]
+    fn schluessel_fehler_werden_uebersetzt() {
+        let f = |c| schluessel_fehler("ort", &ssh2::Error::new(c, "x")).to_string();
+        assert!(f(ErrorCode::Session(SSH_DATEI)).contains("Passphrase falsch"));
+        assert!(f(ErrorCode::Session(SSH_ANMELDUNG)).contains("kennt diesen SSH-Schlüssel nicht"));
+        assert!(f(ErrorCode::Session(SSH_UNBESTAETIGT)).contains("kennt diesen SSH-Schlüssel nicht"));
+        assert!(f(ErrorCode::Session(-7)).contains("ort: x"));
+    }
+
+    #[test]
+    fn schluessel_pfad_mit_benutzerordner() {
+        let home = std::env::var("HOME").unwrap();
+        assert_eq!(schluessel_pfad("~/.ssh/stellwerk"), PathBuf::from(home).join(".ssh/stellwerk"));
+        assert_eq!(schluessel_pfad("/a/b"), PathBuf::from("/a/b"));
+        assert_eq!(schluessel_pfad("~x"), PathBuf::from("~x"));
+    }
+
+    #[test]
     fn fingerprint_wie_openssh() {
         // ssh-keygen -lf zeigt für diesen Hash dieselbe Zeichenfolge
         let hash: Vec<u8> = (0u8..32).collect();
@@ -480,7 +535,7 @@ mod tests {
     fn zeiten_und_kennung() {
         assert_eq!(sekunden(UNIX_EPOCH + Duration::from_millis(2_500)), 2);
         assert_eq!(sekunden(UNIX_EPOCH - Duration::from_secs(1)), 0);
-        let e = SftpEndpunkt { host: "h".into(), port: 23, pfad: "/web/".into(), benutzer: "b".into(), konto_ref: "k".into(), hostschluessel: None };
+        let e = SftpEndpunkt { host: "h".into(), port: 23, pfad: "/web/".into(), benutzer: "b".into(), konto_ref: "k".into(), hostschluessel: None, schluessel: None };
         assert_eq!(kennung(&e), "sftp://h:23/web/");
         let s = Sftp::new(&e, "geheim");
         assert_eq!(format!("{s:?}"), "Sftp(sftp://h:23/web/)");

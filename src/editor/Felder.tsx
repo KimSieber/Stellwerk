@@ -192,6 +192,12 @@ function SftpFelder(props: {
 }) {
   const { wert, ort, onChange } = props;
   const setze = (teil: Partial<SftpEndpunkt>) => onChange({ ...wert, ...teil });
+  // v0.7.2b: Anmeldung per SSH-Schlüssel, sobald ein (auch leerer) Pfad gesetzt ist
+  const mitSchluessel = wert.schluessel !== undefined;
+  async function schluesselWaehlen() {
+    const pfad = await system.schluesselWaehlen();
+    if (pfad) setze({ schluessel: pfad });
+  }
   return (
     <div className="sftp">
       <TextFeld
@@ -215,8 +221,48 @@ function SftpFelder(props: {
       />
       <TextFeld label="Serverpfad" ort={`${ort}.pfad`} wert={wert.pfad} onChange={(pfad) => setze({ pfad })} />
       <TextFeld label="Benutzer" ort={`${ort}.benutzer`} wert={wert.benutzer} onChange={(benutzer) => setze({ benutzer: benutzer.trim() })} />
-      {props.passwort && <PasswortFeld konto={wert.konto_ref} ort={`${ort}.passwort`} {...props.passwort} />}
-      <p className="hinweis">Verbindung immer verschlüsselt (SSH), Anmeldung mit Passwort.</p>
+      <AuswahlFeld
+        label="Anmeldung"
+        ort={`${ort}.anmeldung`}
+        wert={mitSchluessel ? "schluessel" : "passwort"}
+        optionen={[
+          ["passwort", "Passwort"],
+          ["schluessel", "SSH-Schlüssel"],
+        ]}
+        onChange={(art) => setze({ schluessel: art === "schluessel" ? "" : undefined })}
+      />
+      {mitSchluessel && (
+        <Feld
+          label="SSH-Schlüssel"
+          ort={`${ort}.schluessel`}
+          kind={(id) => (
+            <div className="pfad">
+              <input
+                id={id}
+                value={wert.schluessel}
+                placeholder="~/.ssh/…"
+                onChange={(e) => setze({ schluessel: e.target.value.trim() })}
+              />
+              <button type="button" onClick={schluesselWaehlen}>
+                Wählen …
+              </button>
+            </div>
+          )}
+        />
+      )}
+      {props.passwort && (
+        <PasswortFeld
+          konto={wert.konto_ref}
+          ort={`${ort}.passwort`}
+          name={mitSchluessel ? "Passphrase" : "Passwort"}
+          {...props.passwort}
+        />
+      )}
+      <p className="hinweis">
+        {mitSchluessel
+          ? "Verbindung immer verschlüsselt (SSH), Anmeldung mit SSH-Schlüssel. Die Passphrase ist nur nötig, wenn der Schlüssel eine hat."
+          : "Verbindung immer verschlüsselt (SSH), Anmeldung mit Passwort."}
+      </p>
       {props.passwort && (
         <SftpVerbindungstestKnopf
           ziel={wert}
@@ -277,11 +323,13 @@ function SmbFelder(props: {
 }
 
 /**
- * Passwort eines FTPS-Ziels oder einer Samba-Freigabe. Ist bereits eines im Schlüsselbund, wird nur das
- * angezeigt („hinterlegt“); ändern lässt es sich auf Knopfdruck. Das Passwort
- * selbst kommt nie aus Rust zurück.
+ * Passwort eines Servers oder einer Samba-Freigabe – bei einem SSH-Schlüssel dessen Passphrase
+ * (`name`, v0.7.2b). Ist bereits eines im Schlüsselbund, wird nur das angezeigt („hinterlegt“);
+ * ändern lässt es sich auf Knopfdruck. Das Passwort selbst kommt nie aus Rust zurück.
  */
-export function PasswortFeld(props: { konto: string; ort: string } & PasswortEingabe) {
+export function PasswortFeld(props: { konto: string; ort: string; name?: string } & PasswortEingabe) {
+  const name = props.name ?? "Passwort";
+  const passwort = name === "Passwort";
   const vorhanden = useQuery({
     queryKey: ["passwort", props.konto],
     queryFn: () => api.passwortVorhanden(props.konto),
@@ -290,7 +338,7 @@ export function PasswortFeld(props: { konto: string; ort: string } & PasswortEin
   if (vorhanden.data && !aendern) {
     return (
       <div className="feld">
-        <span className="feld-name">Passwort</span>
+        <span className="feld-name">{name}</span>
         <div className="passwort-hinterlegt">
           <span>Im Schlüsselbund hinterlegt ✓</span>
           <button type="button" onClick={() => setAendern(true)}>
@@ -303,7 +351,7 @@ export function PasswortFeld(props: { konto: string; ort: string } & PasswortEin
   return (
     <>
       <Feld
-        label="Passwort"
+        label={name}
         ort={props.ort}
         kind={(id) => (
           <input
@@ -311,14 +359,16 @@ export function PasswortFeld(props: { konto: string; ort: string } & PasswortEin
             type="password"
             autoComplete="off"
             value={props.wert}
-            placeholder={vorhanden.data ? "Neues Passwort" : ""}
+            placeholder={vorhanden.data ? (passwort ? "Neues Passwort" : "Neue Passphrase") : ""}
             onChange={(e) => props.onChange(e.target.value)}
           />
         )}
       />
       <p className="hinweis">
         {vorhanden.data
-          ? "Das neue Passwort ersetzt beim Speichern das bisherige."
+          ? passwort
+            ? "Das neue Passwort ersetzt beim Speichern das bisherige."
+            : "Die neue Passphrase ersetzt beim Speichern die bisherige."
           : "Wird beim Speichern im macOS-Schlüsselbund abgelegt – nie in der Konfiguration."}
       </p>
     </>

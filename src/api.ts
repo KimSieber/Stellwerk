@@ -114,6 +114,8 @@ export interface SftpEndpunkt {
   konto_ref: string;
   /** Bewusst bestätigter Host-Schlüssel (`SHA256:…`); ohne ihn verbindet Stellwerk nicht. */
   hostschluessel?: string;
+  /** Privater SSH-Schlüssel (Pfad) statt Passwort (v0.7.2b); im Schlüsselbund steht dann dessen Passphrase. */
+  schluessel?: string;
 }
 
 /** Ergebnis von „Verbindung testen“ für einen SFTP-Server (v0.7.2). */

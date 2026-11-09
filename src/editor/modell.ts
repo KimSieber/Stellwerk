@@ -157,6 +157,7 @@ const ORT_NAMEN: Record<string, string> = {
   host: "Server",
   freigabe: "Freigabe",
   hostschluessel: "Host-Schlüssel",
+  schluessel: "SSH-Schlüssel",
   port: "Port",
   benutzer: "Benutzer",
   konto_ref: "Passwort",

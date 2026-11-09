@@ -305,7 +305,7 @@ fn konten_der_strecke() {
     s.stufen[1].ziel = Endpunkt::Smb(smb("z"));
     assert_eq!(stellwerk_core::secrets::konten_der_strecke(&s), vec!["q", "z"]);
     // v0.7.2: SFTP-Server als Quelle und Ziel
-    let sftp = |k: &str| SftpEndpunkt { host: "h".into(), port: 22, pfad: "/".into(), benutzer: "b".into(), konto_ref: k.into(), hostschluessel: None };
+    let sftp = |k: &str| SftpEndpunkt { host: "h".into(), port: 22, pfad: "/".into(), benutzer: "b".into(), konto_ref: k.into(), hostschluessel: None, schluessel: None };
     s.stufen[0].quelle = Quelle::Sftp(sftp("sq"));
     s.stufen[1].ziel = Endpunkt::Sftp(sftp("sz"));
     assert_eq!(stellwerk_core::secrets::konten_der_strecke(&s), vec!["sq", "sz"]);

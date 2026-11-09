@@ -67,9 +67,39 @@ fn programm() -> &'static Path {
     })
 }
 
+/// Passphrase des Testschlüssels `mit` (v0.7.2b).
+pub const PASSPHRASE: &str = "geheim-pp";
+
+/// Testschlüssel, einmal je Lauf mit `ssh-keygen` erzeugt (v0.7.2b): `ohne` (ohne
+/// Passphrase), `mit` (Passphrase [`PASSPHRASE`]) – beide kennt der Server – und
+/// `fremd`, den er nicht kennt. Liefert den Pfad des privaten Schlüssels.
+pub fn schluessel(name: &str) -> PathBuf {
+    schluessel_ordner().path().join(name)
+}
+
+fn schluessel_ordner() -> &'static tempfile::TempDir {
+    static ORDNER: OnceLock<tempfile::TempDir> = OnceLock::new();
+    ORDNER.get_or_init(|| {
+        let d = tempfile::tempdir().unwrap();
+        for (name, pp) in [("ohne", ""), ("mit", PASSPHRASE), ("fremd", "")] {
+            let status = Command::new("ssh-keygen")
+                .args(["-q", "-t", "ed25519", "-C", name, "-N", pp, "-f"])
+                .arg(d.path().join(name))
+                .status()
+                .expect("ssh-keygen starten");
+            assert!(status.success(), "ssh-keygen");
+        }
+        let erlaubt: String = ["ohne", "mit"].iter().map(|n| std::fs::read_to_string(d.path().join(format!("{n}.pub"))).unwrap()).collect();
+        std::fs::write(d.path().join("authorized_keys"), erlaubt).unwrap();
+        d
+    })
+}
+
 /// Startet einen Server auf einem freien Port.
 pub fn starten() -> SftpServer {
-    let mut prozess = Command::new(programm()).stdin(Stdio::piped()).stdout(Stdio::piped()).spawn().expect("SFTP-Testserver starten");
+    let mut prozess = Command::new(programm())
+        .arg(schluessel_ordner().path().join("authorized_keys"))
+        .stdin(Stdio::piped()).stdout(Stdio::piped()).spawn().expect("SFTP-Testserver starten");
     let mut zeilen = BufReader::new(prozess.stdout.take().unwrap()).lines();
     let mut wert = |name: &str| {
         let z = zeilen.next().expect("Ausgabe des SFTP-Testservers").unwrap();
