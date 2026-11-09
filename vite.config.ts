@@ -24,8 +24,8 @@ export default defineConfig({
     coverage: {
       provider: "v8",
       reportsDirectory: "target/abdeckung-frontend", // target/ ist in .gitignore
-      // pruefen.mjs startet nur die Befehle; die Auswertung ist getestet
-      include: ["src/**/*.{ts,tsx}", "scripts/auswertung.mjs"],
+      // pruefen.mjs und app.mjs starten nur die Befehle; die Logik dahinter ist getestet
+      include: ["src/**/*.{ts,tsx}", "scripts/auswertung.mjs", "scripts/app-logik.mjs"],
       exclude: ["src/**/*.test.{ts,tsx}", "src/test/**"],
       // Jede Funktion und jede Zeile muss durch einen Test abgedeckt sein.
       thresholds: { functions: 100, lines: 100, statements: 100, branches: 100 },

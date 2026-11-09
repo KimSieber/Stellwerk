@@ -5,7 +5,7 @@ members = ["crates/*", "src-tauri"]
 exclude = ["werkzeuge/sftp-testserver"]
 
 [workspace.package]
-version = "0.8.3"
+version = "0.8.4"
 edition = "2021"
 license = "MIT"
 authors = ["Kim Sieber"]

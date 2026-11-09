@@ -44,6 +44,8 @@ npm test                          # alle Tests (Frontend + Rust)
 npm run pruefen                   # Build + Tests mit Abdeckungsgrenze 100 % – vor jedem Commit
 ```
 
+Fertige App (nur Mac mit Apple Silicon): `npm run app` baut Stellwerk, signiert mit dem Zertifikat „Developer ID Application“ aus dem Schlüsselbund und ersetzt `/Applications/Stellwerk.app`. Stellwerk muss dazu beendet sein.
+
 Konfiguration und Laufzeitdaten: `~/Library/Application Support/de.sieber-bw.stellwerk/` (`config.toml`, `strecken/<id>.toml`, `stellwerk.sqlite`).
 
 ## Dokumentation
