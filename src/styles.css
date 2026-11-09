@@ -365,3 +365,17 @@ legend { font-weight: 600; padding: 0 6px; }
 .modus-marke { align-self: center; font-size: 12px; padding: 4px 10px; border-radius: 999px; border: 1px solid var(--rand); color: var(--text-leise); white-space: nowrap; cursor: help; }
 .modus-marke.umschalten, .modus-marke.umschalten_manuell { border-color: var(--blau); color: var(--blau); }
 @media (prefers-color-scheme: dark) { .modus-marke.umschalten, .modus-marke.umschalten_manuell { border-color: #6f93cf; color: #9cb8e6; } }
+
+/* --- Stufen-Kreise nach bekanntem Stand (v0.6.6) --- */
+.stufe-nr.gleich { background: var(--neu); }
+.stufe-nr.differenz { background: var(--geaendert); }
+.stufe-nr.fehler { background: var(--loeschen); }
+.stufe-nr.unbekannt { background: var(--blau); }
+.stufen li .stufe-nr { cursor: help; }
+/* Streckenansicht: nach dem Stand der Karte (wartet/läuft/nicht verglichen: blau) */
+.stufen-karte .stufe-nr { background: var(--blau); }
+.stufen-karte.status-gleich .stufe-nr { background: var(--neu); }
+.stufen-karte.status-differenz .stufe-nr { background: var(--geaendert); }
+.stufen-karte.status-fehler .stufe-nr { background: var(--loeschen); }
+.stufen-karte.status-offen .stufe-nr { background: var(--konflikt); }
+@media (prefers-color-scheme: dark) { .stufe-nr.unbekannt, .stufen-karte .stufe-nr { background: #3b62a3; } }

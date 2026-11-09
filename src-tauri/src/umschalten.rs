@@ -155,6 +155,7 @@ pub async fn lauf_weiter(state: State<'_, AppState>, lauf_id: String, schritt: S
     let r = schritt_ausfuehren(&state, &lauf, schritt, &zep);
     state.laeufe.abmelden(&schluessel);
     let (phase, erg) = r?;
+    crate::commands::staende_nach_lauf(&state, &lauf.strecke_id, &lauf.stufe_id)?;
     let fehler = erg.fehler.into_iter().map(|(_, pfad, meldung)| SchrittFehler { pfad: pfad.to_string(), meldung }).collect();
     Ok(LaufStand { lauf_id, phase, fehler })
 }

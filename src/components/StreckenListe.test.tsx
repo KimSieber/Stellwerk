@@ -162,4 +162,30 @@ describe("Startseite – Strecken", () => {
     await userEvent.keyboard("a");
     expect(anzeigen).toHaveBeenCalledTimes(3);
   });
+
+  it("Kreise der Stufen nach dem zuletzt bekannten Stand (v0.6.6)", async () => {
+    const lauf = {
+      id: "l", strecke_id: "mailwerk-web", stufe_id: "server", modus: "umschalten" as const, phase: "abgebrochen" as const, gestartet: 0, beendet: 1,
+      zusammenfassung: { ordner_anlegen: 0, kopieren: 1, ueberschreiben: 0, rechte: 0, dateien_loeschen: 0, ordner_loeschen: 0, bytes: 1 },
+      ergebnis: { erledigt: 1, fehler: [], uebersprungen: 0, abgebrochen: false, gestoppt: false, bytes: 1, journal_fehler: null, unterbrochen: { grund: "programm_beendet" as const, phase: "umgeschaltet" as const } },
+    };
+    const stand = { zeit: new Date(2026, 10, 8, 23, 40).getTime(), neu: 0, geaendert: 0, loeschen: 0, konflikt: 0 };
+    const mit: StreckeUebersicht = {
+      ...mailwerk,
+      stufen: [
+        { ...mailwerk.stufen[0], stand },
+        { ...mailwerk.stufen[1], stand: { ...stand, neu: 3, geaendert: 1, loeschen: 2, konflikt: 1 } },
+        { ...mailwerk.stufen[1], id: "rest", stand, letzter_lauf: lauf },
+        { ...mailwerk.stufen[1], id: "neu" },
+      ],
+    };
+    rustAttrappe({ strecken_liste: () => [mit], konfig_ort: () => ORT });
+    mitQuery(<StreckenListe onNeu={vi.fn()} onAnzeigen={vi.fn()} />);
+    const kreise = await screen.findAllByText(/^[1-4]$/, { selector: ".stufe-nr" });
+    expect(kreise.map((k) => k.className)).toEqual(["stufe-nr gleich", "stufe-nr differenz", "stufe-nr fehler", "stufe-nr unbekannt"]);
+    expect(kreise[0]).toHaveAttribute("title", "Verglichen am 08.11.2026, 23:40 · nichts offen");
+    expect(kreise[1]).toHaveAttribute("title", "Verglichen am 08.11.2026, 23:40 · 3 neu, 1 geändert, 2 zu löschen, 1 Konflikt");
+    expect(kreise[2].title).toMatch(/^Letzter Lauf unterbrochen/);
+    expect(kreise[3].title).toMatch(/^Stand unbekannt/);
+  });
 });

@@ -1,6 +1,6 @@
 // Darstellung der Vergleichsdaten – reine Funktionen ohne Rechnerei über die Daten (A1).
 
-import type { DiffStatus, ExecFortschritt, Fortschritt, JournalStatus, Lauf, Modus, OpArt, PlanZusammenfassung, RegelTreffer, Warnung, Zeile, Zusammenfassung } from "../api";
+import type { DiffStatus, ExecFortschritt, Fortschritt, JournalStatus, Lauf, Modus, OpArt, PlanZusammenfassung, RegelTreffer, StufeKurz, Warnung, Zeile, Zusammenfassung } from "../api";
 
 const zahl = new Intl.NumberFormat("de-DE", { maximumFractionDigits: 1 });
 
@@ -207,6 +207,26 @@ export function resteHinweis(l: Lauf): string | null {
   const zurueck = (e?.rollback?.fehler.length ?? 0) + (e?.abbrechen?.fehler.length ?? 0);
   if (zurueck > 0) return "Letzter Lauf nicht vollständig zurückgenommen – am Ziel liegen Reste. Erst diese Stufe neu übertragen.";
   return null;
+}
+
+/**
+ * Farbe und Tooltip des Stufen-Kreises auf der Startseite (v0.6.6) – nur aus dem
+ * gespeicherten Stand, nie neu verglichen: rot bei möglichen Resten, sonst grün (nichts
+ * offen), gelb (Unterschiede) oder blau (unbekannt).
+ */
+export function stufenKreis(st: StufeKurz): { art: "gleich" | "differenz" | "fehler" | "unbekannt"; titel: string } {
+  const reste = st.letzter_lauf ? resteHinweis(st.letzter_lauf) : null;
+  if (reste) return { art: "fehler", titel: reste };
+  const s = st.stand;
+  if (!s) return { art: "unbekannt", titel: "Stand unbekannt – noch nicht verglichen oder seitdem übertragen bzw. geändert" };
+  const teile = [
+    s.neu && `${zahl.format(s.neu)} neu`,
+    s.geaendert && `${zahl.format(s.geaendert)} geändert`,
+    s.loeschen && `${zahl.format(s.loeschen)} zu löschen`,
+    s.konflikt && anzahl(s.konflikt, "Konflikt", "Konflikte"),
+  ].filter(Boolean);
+  const wann = `Verglichen am ${laufZeit(s.zeit)}`;
+  return teile.length === 0 ? { art: "gleich", titel: `${wann} · nichts offen` } : { art: "differenz", titel: `${wann} · ${teile.join(", ")}` };
 }
 
 /** Modus einer Stufe – im Editor und in der Vergleichsansicht (v0.6.3). */

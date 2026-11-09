@@ -520,6 +520,17 @@ impl Datenbank {
             .map_err(db)
     }
 
+    /// Entfernt einen Status-Eintrag einer Stufe – ohne Stufe: den aller Stufen der Strecke.
+    pub fn status_entfernen(&self, strecke_id: &str, stufe_id: Option<&str>, schluessel: &str) -> Result<()> {
+        self.conn
+            .execute(
+                "DELETE FROM stufen_status WHERE strecke_id = ?1 AND (?2 IS NULL OR stufe_id = ?2) AND schluessel = ?3",
+                params![strecke_id, stufe_id, schluessel],
+            )
+            .map(drop)
+            .map_err(db)
+    }
+
     pub fn status(&self, strecke_id: &str, stufe_id: &str, schluessel: &str) -> Result<Option<String>> {
         self.conn
             .query_row(

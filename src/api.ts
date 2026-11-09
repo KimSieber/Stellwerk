@@ -42,6 +42,20 @@ export interface StufeKurz {
   name: string;
   quelle: string;
   ziel: string;
+  /** Ergebnis des letzten Vergleichs (v0.6.6); `null`: unbekannt. */
+  stand?: StufenStand | null;
+  /** Der neueste Lauf – zeigt, ob Reste am Ziel liegen können. */
+  letzter_lauf?: Lauf | null;
+}
+
+/** Was der letzte Vergleich einer Stufe ergab – verfällt nach Übertragung und Speichern. */
+export interface StufenStand {
+  /** Millisekunden seit 1970. */
+  zeit: number;
+  neu: number;
+  geaendert: number;
+  loeschen: number;
+  konflikt: number;
 }
 
 export interface StreckeUebersicht {

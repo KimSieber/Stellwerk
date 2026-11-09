@@ -14,7 +14,7 @@ use stellwerk_core::store::{
     jetzt_ms, Datenbank, JournalStatus, JournalZeile, Lauf, LaufPhase, ManifestEintrag, ProtokollEbene, Protokollieren,
 };
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tauri::ipc::Channel;
 use tauri::State;
 
@@ -81,6 +81,35 @@ pub struct StufeKurz {
     pub name: String,
     pub quelle: String,
     pub ziel: String,
+    /// Ergebnis des letzten erfolgreichen Vergleichs (v0.6.6) – `None`: unbekannt.
+    pub stand: Option<StufenStand>,
+    /// Der neueste Lauf – zeigt, ob Reste am Ziel liegen können.
+    pub letzter_lauf: Option<Lauf>,
+}
+
+/// Was der letzte Vergleich einer Stufe ergab (Stufen-Status `letzter_vergleich`). Verfällt
+/// nach einer Übertragung (eigene Stufe und die, die ihr Ziel lesen) und beim Speichern der Strecke.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct StufenStand {
+    pub zeit: i64,
+    pub neu: usize,
+    pub geaendert: usize,
+    pub loeschen: usize,
+    pub konflikt: usize,
+}
+
+pub(crate) const LETZTER_VERGLEICH: &str = "letzter_vergleich";
+
+/// Stände verfallen nach einem Lauf (oder Schritt) auf `stufe`: ihr eigener und der aller
+/// Stufen, die ihr Ziel als Quelle lesen – deren Quelle hat sich geändert.
+pub(crate) fn staende_nach_lauf(state: &AppState, strecke: &str, stufe: &str) -> Result<(), StellwerkError> {
+    let s = state.store.strecke_laden(strecke)?;
+    let db = state.datenbank.lock().unwrap();
+    db.status_entfernen(strecke, Some(stufe), LETZTER_VERGLEICH)?;
+    for st in s.stufen.iter().filter(|st| matches!(&st.quelle, Quelle::Stufe { stufe: v } if v == stufe)) {
+        db.status_entfernen(strecke, Some(&st.id), LETZTER_VERGLEICH)?;
+    }
+    Ok(())
 }
 
 /// Eintrag der Startseite. Defekte Dateien erscheinen mit `fehler`.
@@ -117,25 +146,27 @@ pub fn konfig_ort(state: State<'_, AppState>) -> String {
 pub fn strecken_liste(state: State<'_, AppState>) -> Antwort<Vec<StreckeUebersicht>> {
     let global = state.store.global_laden()?;
     let liste = state.store.strecken_liste()?;
-    Ok(liste
-        .into_iter()
-        .map(|e| match e.ergebnis {
-            Ok(s) => StreckeUebersicht {
-                id: e.id,
-                name: Some(s.name.clone()),
-                stufen: s
-                    .stufen
-                    .iter()
-                    .map(|st| StufeKurz {
+    let db = state.datenbank.lock().unwrap();
+    let mut ergebnis = Vec::new();
+    for e in liste {
+        ergebnis.push(match e.ergebnis {
+            Ok(s) => {
+                let mut stufen = Vec::new();
+                for st in &s.stufen {
+                    // Nur gespeichert, nie neu verglichen (Startseite, v0.6.6)
+                    let stand = db.status(&s.id, &st.id, LETZTER_VERGLEICH)?.and_then(|w| serde_json::from_str(&w).ok());
+                    let letzter_lauf = db.laeufe(&s.id, &st.id, 1)?.into_iter().next();
+                    stufen.push(StufeKurz {
                         id: st.id.clone(),
                         name: st.name.clone(),
                         quelle: quelle_kurz(&st.quelle),
                         ziel: ziel_kurz(&st.ziel),
-                    })
-                    .collect(),
-                probleme: alle_probleme(&s, &global),
-                fehler: None,
-            },
+                        stand,
+                        letzter_lauf,
+                    });
+                }
+                StreckeUebersicht { id: e.id, name: Some(s.name.clone()), stufen, probleme: alle_probleme(&s, &global), fehler: None }
+            }
             Err(err) => StreckeUebersicht {
                 id: e.id,
                 name: None,
@@ -143,8 +174,9 @@ pub fn strecken_liste(state: State<'_, AppState>) -> Antwort<Vec<StreckeUebersic
                 probleme: vec![],
                 fehler: Some(err.to_string()),
             },
-        })
-        .collect())
+        });
+    }
+    Ok(ergebnis)
 }
 
 /// Globale Standardregeln (Ebene „Global“), z. B. `.DS_Store`, `.git/`.
@@ -175,7 +207,10 @@ pub fn strecke_anlegen(state: State<'_, AppState>, strecke: Strecke) -> Antwort<
 #[tauri::command]
 pub fn strecke_speichern(state: State<'_, AppState>, strecke: Strecke) -> Antwort<Vec<Problem>> {
     speicherbar(&state, &strecke)?;
-    Ok(state.store.strecke_speichern(&strecke)?)
+    let probleme = state.store.strecke_speichern(&strecke)?;
+    // Quelle, Ziel oder Regeln können sich geändert haben – die Stände gelten nicht mehr (v0.6.6)
+    state.datenbank.lock().unwrap().status_entfernen(&strecke.id, None, LETZTER_VERGLEICH)?;
+    Ok(probleme)
 }
 
 /// Löscht die Strecke und die Passwörter ihrer FTPS-Ziele. Dateien werden nie gelöscht.
@@ -184,6 +219,7 @@ pub fn strecke_loeschen(state: State<'_, AppState>, id: String) -> Antwort<()> {
     // Eine defekte Datei lässt sich trotzdem löschen – dann ohne Passwörter
     let konten = state.store.strecke_laden(&id).map(|s| konten_der_strecke(&s)).unwrap_or_default();
     state.store.strecke_loeschen(&id)?;
+    state.datenbank.lock().unwrap().status_entfernen(&id, None, LETZTER_VERGLEICH)?;
     for konto in konten {
         state.tresor.entfernen(&konto)?;
     }
@@ -360,6 +396,10 @@ pub async fn vergleich_starten(
     };
     state.vergleiche.abmelden(&schluessel, &abbruch);
     let (v, ziel_stand) = ergebnis?;
+    // Für die Startseite merken (v0.6.6)
+    let z = &v.vergleich.zusammenfassung;
+    let stand = StufenStand { zeit: jetzt_ms(), neu: z.neu, geaendert: z.geaendert, loeschen: z.loeschen, konflikt: z.konflikt };
+    state.datenbank.lock().unwrap().status_setzen(&strecke, &stufe, LETZTER_VERGLEICH, &json!(stand).to_string(), jetzt_ms())?;
 
     let sitzung = VergleichsSitzung::neu(v.vergleich);
     let zusammenfassung = sitzung.zusammenfassung().clone();
@@ -748,7 +788,9 @@ pub async fn lauf_starten(
         uebertragen(&state, &plan, &strecke, &stufe, &quelle, &ziel, bei_fehler_stoppen, &abbruch, &fortschritt)
     };
     state.laeufe.abmelden(&schluessel);
-    Ok(ergebnis?)
+    let ergebnis = ergebnis?;
+    staende_nach_lauf(&state, &strecke, &stufe)?;
+    Ok(ergebnis)
 }
 
 /// So viele Dateien werden gleichzeitig geschrieben – bei einer Quelle auf einem

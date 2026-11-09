@@ -113,10 +113,10 @@ fn speichern_laden_liste_loeschen() {
             "stufen": [
                 { "id": "spiegel", "name": "Entwicklung → Spiegel",
                   "quelle": a.wurzel.join("daten/quelle").display().to_string(),
-                  "ziel": a.wurzel.join("daten/spiegel").display().to_string() },
+                  "ziel": a.wurzel.join("daten/spiegel").display().to_string(), "stand": null, "letzter_lauf": null },
                 { "id": "server", "name": "Spiegel → Server",
                   "quelle": "Ziel von „spiegel“",
-                  "ziel": "ftps://ftp.example.de/httpdocs" }
+                  "ziel": "ftps://ftp.example.de/httpdocs", "stand": null, "letzter_lauf": null }
             ],
             "probleme": [],
             "fehler": null
@@ -1625,6 +1625,65 @@ fn server_zu_server_vergleichen_uebertragen_danach_gleich() {
     assert_eq!(v["ziel_stand"], "manifest");
     assert_eq!((v["zusammenfassung"]["gleich"].clone(), v["zusammenfassung"]["ausgewaehlt"].clone()), (json!(3), json!(0)), "{v}");
     assert_eq!(std::fs::read_to_string(quelle.wurzel().join("logs/a.log")).unwrap(), "eins");
+}
+
+// --- Stand der Stufen für die Startseite (v0.6.6) -------------------------------
+
+fn staende(a: &Testapp) -> Vec<(Value, Value)> {
+    let liste = a.aufruf("strecken_liste", json!({})).unwrap();
+    liste[0]["stufen"].as_array().unwrap().iter().map(|st| (st["stand"].clone(), st["letzter_lauf"]["phase"].clone())).collect()
+}
+
+#[test]
+fn stand_der_stufen_gemerkt_und_verfallen() {
+    let a = app();
+    mit_vergleichsdaten(&a);
+    // Noch nie verglichen
+    assert_eq!(staende(&a), [(Value::Null, Value::Null), (Value::Null, Value::Null)]);
+
+    // Nach dem Vergleich: Zahlen und Zeit der Stufe; die zweite Stufe bleibt unbekannt
+    let (id, _) = vergleichen_und_planen(&a);
+    let st = staende(&a);
+    assert_eq!((st[0].0["neu"].clone(), st[0].0["loeschen"].clone(), st[0].0["geaendert"].clone()), (json!(3), json!(1), json!(0)), "{st:?}");
+    assert!(st[0].0["zeit"].as_i64().unwrap() > 0);
+    assert_eq!(st[1].0, Value::Null);
+
+    // Übertragung: eigener Stand und der der Stufe, die das Ziel liest, verfallen
+    db(&a).status_setzen("mailwerk-web", "server", "letzter_vergleich", r#"{"zeit":1,"neu":0,"geaendert":0,"loeschen":0,"konflikt":0}"#, 1).unwrap();
+    assert_eq!(staende(&a)[1].0["zeit"], 1);
+    uebertragen(&a, &id, true, false).unwrap();
+    assert_eq!(staende(&a), [(Value::Null, json!("fertig")), (Value::Null, Value::Null)]);
+
+    // Speichern der Strecke: alle Stände verfallen; Unlesbares gilt als unbekannt
+    starten(&a);
+    db(&a).status_setzen("mailwerk-web", "server", "letzter_vergleich", "kaputt", 1).unwrap();
+    assert!(staende(&a)[0].0.is_object());
+    assert_eq!(staende(&a)[1].0, Value::Null);
+    let st = a.aufruf("strecke_laden", json!({ "id": "mailwerk-web" })).unwrap();
+    a.aufruf("strecke_speichern", json!({ "strecke": st })).unwrap();
+    assert_eq!(staende(&a)[0].0, Value::Null);
+    // Löschen räumt auf
+    starten(&a);
+    a.aufruf("strecke_loeschen", json!({ "id": "mailwerk-web" })).unwrap();
+    assert_eq!(db(&a).status("mailwerk-web", "spiegel", "letzter_vergleich").unwrap(), None);
+}
+
+#[test]
+fn stand_verfaellt_auch_nach_einem_schritt_beim_umschalten() {
+    let a = app();
+    mit_umschalten(&a, "umschalten_manuell");
+    let (id, _) = vergleichen_und_planen(&a);
+    let lauf = uebertragen(&a, &id, true, false).unwrap()["lauf_id"].clone();
+    starten_trotz_sperre_nicht_moeglich(&a);
+    db(&a).status_setzen("mailwerk-web", "spiegel", "letzter_vergleich", r#"{"zeit":1,"neu":0,"geaendert":0,"loeschen":0,"konflikt":0}"#, 1).unwrap();
+    weiter(&a, &lauf, "umschalten").unwrap();
+    assert_eq!(db(&a).status("mailwerk-web", "spiegel", "letzter_vergleich").unwrap(), None);
+}
+
+/// Während ein Lauf wartet, gibt es keinen Vergleich (und damit keinen neuen Stand).
+fn starten_trotz_sperre_nicht_moeglich(a: &Testapp) {
+    let e = a.aufruf("vergleich_starten", json!({ "strecke": "mailwerk-web", "stufe": "spiegel", "fortschritt": KANAL })).unwrap_err();
+    assert_eq!(e["kategorie"], "lauf_offen");
 }
 
 #[test]

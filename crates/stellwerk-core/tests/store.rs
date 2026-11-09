@@ -452,7 +452,17 @@ fn gelerntes_je_stufe() {
     d.status_setzen("s", "server", "umbenennen_ueberschreibt", "ja", T + 1).unwrap();
     d.status_setzen("s", "andere", "umbenennen_ueberschreibt", "nein", T).unwrap();
     assert_eq!(d.status("s", "server", "umbenennen_ueberschreibt").unwrap().as_deref(), Some("ja"));
+    // Entfernen (v0.6.6): eine Stufe, dann alle Stufen der Strecke; andere Schlüssel bleiben
+    d.status_setzen("s", "server", "letzter_vergleich", "{}", T).unwrap();
+    d.status_setzen("s", "andere", "letzter_vergleich", "{}", T).unwrap();
+    d.status_entfernen("s", Some("server"), "letzter_vergleich").unwrap();
+    assert_eq!(d.status("s", "server", "letzter_vergleich").unwrap(), None);
+    assert!(d.status("s", "andere", "letzter_vergleich").unwrap().is_some());
+    d.status_entfernen("s", None, "letzter_vergleich").unwrap();
+    assert_eq!(d.status("s", "andere", "letzter_vergleich").unwrap(), None);
+    assert!(d.status("s", "server", "umbenennen_ueberschreibt").unwrap().is_some());
     d.verbindung().execute_batch("DROP TABLE stufen_status").unwrap();
+    assert!(d.status_entfernen("s", None, "x").is_err());
     assert_eq!(d.status("s", "server", "x").unwrap_err().kategorie(), "datenbank");
     assert_eq!(d.status_setzen("s", "server", "x", "y", T).unwrap_err().kategorie(), "datenbank");
 }

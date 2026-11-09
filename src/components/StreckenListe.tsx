@@ -1,11 +1,13 @@
 import { useQuery } from "@tanstack/react-query";
 
 import { api, fehlerText, type Problem, type StreckeUebersicht } from "../api";
+import { stufenKreis } from "../vergleich/format";
 
 /**
  * Startseite: Strecken als Karten mit ihren Stufen (ARCHITEKTUR Kap. 10, Ansicht 1).
  * Ein Klick auf die Karte öffnet die Streckenansicht (Status und Protokoll je Stufe).
  * Hier wird bewusst nichts verglichen – das kostet je Strecke Zeit, bei FTPS erst recht.
+ * Die Kreise der Stufen zeigen den zuletzt bekannten Stand (v0.6.6).
  */
 type Props = {
   onNeu: () => void;
@@ -93,9 +95,13 @@ function StreckeKarte({ strecke, onAnzeigen }: KarteProps) {
       <h3>{strecke.name}</h3>
       <span className="kennung">{strecke.id}</span>
       <ol className="stufen">
-        {strecke.stufen.map((st, i) => (
+        {strecke.stufen.map((st, i) => {
+          const kreis = stufenKreis(st);
+          return (
           <li key={st.id}>
-            <span className="stufe-nr">{i + 1}</span>
+            <span className={`stufe-nr ${kreis.art}`} title={kreis.titel}>
+              {i + 1}
+            </span>
             <div className="stufe-text">
               <div className="stufe-name">{st.name}</div>
               <div className="stufe-weg" title={`${st.quelle} → ${st.ziel}`}>
@@ -103,7 +109,8 @@ function StreckeKarte({ strecke, onAnzeigen }: KarteProps) {
               </div>
             </div>
           </li>
-        ))}
+          );
+        })}
       </ol>
       <Probleme probleme={strecke.probleme} />
     </article>
