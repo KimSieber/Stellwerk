@@ -11,7 +11,7 @@ use crate::config::{effektive_quelle, pruefe_ordner, validiere_strecke, GlobalCo
 use std::collections::HashMap;
 
 use crate::diff::{vergleiche_mit_fortschritt, DiffOptionen, InhaltPruefer, LokalerInhalt, Vergleich};
-use crate::endpoint::{Ftps, Smb};
+use crate::endpoint::{ServerLesen, Smb};
 use crate::error::{Result, StellwerkError};
 use crate::model::{Endpunkt, FtpsEndpunkt, Hash, Quelle, RelPath, SmbEndpunkt, Strecke, Stufe};
 use crate::scan::hash_datei;
@@ -102,7 +102,7 @@ fn kein_zugang(konto: &str) -> Result<String> {
 }
 
 /// Ein Ordner, der direkt gelesen und verglichen wird: lokal oder auf einer
-/// Samba-Freigabe (v0.7.1). Ein FTPS-Server ist kein solcher Ordner – er wird über
+/// Samba-Freigabe (v0.7.1). Ein Server (FTPS/SFTP) ist kein solcher Ordner – er wird über
 /// den letzten bekannten Stand verglichen.
 #[derive(Debug)]
 pub enum Ordner {
@@ -111,7 +111,7 @@ pub enum Ordner {
 }
 
 impl Ordner {
-    /// Lokaler Ordner oder Freigabe; `None` für einen FTPS-Server.
+    /// Lokaler Ordner oder Freigabe; `None` für einen Server (FTPS/SFTP).
     pub fn aus_quelle(q: &Quelle, zugang: Zugang) -> Result<Option<Self>> {
         match q {
             Quelle::Lokal { pfad } => Ok(Some(Self::Lokal(pfad.clone()))),
@@ -171,10 +171,10 @@ impl InhaltPruefer for OrdnerInhalt<'_> {
     }
 }
 
-/// Quellordner (lokal oder Freigabe) – eine Quelle auf einem FTPS-Server vergleicht
+/// Quellordner (lokal oder Freigabe) – eine Quelle auf einem Server (FTPS/SFTP) vergleicht
 /// [`stufe_vergleichen_vom_server`].
 fn ordner_quelle(q: &Quelle, zugang: Zugang) -> Result<Ordner> {
-    Ordner::aus_quelle(q, zugang)?.ok_or_else(|| StellwerkError::NichtUnterstuetzt("Quelle ist ein FTPS-Server".into()))
+    Ordner::aus_quelle(q, zugang)?.ok_or_else(|| StellwerkError::NichtUnterstuetzt("Quelle ist ein Server (FTPS/SFTP)".into()))
 }
 
 /// Vergleicht Quelle und Ziel der Stufe `stufe_id` – lokale Ordner; für Samba-Freigaben
@@ -204,7 +204,7 @@ pub fn stufe_vergleichen_mit_zugang(
     let (stufe, quelle, regeln) = vorbereiten(strecke, stufe_id, global)?;
     let quelle = ordner_quelle(&quelle, zugang)?;
     let Some(ziel) = Ordner::aus_ziel(&stufe.ziel, zugang)? else {
-        return Err(StellwerkError::NichtUnterstuetzt("FTPS-Ziele werden gegen das Manifest verglichen".into()));
+        return Err(StellwerkError::NichtUnterstuetzt("Server-Ziele werden gegen den letzten bekannten Stand verglichen".into()));
     };
     // Fehlt der Zielordner, meldet das schon die Prüfung in `vorbereiten`
     let scan = |o: &Ordner, phase: Phase, f: &mut dyn FnMut(Fortschritt)| {
@@ -217,7 +217,7 @@ pub fn stufe_vergleichen_mit_zugang(
     abschliessen(stufe, quelle.kennung(), ziel.kennung(), q, z, &regeln, &inhalt, (false, grob), abbruch, fortschritt)
 }
 
-/// Vergleicht eine Stufe, deren Quelle ein FTPS-Server ist (v0.6.5), mit ihrem Ziel:
+/// Vergleicht eine Stufe, deren Quelle ein Server ist (FTPS v0.6.5, SFTP v0.7.2), mit ihrem Ziel:
 /// lokal gescannt oder – bei einem Server als Ziel (v0.6.5b) – aus dessen letztem
 /// bekanntem Stand bzw. vom Server (`ziel`). Die Quelle wird vom Server eingelesen
 /// (Größe und Zeit aus `MLSD`), nie verändert und nie gelesen – „geändert“ entscheiden
@@ -226,12 +226,12 @@ pub fn stufe_vergleichen_vom_server(
     strecke: &Strecke,
     stufe_id: &str,
     global: &GlobalConfig,
-    ftps: &Ftps,
+    server: &dyn ServerLesen,
     ziel: Option<EntfernterStand>,
     abbruch: &AtomicBool,
     fortschritt: &mut dyn FnMut(Fortschritt),
 ) -> Result<EntfernterVergleich> {
-    stufe_vergleichen_vom_server_mit_zugang(strecke, stufe_id, global, ftps, ziel, &kein_zugang, abbruch, fortschritt)
+    stufe_vergleichen_vom_server_mit_zugang(strecke, stufe_id, global, server, ziel, &kein_zugang, abbruch, fortschritt)
 }
 
 /// Wie [`stufe_vergleichen_vom_server`]; das Ziel darf eine Samba-Freigabe sein (v0.7.1).
@@ -240,17 +240,17 @@ pub fn stufe_vergleichen_vom_server_mit_zugang(
     strecke: &Strecke,
     stufe_id: &str,
     global: &GlobalConfig,
-    ftps: &Ftps,
+    server: &dyn ServerLesen,
     ziel: Option<EntfernterStand>,
     zugang: Zugang,
     abbruch: &AtomicBool,
     fortschritt: &mut dyn FnMut(Fortschritt),
 ) -> Result<EntfernterVergleich> {
     let (stufe, quelle, regeln) = vorbereiten(strecke, stufe_id, global)?;
-    let Quelle::Ftps(server) = &quelle else {
-        return Err(StellwerkError::NichtUnterstuetzt("Quelle ist kein FTPS-Server".into()));
+    let Some(quellort) = server_kennung(&quelle) else {
+        return Err(StellwerkError::NichtUnterstuetzt("Quelle ist kein Server".into()));
     };
-    let q = ftps.auflisten(&regeln, abbruch, &mut |anzahl| fortschritt(Fortschritt { phase: Phase::Quelle, anzahl }))?;
+    let q = server.auflisten(&regeln, abbruch, &mut |anzahl| fortschritt(Fortschritt { phase: Phase::Quelle, anzahl }))?;
     let (zielort, z, neues_manifest, grob) = match (Ordner::aus_ziel(&stufe.ziel, zugang)?, ziel) {
         (Some(o), _) => {
             let z = o.scan(&regeln, abbruch, &mut |anzahl| fortschritt(Fortschritt { phase: Phase::Ziel, anzahl }))?;
@@ -264,7 +264,7 @@ pub fn stufe_vergleichen_vom_server_mit_zugang(
     };
     // Wird bei entfernter Quelle nie gefragt – gleiche Größe und Zeit oder eben nicht
     let inhalt = LokalerInhalt::new(&zielort, &zielort);
-    let vergleich = abschliessen(stufe, ftps_kennung(server), zielort, q, z, &regeln, &inhalt, (true, grob), abbruch, fortschritt)?;
+    let vergleich = abschliessen(stufe, quellort, zielort, q, z, &regeln, &inhalt, (true, grob), abbruch, fortschritt)?;
     Ok(EntfernterVergleich { vergleich, neues_manifest })
 }
 
@@ -278,8 +278,8 @@ fn entferntes_ziel(
 ) -> Result<(ScanErgebnis, Option<Vec<ManifestEintrag>>)> {
     let (manifest, server_fehler, neues_manifest) = match stand {
         EntfernterStand::Manifest(m) => (m.to_vec(), vec![], None),
-        EntfernterStand::Server { ftps, manifest } => {
-            let server = ftps.auflisten(regeln, abbruch, &mut |anzahl| fortschritt(Fortschritt { phase: Phase::Ziel, anzahl }))?;
+        EntfernterStand::Server { server, manifest } => {
+            let server = server.auflisten(regeln, abbruch, &mut |anzahl| fortschritt(Fortschritt { phase: Phase::Ziel, anzahl }))?;
             let neu = manifest_abgleichen(manifest, &server);
             (neu.clone(), server.fehler, Some(neu))
         }
@@ -289,13 +289,13 @@ fn entferntes_ziel(
     Ok((z, neues_manifest))
 }
 
-/// Woher der Stand eines entfernten Ziels (FTPS) kommt.
+/// Woher der Stand eines entfernten Ziels (FTPS oder SFTP) kommt.
 pub enum EntfernterStand<'a> {
     /// Nur das Manifest – ohne Serverkontakt. Leer: noch nie verglichen.
     Manifest(&'a [ManifestEintrag]),
     /// Server einlesen (erster Vergleich, Vollabgleich). Das bisherige Manifest
     /// liefert Hashes für Dateien, deren Größe sich nicht geändert hat.
-    Server { ftps: &'a Ftps, manifest: &'a [ManifestEintrag] },
+    Server { server: &'a dyn ServerLesen, manifest: &'a [ManifestEintrag] },
 }
 
 /// Ergebnis für ein entferntes Ziel; nach dem Einlesen des Servers zusätzlich das
@@ -306,7 +306,7 @@ pub struct EntfernterVergleich {
     pub neues_manifest: Option<Vec<ManifestEintrag>>,
 }
 
-/// Vergleicht eine Stufe mit FTPS-Ziel (KONZEPT Kap. 6, E11): Quelle lokal gescannt,
+/// Vergleicht eine Stufe mit Server-Ziel (FTPS, SFTP; KONZEPT Kap. 6, E11): Quelle lokal gescannt,
 /// Ziel aus dem Manifest oder vom Server. Am Server wird nie etwas verändert.
 pub fn stufe_vergleichen_entfernt(
     strecke: &Strecke,
@@ -331,9 +331,9 @@ pub fn stufe_vergleichen_entfernt_mit_zugang(
 ) -> Result<EntfernterVergleich> {
     let (stufe, quelle, regeln) = vorbereiten(strecke, stufe_id, global)?;
     let quelle = ordner_quelle(&quelle, zugang)?;
-    let Endpunkt::Ftps(_) = &stufe.ziel else {
-        return Err(StellwerkError::NichtUnterstuetzt("Stufe hat kein FTPS-Ziel".into()));
-    };
+    if server_kennung(&stufe.ziel.clone().into()).is_none() {
+        return Err(StellwerkError::NichtUnterstuetzt("Stufe hat kein Server-Ziel".into()));
+    }
     let q = quelle.scan(&regeln, abbruch, &mut |anzahl| fortschritt(Fortschritt { phase: Phase::Quelle, anzahl }))?;
     let (z, neues_manifest) = entferntes_ziel(stand, &regeln, abbruch, fortschritt)?;
     let inhalt = OrdnerInhalt { quelle: &quelle, ziel: None };
@@ -349,6 +349,16 @@ pub fn ziel_kennung(ziel: &Endpunkt) -> PathBuf {
         Endpunkt::Lokal { pfad } => pfad.clone(),
         Endpunkt::Ftps(f) => ftps_kennung(f),
         Endpunkt::Smb(e) => PathBuf::from(crate::endpoint::smb::kennung(e)),
+        Endpunkt::Sftp(e) => PathBuf::from(crate::endpoint::sftp::kennung(e)),
+    }
+}
+
+/// Kennung eines Servers als Quelle oder Ziel (FTPS, SFTP); `None` für andere Endpunkte.
+pub fn server_kennung(q: &Quelle) -> Option<PathBuf> {
+    match q {
+        Quelle::Ftps(f) => Some(ftps_kennung(f)),
+        Quelle::Sftp(f) => Some(PathBuf::from(crate::endpoint::sftp::kennung(f))),
+        _ => None,
     }
 }
 

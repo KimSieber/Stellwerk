@@ -34,6 +34,7 @@ pub fn befehle<R: Runtime>(builder: tauri::Builder<R>) -> tauri::Builder<R> {
         commands::passwort_entfernen,
         commands::verbindung_testen,
         commands::smb_verbindung_testen,
+        commands::sftp_verbindung_testen,
         commands::vergleich_starten,
         commands::vergleich_abbrechen,
         commands::diff_seite,

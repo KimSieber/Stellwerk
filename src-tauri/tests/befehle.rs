@@ -1855,3 +1855,123 @@ fn smb_verbindung_testen() {
     let e = a.aufruf("smb_verbindung_testen", json!({ "ziel": ziel, "passwort": 42 })).unwrap_err();
     assert!(e.to_string().contains("passwort"), "{e}");
 }
+
+// --- SFTP-Server (v0.7.2) ----------------------------------------------------------
+
+fn sftp_ep(s: &stellwerk_testserver::sftp::SftpServer, rel: &str, konto: &str, bestaetigt: bool) -> Value {
+    json!({ "typ": "sftp", "host": "127.0.0.1", "port": s.port, "pfad": s.pfad(rel), "benutzer": stellwerk_testserver::sftp::BENUTZER,
+            "konto_ref": konto, "hostschluessel": if bestaetigt { json!(s.fingerprint) } else { Value::Null } })
+}
+
+#[test]
+fn sftp_verbindung_testen_mit_host_schluessel() {
+    let a = app();
+    let s = stellwerk_testserver::sftp::starten();
+    std::fs::write(s.ordner("web").join("a.txt"), "a").unwrap();
+    let pw = stellwerk_testserver::sftp::PASSWORT;
+
+    // Noch nicht bestätigt: Fingerabdruck zum Bestätigen
+    let e = a.aufruf("sftp_verbindung_testen", json!({ "ziel": sftp_ep(&s, "web", "k", false), "passwort": pw })).unwrap_err();
+    assert_eq!((e["kategorie"].clone(), e["fingerprint"].clone()), (json!("host_schluessel"), json!(s.fingerprint)), "{e}");
+    // Bestätigt
+    let t = a.aufruf("sftp_verbindung_testen", json!({ "ziel": sftp_ep(&s, "web", "k", true), "passwort": pw })).unwrap();
+    assert_eq!((t["eintraege"].clone(), t["hostschluessel"].clone()), (json!(1), json!(s.fingerprint)), "{t}");
+    assert!(!t.to_string().contains(pw));
+    // Ohne Eingabe aus dem Schlüsselbund
+    assert_eq!(a.aufruf("sftp_verbindung_testen", json!({ "ziel": sftp_ep(&s, "web", "k", true) })).unwrap_err()["kategorie"], "nicht_gefunden");
+    a.aufruf("passwort_speichern", json!({ "konto": "k", "passwort": pw })).unwrap();
+    assert!(a.aufruf("sftp_verbindung_testen", json!({ "ziel": sftp_ep(&s, "web", "k", true), "passwort": "" })).is_ok());
+    // Anderes Ziel, ungültige Angaben
+    let e = a.aufruf("sftp_verbindung_testen", json!({ "ziel": { "typ": "lokal", "pfad": "/tmp" } })).unwrap_err();
+    assert_eq!(e["kategorie"], "nicht_unterstuetzt");
+    assert!(a.aufruf("sftp_verbindung_testen", json!({ "ziel": { "typ": "sftp", "host": "h" } })).unwrap_err().to_string().contains("ziel"));
+    assert!(a.aufruf("sftp_verbindung_testen", json!({ "ziel": sftp_ep(&s, "web", "k", true), "passwort": 42 })).unwrap_err().to_string().contains("passwort"));
+}
+
+/// Strecke: lokal → SFTP („hoch“, Umschalten wählbar) und SFTP → lokal („holen“).
+fn sftp_strecke(a: &Testapp, s: &stellwerk_testserver::sftp::SftpServer, modus: &str) -> std::path::PathBuf {
+    let q = a.wurzel.join("daten/quelle");
+    std::fs::create_dir_all(q.join("css")).unwrap();
+    std::fs::write(q.join("index.php"), "neu").unwrap();
+    std::fs::write(q.join("css/site.css"), "body{}").unwrap();
+    s.ordner("web");
+    std::fs::write(s.ordner("logs").join("x.log"), "zeile").unwrap();
+    let geholt = a.wurzel.join("daten/geholt");
+    std::fs::create_dir_all(&geholt).unwrap();
+    let strecke = json!({ "id": "sftp", "name": "SFTP", "version": 1, "stufen": [
+        { "id": "hoch", "name": "lokal → Server", "modus": modus, "quelle": { "typ": "lokal", "pfad": q }, "ziel": sftp_ep(s, "web", "sftp", true) },
+        { "id": "holen", "name": "Server → lokal", "quelle": sftp_ep(s, "logs", "sftp", true), "ziel": { "typ": "lokal", "pfad": geholt } }
+    ] });
+    a.aufruf("strecke_anlegen", json!({ "strecke": strecke })).unwrap();
+    a.aufruf("passwort_speichern", json!({ "konto": "sftp", "passwort": stellwerk_testserver::sftp::PASSWORT })).unwrap();
+    geholt
+}
+
+fn sftp_vergleich(a: &Testapp, stufe: &str, server: bool) -> Result<Value, Value> {
+    a.aufruf("vergleich_starten", json!({ "strecke": "sftp", "stufe": stufe, "fortschritt": KANAL, "server": server }))
+}
+
+#[test]
+fn sftp_hochladen_und_holen() {
+    let a = app();
+    let s = stellwerk_testserver::sftp::starten();
+    let geholt = sftp_strecke(&a, &s, "direkt");
+    let liste = a.aufruf("strecken_liste", json!({})).unwrap();
+    assert_eq!(liste[0]["stufen"][0]["ziel"], json!(format!("sftp://127.0.0.1{}", s.pfad("web"))));
+    assert_eq!(liste[0]["stufen"][1]["quelle"], json!(format!("sftp://127.0.0.1{}", s.pfad("logs"))));
+
+    // Wie FTPS: erst einmal den Server lesen
+    assert_eq!(sftp_vergleich(&a, "hoch", false).unwrap_err()["kategorie"], "kein_manifest");
+    let v = sftp_vergleich(&a, "hoch", true).unwrap();
+    assert_eq!((v["ziel_stand"].clone(), v["zusammenfassung"]["neu"].clone()), (json!("server"), json!(3)), "{v}");
+    assert_eq!(v["ziel"], json!(format!("sftp://127.0.0.1:{}{}", s.port, s.pfad("web"))));
+    let vorschau = a.aufruf("plan_erstellen", json!({ "vergleichId": v["vergleich_id"] })).unwrap();
+    assert_eq!(vorschau["worker"], 2);
+    let r = uebertragen(&a, &v["vergleich_id"], false, false).unwrap();
+    assert_eq!(r["ergebnis"]["fehler"], json!([]), "{r}");
+    assert_eq!(std::fs::read_to_string(s.wurzel().join("web/css/site.css")).unwrap(), "body{}");
+    // Ohne Serverkontakt: alles gleich (letzter bekannter Stand fortgeschrieben)
+    let v = sftp_vergleich(&a, "hoch", false).unwrap();
+    assert_eq!((v["ziel_stand"].clone(), v["zusammenfassung"]["ausgewaehlt"].clone()), (json!("manifest"), json!(0)), "{v}");
+
+    // Server → lokal
+    let v = sftp_vergleich(&a, "holen", false).unwrap();
+    assert_eq!(v["quelle"], json!(format!("sftp://127.0.0.1:{}{}", s.port, s.pfad("logs"))));
+    let vorschau = a.aufruf("plan_erstellen", json!({ "vergleichId": v["vergleich_id"] })).unwrap();
+    assert_eq!(vorschau["worker"], 2);
+    let r = uebertragen(&a, &v["vergleich_id"], false, false).unwrap();
+    assert_eq!(r["ergebnis"]["fehler"], json!([]), "{r}");
+    assert_eq!(std::fs::read_to_string(geholt.join("x.log")).unwrap(), "zeile");
+}
+
+#[test]
+fn sftp_umschalten_und_inhalte_pruefen() {
+    let a = app();
+    let s = stellwerk_testserver::sftp::starten();
+    sftp_strecke(&a, &s, "umschalten");
+    std::fs::write(s.wurzel().join("web/index.php"), "alt").unwrap();
+    std::fs::write(s.wurzel().join("web/weg.txt"), "weg").unwrap();
+
+    // „Inhalte prüfen“: index.php hat dieselbe Größe – Inhalt unbekannt
+    let v = sftp_vergleich(&a, "hoch", true).unwrap();
+    assert_eq!(v["ungeprueft"]["anzahl"], 1, "{v}");
+    let p = a.aufruf("inhalte_pruefen", json!({ "vergleichId": v["vergleich_id"], "fortschritt": KANAL })).unwrap();
+    assert_eq!((p["geprueft"].clone(), p["fehler"].clone()), (json!(1), json!([])), "{p}");
+
+    // Umschalten in einem Zug: Ziel entspricht danach der Quelle
+    let v = sftp_vergleich(&a, "hoch", false).unwrap();
+    a.aufruf("plan_erstellen", json!({ "vergleichId": v["vergleich_id"] })).unwrap();
+    let r = uebertragen(&a, &v["vergleich_id"], true, false).unwrap();
+    assert_eq!(r["phase"], "hochgeladen", "{r}");
+    weiter(&a, &r["lauf_id"], "umschalten").unwrap();
+    assert_eq!(weiter(&a, &r["lauf_id"], "uebernehmen").unwrap()["phase"], "fertig");
+    assert_eq!(std::fs::read_to_string(s.wurzel().join("web/index.php")).unwrap(), "neu");
+    assert!(!s.wurzel().join("web/weg.txt").exists());
+    let v = sftp_vergleich(&a, "hoch", true).unwrap();
+    assert_eq!(v["zusammenfassung"]["ausgewaehlt"], 0, "{v}");
+
+    // „Inhalte prüfen“ nur für Server-Ziele
+    let v = sftp_vergleich(&a, "holen", false).unwrap();
+    let e = a.aufruf("inhalte_pruefen", json!({ "vergleichId": v["vergleich_id"], "fortschritt": KANAL })).unwrap_err();
+    assert_eq!(e["kategorie"], "nicht_unterstuetzt");
+}

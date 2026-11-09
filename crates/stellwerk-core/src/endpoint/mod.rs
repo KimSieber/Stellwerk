@@ -13,6 +13,7 @@
 
 pub mod ftps;
 pub mod lokal;
+pub mod sftp;
 pub mod smb;
 
 use std::io::{Read, Write};
@@ -22,6 +23,7 @@ use std::time::SystemTime;
 
 pub use ftps::{Ftps, FtpsQuelle};
 pub use lokal::Lokal;
+pub use sftp::Sftp;
 pub use smb::Smb;
 
 use crate::error::{Result, StellwerkError};
@@ -52,6 +54,30 @@ pub struct Geschrieben {
 pub trait QuellEndpunkt: Send + Sync {
     /// Öffnet eine Datei zum Lesen; Ordner, Links und Fehlendes sind Fehler.
     fn oeffnen(&self, p: &RelPath) -> Result<QuellDatei>;
+}
+
+/// Ein Server (FTPS oder SFTP), dessen Stand eingelesen wird – für den Vergleich über
+/// den letzten bekannten Stand (v0.7.2).
+pub trait ServerLesen: Sync {
+    /// Liest den Ordner der Stufe rekursiv ein; ignorierte Ordner werden nicht durchlaufen.
+    fn auflisten(
+        &self,
+        regeln: &crate::rules::RegelWerk,
+        abbruch: &AtomicBool,
+        fortschritt: &mut dyn FnMut(usize),
+    ) -> Result<crate::scan::ScanErgebnis>;
+}
+
+impl ServerLesen for Ftps {
+    fn auflisten(&self, regeln: &crate::rules::RegelWerk, abbruch: &AtomicBool, fortschritt: &mut dyn FnMut(usize)) -> Result<crate::scan::ScanErgebnis> {
+        Ftps::auflisten(self, regeln, abbruch, fortschritt)
+    }
+}
+
+impl ServerLesen for Sftp {
+    fn auflisten(&self, regeln: &crate::rules::RegelWerk, abbruch: &AtomicBool, fortschritt: &mut dyn FnMut(usize)) -> Result<crate::scan::ScanErgebnis> {
+        Sftp::auflisten(self, regeln, abbruch, fortschritt)
+    }
 }
 
 /// Eine geliehene Quelle ist ebenfalls eine Quelle.

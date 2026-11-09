@@ -1,6 +1,6 @@
 [package]
 name = "stellwerk-testserver"
-description = "FTPS-Server für die automatischen Tests von Stellwerk (nicht Teil der App)"
+description = "Testserver (FTPS, Samba, SFTP) für die automatischen Tests von Stellwerk (nicht Teil der App)"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

@@ -25,6 +25,7 @@ use unftp_core::auth::{AuthenticationError, Authenticator, Credentials, Principa
 use unftp_core::storage::{Error as SError, ErrorKind as SErrorKind, Fileinfo, Result as SResult, StorageBackend};
 use unftp_sbe_fs::Filesystem;
 
+pub mod sftp;
 pub mod smb;
 
 pub const BENUTZER: &str = "kim";

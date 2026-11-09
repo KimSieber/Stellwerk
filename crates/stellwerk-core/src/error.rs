@@ -74,6 +74,11 @@ pub enum StellwerkError {
     #[error("Zertifikat nicht anerkannt: {meldung} (SHA-256 {fingerprint})")]
     Zertifikat { meldung: String, fingerprint: String },
 
+    /// Der Host-Schlüssel eines SFTP-Servers ist (noch) nicht bestätigt oder hat sich
+    /// geändert (v0.7.2). `fingerprint` (`SHA256:…`) kann nach Prüfung bestätigt werden.
+    #[error("Host-Schlüssel nicht bestätigt: {meldung} ({fingerprint})")]
+    HostSchluessel { meldung: String, fingerprint: String },
+
     #[error("Ein-/Ausgabefehler bei {pfad}: {quelle}")]
     Io {
         pfad: PathBuf,
@@ -102,6 +107,7 @@ impl StellwerkError {
             Self::KeineRechte(_) => "keine_rechte",
             Self::LaufOffen(_) => "lauf_offen",
             Self::Zertifikat { .. } => "zertifikat",
+            Self::HostSchluessel { .. } => "host_schluessel",
             Self::Io { .. } => "io",
         }
     }

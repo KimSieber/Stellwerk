@@ -7,8 +7,9 @@ use std::time::{Duration, Instant};
 
 use serde_json::json;
 use stellwerk_core::endpoint::ftps::{Verbindungstest, FTPS_WORKER};
+use stellwerk_core::endpoint::sftp::{kennung as sftp_kennung, SFTP_WORKER};
 use stellwerk_core::endpoint::smb::{kennung as smb_kennung, SMB_WORKER};
-use stellwerk_core::endpoint::{Ftps, Lokal, QuellEndpunkt, Smb, ZielEndpunkt};
+use stellwerk_core::endpoint::{Ftps, Lokal, QuellEndpunkt, ServerLesen, Sftp, Smb, ZielEndpunkt};
 use stellwerk_core::exec::{direkt_ausfuehren, standard_worker, ExecFortschritt, LaufErgebnis, Optionen, Uebertragen};
 use stellwerk_core::plan::{plan_erstellen as plan_erstellen_aus, OpArt, Operation, Plan, PlanWarnung, PlanZusammenfassung};
 use stellwerk_core::store::{
@@ -20,7 +21,7 @@ use tauri::ipc::Channel;
 use tauri::State;
 
 use stellwerk_core::ansicht::{
-    ftps_kennung, stufe_vergleichen_entfernt_mit_zugang, stufe_vergleichen_mit_zugang, stufe_vergleichen_vom_server_mit_zugang, ziel_kennung, Drossel,
+    ftps_kennung, server_kennung, stufe_vergleichen_entfernt_mit_zugang, stufe_vergleichen_mit_zugang, stufe_vergleichen_vom_server_mit_zugang, ziel_kennung, Drossel,
     EntfernterStand, Filter, Fortschritt, Lesefehler, Seite,
     StufenVergleich, VergleichsSitzung,
 };
@@ -52,7 +53,7 @@ impl From<StellwerkError> for BefehlsFehler {
         let meldung = e.to_string();
         let (probleme, fingerprint) = match e {
             StellwerkError::Validierung(p) => (p, None),
-            StellwerkError::Zertifikat { fingerprint, .. } => (vec![], Some(fingerprint)),
+            StellwerkError::Zertifikat { fingerprint, .. } | StellwerkError::HostSchluessel { fingerprint, .. } => (vec![], Some(fingerprint)),
             _ => (vec![], None),
         };
         Self { kategorie, meldung, probleme, fingerprint }
@@ -129,6 +130,7 @@ fn quelle_kurz(q: &Quelle) -> String {
         Quelle::Lokal { pfad } => pfad.display().to_string(),
         Quelle::Ftps(f) => format!("ftps://{}{}", f.host, f.pfad),
         Quelle::Smb(e) => smb_kurz(e),
+        Quelle::Sftp(f) => format!("sftp://{}{}", f.host, f.pfad),
         Quelle::Stufe { stufe } => format!("Ziel von „{stufe}“"),
     }
 }
@@ -138,6 +140,7 @@ fn ziel_kurz(z: &Endpunkt) -> String {
         Endpunkt::Lokal { pfad } => pfad.display().to_string(),
         Endpunkt::Ftps(f) => format!("ftps://{}{}", f.host, f.pfad),
         Endpunkt::Smb(e) => smb_kurz(e),
+        Endpunkt::Sftp(f) => format!("sftp://{}{}", f.host, f.pfad),
     }
 }
 
@@ -301,6 +304,27 @@ pub async fn smb_verbindung_testen(
     Ok(test?)
 }
 
+/// „Verbindung testen“ für einen SFTP-Server (v0.7.2): Host-Schlüssel, Anmeldung,
+/// Ordner – liest nur. Ist der Host-Schlüssel nicht bestätigt, kommt sein Fingerabdruck
+/// im Fehler (`fingerprint`) zum Bestätigen. Passwort: eingegeben, sonst aus dem Schlüsselbund.
+#[tauri::command]
+pub async fn sftp_verbindung_testen(
+    state: State<'_, AppState>,
+    ziel: Endpunkt,
+    passwort: Option<String>,
+) -> Antwort<stellwerk_core::endpoint::sftp::SftpVerbindungstest> {
+    let Endpunkt::Sftp(ziel) = ziel else {
+        return Err(StellwerkError::NichtUnterstuetzt("Dieser Verbindungstest gilt nur für SFTP-Server".into()).into());
+    };
+    let passwort = match passwort.filter(|p| !p.is_empty()) {
+        Some(p) => p,
+        None => hinterlegtes_passwort(&state, &ziel.konto_ref)?,
+    };
+    let sftp = Sftp::new(&ziel, &passwort);
+    let test = tauri::async_runtime::spawn_blocking(move || sftp.verbindung_testen()).await.expect("Verbindungstest beendet");
+    Ok(test?)
+}
+
 /// Antwort von `verbindung_testen`.
 #[derive(Debug, Serialize)]
 pub struct VerbindungstestAntwort {
@@ -407,21 +431,18 @@ pub async fn vergleich_starten(
         }
     };
     let modus = s.stufen.iter().find(|st| st.id == stufe).map(|st| st.modus).unwrap_or_default();
-    let ftps = s.stufen.iter().find(|st| st.id == stufe).and_then(|st| match &st.ziel {
-        Endpunkt::Ftps(f) => Some(f.clone()),
-        Endpunkt::Lokal { .. } | Endpunkt::Smb(_) => None,
-    });
+    // Ziel auf einem Server (FTPS, v0.7.2 auch SFTP): Vergleich über den letzten bekannten Stand
+    let ziel_server: Option<Quelle> =
+        s.stufen.iter().find(|st| st.id == stufe).map(|st| st.ziel.clone().into()).filter(|z| server_kennung(z).is_some());
     // Passwörter von Samba-Freigaben (v0.7.1)
     let zugang = |konto: &str| hinterlegtes_passwort(&state, konto);
     // v0.6.5: Quelle auf einem Server (direkt oder über „Ziel einer Vorstufe“)
-    let quelle_server = match s.stufen.iter().position(|st| st.id == stufe).and_then(|i| effektive_quelle(&s, i)) {
-        Some(Quelle::Ftps(f)) => Some(f),
-        _ => None,
-    };
-    let ergebnis = match (&quelle_server, &ftps) {
+    let quelle_server =
+        s.stufen.iter().position(|st| st.id == stufe).and_then(|i| effektive_quelle(&s, i)).filter(|q| server_kennung(q).is_some());
+    let ergebnis = match (&quelle_server, &ziel_server) {
         (Some(q), None) => vom_server(&state, &s, &stufe, &global, q, &abbruch, &mut melden).map(|v| (v, None)),
         (None, None) => stufe_vergleichen_mit_zugang(&s, &stufe, &global, &zugang, &abbruch, &mut melden).map(|v| (v, None)),
-        // FTPS-Ziel – die Quelle lokal oder (v0.6.5b) ebenfalls ein Server
+        // Server-Ziel – die Quelle lokal oder (v0.6.5b) ebenfalls ein Server
         (q, Some(f)) => vergleichen_entfernt(&state, &s, &stufe, &global, f, q.as_ref(), server.unwrap_or(false), &abbruch, &mut melden)
             .map(|(v, mit_server)| (v, Some(if mit_server { "server" } else { "manifest" }))),
     };
@@ -460,7 +481,7 @@ pub struct InhaltePruefung {
     pub fehler: Vec<crate::umschalten::SchrittFehler>,
 }
 
-/// „Inhalte prüfen“ (nur FTPS): Dateien mit unbekanntem Inhalt einmal herunterladen,
+/// „Inhalte prüfen“ (nur Server-Ziele: FTPS, SFTP): Dateien mit unbekanntem Inhalt einmal herunterladen,
 /// hashen und den Hash im letzten bekannten Stand vermerken. Liest am Server nur.
 /// Danach vergleicht die Ansicht neu (ohne Serverkontakt). Abbrechen wie ein Vergleich.
 #[tauri::command]
@@ -469,14 +490,13 @@ pub async fn inhalte_pruefen(state: State<'_, AppState>, vergleich_id: String, f
         Ok((o.strecke.clone(), o.stufe.clone(), o.sitzung.ungeprueft().into_iter().map(|(p, _)| p).collect::<Vec<_>>()))
     })?;
     let s = state.store.strecke_laden(&strecke)?;
-    let ziel = s.stufen.into_iter().find(|st| st.id == stufe).map(|st| st.ziel);
-    let Some(Endpunkt::Ftps(f)) = ziel else {
-        return Err(StellwerkError::NichtUnterstuetzt("„Inhalte prüfen“ gibt es nur für FTPS-Ziele – bitte neu vergleichen".into()).into());
+    let ziel = s.stufen.into_iter().find(|st| st.id == stufe).map(|st| Quelle::from(st.ziel));
+    let Some(server) = ziel.as_ref().map(|z| ServerEp::neu(&state, z)).transpose()?.flatten() else {
+        return Err(StellwerkError::NichtUnterstuetzt("„Inhalte prüfen“ gibt es nur für Server-Ziele – bitte neu vergleichen".into()).into());
     };
-    let ftps = Ftps::new(&f, &hinterlegtes_passwort(&state, &f.konto_ref)?)?;
     let schluessel = format!("{strecke}/{stufe}");
     let abbruch = state.vergleiche.anmelden(&schluessel);
-    let r = ftps.inhalte_hashen(&pfade, &abbruch, &mut |n| drop(fortschritt.send(n)));
+    let r = server.inhalte_hashen(&pfade, &abbruch, &mut |n| drop(fortschritt.send(n)));
     state.vergleiche.abmelden(&schluessel, &abbruch);
     let db = state.datenbank.lock().unwrap();
     let mut bekannt: std::collections::HashMap<RelPath, ManifestEintrag> =
@@ -502,13 +522,13 @@ fn vom_server(
     s: &Strecke,
     stufe: &str,
     global: &GlobalConfig,
-    quelle: &stellwerk_core::model::FtpsEndpunkt,
+    quelle: &Quelle,
     abbruch: &AtomicBool,
     melden: &mut dyn FnMut(Fortschritt),
 ) -> Result<StufenVergleich, StellwerkError> {
-    let ftps = Ftps::new(quelle, &hinterlegtes_passwort(state, &quelle.konto_ref)?)?;
+    let server = ServerEp::neu(state, quelle)?.expect("Quelle ist ein Server");
     let zugang = |konto: &str| hinterlegtes_passwort(state, konto);
-    Ok(stufe_vergleichen_vom_server_mit_zugang(s, stufe, global, &ftps, None, &zugang, abbruch, melden)?.vergleich)
+    Ok(stufe_vergleichen_vom_server_mit_zugang(s, stufe, global, server.lesen(), None, &zugang, abbruch, melden)?.vergleich)
 }
 
 /// Vergleich mit einem Ziel-Server – die Quelle lokal oder (v0.6.5b) ein Server.
@@ -517,19 +537,19 @@ fn mit_stand(
     s: &Strecke,
     stufe: &str,
     global: &GlobalConfig,
-    quelle: Option<&Ftps>,
+    quelle: Option<&ServerEp>,
     stand: EntfernterStand,
     zugang: stellwerk_core::ansicht::Zugang,
     abbruch: &AtomicBool,
     melden: &mut dyn FnMut(Fortschritt),
 ) -> Result<stellwerk_core::ansicht::EntfernterVergleich, StellwerkError> {
     match quelle {
-        Some(q) => stufe_vergleichen_vom_server_mit_zugang(s, stufe, global, q, Some(stand), zugang, abbruch, melden),
+        Some(q) => stufe_vergleichen_vom_server_mit_zugang(s, stufe, global, q.lesen(), Some(stand), zugang, abbruch, melden),
         None => stufe_vergleichen_entfernt_mit_zugang(s, stufe, global, stand, zugang, abbruch, melden),
     }
 }
 
-/// FTPS-Stufe vergleichen. Die Datenbank ist nie während des Netzzugriffs gesperrt.
+/// Stufe mit Server-Ziel (FTPS, SFTP) vergleichen. Die Datenbank ist nie während des Netzzugriffs gesperrt.
 /// Liefert auch, ob der Server gelesen wurde (gewünscht oder nach einem unterbrochenen Lauf).
 #[allow(clippy::too_many_arguments)]
 fn vergleichen_entfernt(
@@ -537,15 +557,15 @@ fn vergleichen_entfernt(
     s: &Strecke,
     stufe: &str,
     global: &GlobalConfig,
-    ziel: &stellwerk_core::model::FtpsEndpunkt,
-    quelle: Option<&stellwerk_core::model::FtpsEndpunkt>,
+    ziel: &Quelle,
+    quelle: Option<&Quelle>,
     mit_server: bool,
     abbruch: &AtomicBool,
     melden: &mut dyn FnMut(Fortschritt),
 ) -> Result<(StufenVergleich, bool), StellwerkError> {
     // Quelle auf einem Server: vom Server gelesen, mit eigenem Passwort
     let quelle = match quelle {
-        Some(q) => Some(Ftps::new(q, &hinterlegtes_passwort(state, &q.konto_ref)?)?),
+        Some(q) => ServerEp::neu(state, q)?,
         None => None,
     };
     let (seit, manifest, lesen) = {
@@ -562,8 +582,8 @@ fn vergleichen_entfernt(
         let v = mit_stand(s, stufe, global, quelle.as_ref(), EntfernterStand::Manifest(&manifest), &zugang, abbruch, melden)?;
         return Ok((v.vergleich, false));
     }
-    let ftps = Ftps::new(ziel, &hinterlegtes_passwort(state, &ziel.konto_ref)?)?;
-    let v = mit_stand(s, stufe, global, quelle.as_ref(), EntfernterStand::Server { ftps: &ftps, manifest: &manifest }, &zugang, abbruch, melden)?;
+    let server = ServerEp::neu(state, ziel)?.expect("Ziel ist ein Server");
+    let v = mit_stand(s, stufe, global, quelle.as_ref(), EntfernterStand::Server { server: server.lesen(), manifest: &manifest }, &zugang, abbruch, melden)?;
     // Mit Server gibt es immer ein abgeglichenes Manifest
     let neu = v.neues_manifest.unwrap_or_default();
     let mut db = state.datenbank.lock().unwrap();
@@ -722,7 +742,7 @@ pub fn plan_erstellen(state: State<'_, AppState>, vergleich_id: String) -> Antwo
             warnungen: plan.warnungen.clone(),
             quelle: o.quelle.display().to_string(),
             ziel: o.ziel.display().to_string(),
-            worker: worker_fuer(matches!(quelle, Some(Quelle::Ftps(_))), &st.ziel),
+            worker: worker_fuer(quelle.as_ref().and_then(server_kennung).is_some(), &st.ziel),
             modus: st.modus,
         };
         o.plan = Some(plan);
@@ -749,11 +769,49 @@ pub(crate) fn offen_pruefen(state: &AppState, strecke: &str, stufe: &str) -> Res
     }
 }
 
+/// Ein Server (FTPS oder SFTP) mit Passwort aus dem Schlüsselbund (v0.7.2).
+pub(crate) enum ServerEp {
+    Ftps(Ftps),
+    Sftp(Sftp),
+}
+
+impl ServerEp {
+    /// `None`, wenn der Endpunkt kein Server ist.
+    pub(crate) fn neu(state: &AppState, q: &Quelle) -> Result<Option<Self>, StellwerkError> {
+        Ok(match q {
+            Quelle::Ftps(f) => Some(Self::Ftps(Ftps::new(f, &hinterlegtes_passwort(state, &f.konto_ref)?)?)),
+            Quelle::Sftp(f) => Some(Self::Sftp(Sftp::new(f, &hinterlegtes_passwort(state, &f.konto_ref)?))),
+            _ => None,
+        })
+    }
+
+    pub(crate) fn lesen(&self) -> &dyn ServerLesen {
+        match self {
+            Self::Ftps(f) => f,
+            Self::Sftp(s) => s,
+        }
+    }
+
+    #[allow(clippy::type_complexity)]
+    fn inhalte_hashen(
+        &self,
+        pfade: &[RelPath],
+        abbruch: &AtomicBool,
+        fortschritt: &mut dyn FnMut(usize),
+    ) -> Result<Vec<(RelPath, Result<stellwerk_core::endpoint::Geschrieben, String>)>, StellwerkError> {
+        match self {
+            Self::Ftps(f) => f.inhalte_hashen(pfade, abbruch, fortschritt),
+            Self::Sftp(s) => s.inhalte_hashen(pfade, abbruch, fortschritt),
+        }
+    }
+}
+
 /// Das Ziel einer Stufe als Endpunkt – FTPS mit Passwort und Gelerntem.
 pub(crate) enum ZielEp {
     Lokal(Lokal),
     Ftps(Ftps),
     Smb(Smb),
+    Sftp(Sftp),
 }
 
 impl ZielEp {
@@ -765,6 +823,7 @@ impl ZielEp {
             }
             Endpunkt::Lokal { pfad } => Self::Lokal(Lokal::new(pfad)),
             Endpunkt::Smb(e) => Self::Smb(Smb::new(e, &hinterlegtes_passwort(state, &e.konto_ref)?)),
+            Endpunkt::Sftp(e) => Self::Sftp(Sftp::new(e, &hinterlegtes_passwort(state, &e.konto_ref)?)),
         })
     }
 
@@ -773,14 +832,20 @@ impl ZielEp {
             Self::Lokal(l) => l,
             Self::Ftps(f) => f,
             Self::Smb(s) => s,
+            Self::Sftp(s) => s,
         }
     }
 
     pub(crate) fn ftps(&self) -> Option<&Ftps> {
         match self {
-            Self::Lokal(_) | Self::Smb(_) => None,
+            Self::Lokal(_) | Self::Smb(_) | Self::Sftp(_) => None,
             Self::Ftps(f) => Some(f),
         }
+    }
+
+    /// Ziel auf einem Server (FTPS, SFTP) – der letzte bekannte Stand wird fortgeschrieben.
+    pub(crate) fn ist_server(&self) -> bool {
+        matches!(self, Self::Ftps(_) | Self::Sftp(_))
     }
 
     /// Gelerntes (Überschreiben beim Umbenennen) speichern, sobald bekannt.
@@ -839,6 +904,7 @@ pub(crate) fn worker_fuer(quelle_server: bool, ziel: &Endpunkt) -> usize {
         Endpunkt::Lokal { .. } => standard_worker(),
         Endpunkt::Ftps(_) => FTPS_WORKER,
         Endpunkt::Smb(_) => SMB_WORKER,
+        Endpunkt::Sftp(_) => SFTP_WORKER,
     };
     if quelle_server { n.min(FTPS_WORKER) } else { n }
 }
@@ -846,7 +912,7 @@ pub(crate) fn worker_fuer(quelle_server: bool, ziel: &Endpunkt) -> usize {
 /// Kennung einer aufgelösten Quelle wie im Vergleich: Ordner bzw. `ftps://…`.
 fn quell_kennung(q: &Quelle) -> Option<PathBuf> {
     // `Stufe` kommt aufgelöst nicht vor
-    match q { Quelle::Lokal { pfad } => Some(pfad.clone()), Quelle::Ftps(f) => Some(ftps_kennung(f)), Quelle::Smb(e) => Some(PathBuf::from(smb_kennung(e))), Quelle::Stufe { .. } => None }
+    match q { Quelle::Lokal { pfad } => Some(pfad.clone()), Quelle::Ftps(f) => Some(ftps_kennung(f)), Quelle::Smb(e) => Some(PathBuf::from(smb_kennung(e))), Quelle::Sftp(e) => Some(PathBuf::from(sftp_kennung(e))), Quelle::Stufe { .. } => None }
 }
 
 /// Änderungszeit der Quelle je Pfad aus dem Vergleich – eine Quelle auf dem Server
@@ -862,6 +928,8 @@ pub(crate) enum QuellEp {
     Ftps { ftps: Ftps, zeiten: HashMap<RelPath, i64>, kennung: PathBuf },
     /// Samba-Freigabe (v0.7.1) – liest direkt, wie ein lokaler Ordner.
     Smb { smb: Smb, kennung: PathBuf },
+    /// SFTP-Server (v0.7.2) – die Änderungszeit kommt vom Server.
+    Sftp { sftp: Sftp, kennung: PathBuf },
 }
 
 impl QuellEp {
@@ -875,6 +943,10 @@ impl QuellEp {
                 let ftps = Ftps::new(&f, &hinterlegtes_passwort(state, &f.konto_ref)?)?;
                 Ok(Self::Ftps { ftps, zeiten, kennung: kennung.to_path_buf() })
             }
+            Some(Quelle::Sftp(e)) if Path::new(&sftp_kennung(&e)) == kennung => {
+                let sftp = Sftp::new(&e, &hinterlegtes_passwort(state, &e.konto_ref)?);
+                Ok(Self::Sftp { sftp, kennung: kennung.to_path_buf() })
+            }
             Some(Quelle::Smb(e)) if Path::new(&smb_kennung(&e)) == kennung => {
                 let smb = Smb::new(&e, &hinterlegtes_passwort(state, &e.konto_ref)?);
                 Ok(Self::Smb { smb, kennung: kennung.to_path_buf() })
@@ -884,14 +956,14 @@ impl QuellEp {
     }
 
     pub(crate) fn ist_server(&self) -> bool {
-        matches!(self, Self::Ftps { .. })
+        matches!(self, Self::Ftps { .. } | Self::Sftp { .. })
     }
 
     /// Ordner bzw. `ftps://…` – fürs Protokoll.
     pub(crate) fn kennung(&self) -> &Path {
         match self {
             Self::Lokal(p) => p,
-            Self::Ftps { kennung, .. } | Self::Smb { kennung, .. } => kennung,
+            Self::Ftps { kennung, .. } | Self::Smb { kennung, .. } | Self::Sftp { kennung, .. } => kennung,
         }
     }
 
@@ -900,6 +972,7 @@ impl QuellEp {
             Self::Lokal(p) => Box::new(Lokal::new(p)),
             Self::Ftps { ftps, zeiten, .. } => Box::new(ftps.als_quelle(zeiten.clone())),
             Self::Smb { smb, .. } => Box::new(smb),
+            Self::Sftp { sftp, .. } => Box::new(sftp.als_quelle()),
         }
     }
 }
@@ -960,7 +1033,7 @@ pub(crate) fn uebertragen(
     let worker = worker_fuer(quelle.ist_server(), ziel);
     // Alles, was scheitern kann, bevor der Lauf angelegt wird
     let zep = ZielEp::neu(state, ziel, strecke, stufe)?;
-    let (ziel_ep, ftps) = (zep.ep(), zep.ftps());
+    let (ziel_ep, server) = (zep.ep(), zep.ist_server());
     let ziel = ziel_kennung(ziel);
     let lauf_id = db.lock().unwrap().lauf_anlegen(strecke, stufe, Modus::Direkt, plan, jetzt_ms())?;
     let ort = (strecke, stufe, lauf_id.as_str());
@@ -990,7 +1063,7 @@ pub(crate) fn uebertragen(
         &mut |op, status, meldung, uebertragen, hinweis| {
             let db = db.lock().unwrap();
             db.journal_setzen(&lauf_id, op.nr, status, meldung, hinweis, jetzt_ms())?;
-            if ftps.is_some() && status == JournalStatus::Erledigt {
+            if server && status == JournalStatus::Erledigt {
                 manifest_fortschreiben(&db, ort, op, uebertragen)?;
             }
             if status == JournalStatus::Fehler {

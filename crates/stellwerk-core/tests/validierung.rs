@@ -359,3 +359,63 @@ fn smb_ordner_werden_nicht_lokal_geprueft() {
     s.stufen[0].quelle = Quelle::Smb(smb("pi", 445, "g", "/", "b", "k"));
     assert!(stellwerk_core::config::pruefe_ordner(&s).is_empty());
 }
+
+// --- SFTP-Server (v0.7.2) ------------------------------------------------------
+
+fn sftp(host: &str, port: u16, pfad: &str, benutzer: &str, konto: &str) -> SftpEndpunkt {
+    SftpEndpunkt { host: host.into(), port, pfad: pfad.into(), benutzer: benutzer.into(), konto_ref: konto.into(), hostschluessel: None }
+}
+
+#[test]
+fn sftp_jedes_feld() {
+    let mut s = beispiel();
+    s.stufen[1].ziel = Endpunkt::Sftp(sftp("ngcobalt418.manitu.net", 23, "/web", "kim", "k"));
+    assert_eq!(fehler_orte(&s), Vec::<String>::new());
+    for (e, ort) in [
+        (sftp(" ", 22, "/x", "b", "k"), "stufen[1].ziel.host"),
+        (sftp("h", 0, "/x", "b", "k"), "stufen[1].ziel.port"),
+        (sftp("h", 22, "web", "b", "k"), "stufen[1].ziel.pfad"),
+        (sftp("h", 22, "/a/../b", "b", "k"), "stufen[1].ziel.pfad"),
+        (sftp("h", 22, "/x", " ", "k"), "stufen[1].ziel.benutzer"),
+        (sftp("h", 22, "/x", "b", ""), "stufen[1].ziel.konto_ref"),
+    ] {
+        s.stufen[1].ziel = Endpunkt::Sftp(e);
+        assert_eq!(fehler_orte(&s), vec![ort]);
+    }
+    // Host-Schlüssel: SHA256-Fingerabdruck
+    let fp = format!("SHA256:{}", "A".repeat(43));
+    for (h, ok) in [(fp.as_str(), true), ("SHA256:kurz", false), (&format!("MD5:{}", "A".repeat(50))[..], false)] {
+        s.stufen[1].ziel = Endpunkt::Sftp(SftpEndpunkt { hostschluessel: Some(h.into()), ..sftp("h", 22, "/x", "b", "k") });
+        assert_eq!(fehler_orte(&s).is_empty(), ok, "{h}");
+    }
+    // Als Quelle genauso
+    s.stufen[1].ziel = Endpunkt::Sftp(sftp("h", 22, "/x", "b", "k"));
+    s.stufen[0].quelle = Quelle::Sftp(sftp("", 22, "/q", "b", "k"));
+    assert_eq!(fehler_orte(&s), vec!["stufen[0].quelle.host"]);
+}
+
+#[test]
+fn sftp_und_ftps_auf_demselben_server() {
+    // manitu: FTPS (21) und SFTP (23) erreichen mit demselben Benutzer dieselben Dateien
+    let mut s = beispiel();
+    s.stufen[1].ziel = Endpunkt::Sftp(sftp("ngcobalt418.manitu.net", 23, "/web", "kim", "k"));
+    s.stufen[1].quelle = Quelle::Ftps(ftps("NGCOBALT418.manitu.net", 21, "/web/unter", "kim", "k"));
+    let p = validiere_strecke(&s, &GlobalConfig::default());
+    assert!(p.iter().any(|p| p.ort == "stufen[1].ziel.pfad" && p.meldung.contains("auf demselben Server")), "{p:?}");
+    // Anderer Benutzer: eigene Wurzel
+    s.stufen[1].quelle = Quelle::Ftps(ftps("ngcobalt418.manitu.net", 21, "/web", "anderer", "k"));
+    assert_eq!(fehler_orte(&s), Vec::<String>::new());
+    // SFTP zu SFTP: anderer Port ist ein anderer Server
+    s.stufen[1].quelle = Quelle::Sftp(sftp("ngcobalt418.manitu.net", 22, "/web", "kim", "k"));
+    assert_eq!(fehler_orte(&s), Vec::<String>::new());
+    s.stufen[1].quelle = Quelle::Sftp(sftp("ngcobalt418.manitu.net", 23, "/", "kim", "k"));
+    assert!(validiere_strecke(&s, &GlobalConfig::default()).iter().any(|p| p.ist_fehler() && p.meldung.contains("auf demselben Server")));
+}
+
+#[test]
+fn sftp_ordner_werden_nicht_lokal_geprueft() {
+    let mut s = beispiel();
+    s.stufen[0].ziel = Endpunkt::Sftp(sftp("h", 22, "/z", "b", "k"));
+    s.stufen[0].quelle = Quelle::Sftp(sftp("h", 22, "/q", "b", "k"));
+    assert!(stellwerk_core::config::pruefe_ordner(&s).is_empty());
+}

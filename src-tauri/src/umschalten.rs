@@ -239,7 +239,8 @@ fn schritt_ausfuehren(state: &AppState, lauf: &Lauf, schritt: Schritt, zep: &Zie
     erlaubt(lauf, schritt, &journal)?;
     let plan = plan_aus_journal(&journal);
     let zeilen: HashMap<usize, &JournalZeile> = journal.iter().map(|z| (z.nr, z)).collect();
-    let ftps = zep.ftps().is_some();
+    // Server-Ziel (FTPS, SFTP): letzter bekannter Stand wird fortgeschrieben
+    let ftps = zep.ist_server();
     if ftps && schritt == Schritt::Umschalten {
         db.lock().unwrap().manifest_sichern(strecke, stufe, id)?;
     }

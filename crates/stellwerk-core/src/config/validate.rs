@@ -5,7 +5,7 @@ use std::path::{Component, Path, PathBuf};
 use serde::Serialize;
 
 use super::GlobalConfig;
-use crate::model::{Endpunkt, FtpsEndpunkt, Quelle, RegelEbene, SmbEndpunkt, Strecke, KONFIG_VERSION};
+use crate::model::{Endpunkt, FtpsEndpunkt, Quelle, RegelEbene, SftpEndpunkt, SmbEndpunkt, Strecke, KONFIG_VERSION};
 use crate::rules::{ersatz, muster_fehler};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -92,6 +92,7 @@ pub fn validiere_strecke(s: &Strecke, global: &GlobalConfig) -> Vec<Problem> {
             // v0.6.5: Ein Server kann auch Quelle sein – gelesen wird nur (E3)
             Quelle::Ftps(f) => pruefe_ftps(f, &format!("{ort}.quelle"), &mut p),
             Quelle::Smb(f) => pruefe_smb(f, &format!("{ort}.quelle"), &mut p),
+            Quelle::Sftp(f) => pruefe_sftp(f, &format!("{ort}.quelle"), &mut p),
             Quelle::Stufe { stufe } => {
                 let vor = s.stufen[..i].iter().any(|v| &v.id == stufe);
                 if !vor {
@@ -108,6 +109,7 @@ pub fn validiere_strecke(s: &Strecke, global: &GlobalConfig) -> Vec<Problem> {
             Endpunkt::Lokal { pfad } => pruefe_lokal(pfad, &format!("{ort}.ziel.pfad"), &mut p),
             Endpunkt::Ftps(f) => pruefe_ftps(f, &format!("{ort}.ziel"), &mut p),
             Endpunkt::Smb(f) => pruefe_smb(f, &format!("{ort}.ziel"), &mut p),
+            Endpunkt::Sftp(f) => pruefe_sftp(f, &format!("{ort}.ziel"), &mut p),
         }
 
         // Einbahn (E3): Eine Stufe schreibt nie in ihre eigene Quelle und nie in die
@@ -138,17 +140,22 @@ pub fn validiere_strecke(s: &Strecke, global: &GlobalConfig) -> Vec<Problem> {
             }
         }
 
-        // Dasselbe auf einem Server (v0.6.5b): gleicher Server, gleicher Benutzer (der
-        // Benutzer bestimmt bei vielen Hostern die Wurzel) und sich überschneidende Pfade.
-        if let Endpunkt::Ftps(ziel) = &st.ziel {
+        // Dasselbe auf einem Server (v0.6.5b, SFTP v0.7.2): gleicher Server, gleicher Benutzer
+        // (der Benutzer bestimmt bei vielen Hostern die Wurzel) und sich überschneidende
+        // Pfade. FTPS und SFTP erreichen beim selben Hoster dieselben Dateien – über
+        // verschiedene Ports; der Port zählt daher nur bei gleichem Protokoll.
+        let ziel_quelle: Quelle = st.ziel.clone().into();
+        if let Some(ziel) = server_von(&ziel_quelle) {
             for j in (0..=i).rev() {
-                let Some(Quelle::Ftps(q)) = effektive_quelle(s, j) else { continue };
-                let gleicher_server = q.host.eq_ignore_ascii_case(&ziel.host) && q.port == ziel.port && q.benutzer == ziel.benutzer;
-                if !gleicher_server || !ueberlappen(Path::new(&q.pfad), Path::new(&ziel.pfad)) {
+                let quelle = effektive_quelle(s, j);
+                let Some(q) = quelle.as_ref().and_then(server_von) else { continue };
+                let gleicher_server =
+                    q.1.eq_ignore_ascii_case(ziel.1) && q.3 == ziel.3 && (q.0 != ziel.0 || q.2 == ziel.2);
+                if !gleicher_server || !ueberlappen(Path::new(q.4), Path::new(ziel.4)) {
                     continue;
                 }
                 let meldung = if j == i {
-                    format!("Ziel '{}' und Quelle '{}' überschneiden sich auf demselben Server", ziel.pfad, q.pfad)
+                    format!("Ziel '{}' und Quelle '{}' überschneiden sich auf demselben Server", ziel.4, q.4)
                 } else {
                     format!("Ziel überschneidet sich mit der Quelle der früheren Stufe '{}' – Quellen werden nie beschrieben", s.stufen[j].id)
                 };
@@ -217,7 +224,7 @@ pub fn pruefe_ordner(s: &Strecke) -> Vec<Problem> {
         };
         let ziel = match &st.ziel {
             Endpunkt::Lokal { pfad } => Some(pfad),
-            Endpunkt::Ftps(_) | Endpunkt::Smb(_) => None,
+            Endpunkt::Ftps(_) | Endpunkt::Smb(_) | Endpunkt::Sftp(_) => None,
         };
         for (seite, pfad) in [("quelle", quelle), ("ziel", ziel)] {
             let Some(pfad) = pfad.filter(|p| p.is_absolute()) else { continue };
@@ -294,6 +301,38 @@ fn pruefe_ftps(f: &FtpsEndpunkt, ort: &str, p: &mut Vec<Problem>) {
     }
     if f.zertifikat.as_deref().is_some_and(|z| crate::endpoint::ftps::fingerprint_bytes(z).is_none()) {
         p.push(Problem::fehler(format!("{ort}.zertifikat"), "Zertifikat-Fingerprint ist kein SHA-256-Wert (64 Hex-Zeichen)"));
+    }
+}
+
+/// Server-Endpunkt als (Protokoll, Host, Port, Benutzer, Pfad) – FTPS oder SFTP.
+fn server_von(q: &Quelle) -> Option<(&'static str, &str, u16, &str, &str)> {
+    match q {
+        Quelle::Ftps(f) => Some(("ftps", &f.host, f.port, &f.benutzer, &f.pfad)),
+        Quelle::Sftp(f) => Some(("sftp", &f.host, f.port, &f.benutzer, &f.pfad)),
+        _ => None,
+    }
+}
+
+fn pruefe_sftp(f: &SftpEndpunkt, ort: &str, p: &mut Vec<Problem>) {
+    if f.host.trim().is_empty() {
+        p.push(Problem::fehler(format!("{ort}.host"), "Host fehlt"));
+    }
+    if f.port == 0 {
+        p.push(Problem::fehler(format!("{ort}.port"), "Port 0 ist ungültig"));
+    }
+    if !f.pfad.starts_with('/') {
+        p.push(Problem::fehler(format!("{ort}.pfad"), "Serverpfad muss mit '/' beginnen"));
+    } else if f.pfad.split('/').any(|s| s == "..") {
+        p.push(Problem::fehler(format!("{ort}.pfad"), "Serverpfad darf kein '..' enthalten"));
+    }
+    if f.benutzer.trim().is_empty() {
+        p.push(Problem::fehler(format!("{ort}.benutzer"), "Benutzer fehlt"));
+    }
+    if f.konto_ref.trim().is_empty() {
+        p.push(Problem::fehler(format!("{ort}.konto_ref"), "Schlüsselbund-Verweis fehlt"));
+    }
+    if f.hostschluessel.as_deref().is_some_and(|h| !h.starts_with("SHA256:") || h.len() < 50) {
+        p.push(Problem::fehler(format!("{ort}.hostschluessel"), "Host-Schlüssel ist kein SHA-256-Fingerabdruck (SHA256:…)"));
     }
 }
 

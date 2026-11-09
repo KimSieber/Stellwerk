@@ -44,11 +44,13 @@ pub fn konten_der_strecke(s: &Strecke) -> Vec<String> {
             let quelle = match &st.quelle {
                 Quelle::Ftps(f) => Some(f.konto_ref.clone()),
                 Quelle::Smb(s) => Some(s.konto_ref.clone()),
+                Quelle::Sftp(s) => Some(s.konto_ref.clone()),
                 _ => None,
             };
             let ziel = match &st.ziel {
                 Endpunkt::Ftps(f) => Some(f.konto_ref.clone()),
                 Endpunkt::Smb(s) => Some(s.konto_ref.clone()),
+                Endpunkt::Sftp(s) => Some(s.konto_ref.clone()),
                 Endpunkt::Lokal { .. } => None,
             };
             quelle.into_iter().chain(ziel)

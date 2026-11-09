@@ -112,7 +112,7 @@ fn falsche_art_der_quelle_wird_abgewiesen() {
     let nie = AtomicBool::new(false);
     // Die anderen Vergleiche brauchen eine lokale Quelle
     let e = stufe_vergleichen(&f.strecke, "holen", &g, &nie, &mut |_| {}).unwrap_err();
-    assert!(matches!(e, StellwerkError::NichtUnterstuetzt(ref m) if m.contains("FTPS-Server")), "{e}");
+    assert!(matches!(e, StellwerkError::NichtUnterstuetzt(ref m) if m.contains("Server (FTPS/SFTP)")), "{e}");
     let e = stufe_vergleichen_entfernt(&f.strecke, "holen", &g, EntfernterStand::Manifest(&[]), &nie, &mut |_| {}).unwrap_err();
     assert!(matches!(e, StellwerkError::NichtUnterstuetzt(_)), "{e}");
     // … und umgekehrt
@@ -120,7 +120,7 @@ fn falsche_art_der_quelle_wird_abgewiesen() {
     lokal.stufen[0].quelle = Quelle::Lokal { pfad: f.z.clone() };
     lokal.stufen[0].ziel = stellwerk_core::model::Endpunkt::Lokal { pfad: f.q.clone() };
     let e = stufe_vergleichen_vom_server(&lokal, "holen", &g, &f.ftps(), None, &nie, &mut |_| {}).unwrap_err();
-    assert!(matches!(e, StellwerkError::NichtUnterstuetzt(ref m) if m.contains("kein FTPS-Server")), "{e}");
+    assert!(matches!(e, StellwerkError::NichtUnterstuetzt(ref m) if m.contains("kein Server")), "{e}");
 }
 
 #[test]
@@ -220,7 +220,7 @@ fn server_zu_server_gegen_bekannten_stand_und_server() {
         stellwerk_core::model::Endpunkt::Ftps(z) => Ftps::new(z, PASSWORT).unwrap(),
         _ => unreachable!(),
     };
-    let v = vergleich(EntfernterStand::Server { ftps: &ziel_ftps, manifest: &bekannt });
+    let v = vergleich(EntfernterStand::Server { server: &ziel_ftps, manifest: &bekannt });
     let pfade: Vec<_> = v.neues_manifest.unwrap().into_iter().map(|e| e.pfad.as_str().to_string()).collect();
     assert_eq!(pfade, ["weg.html"]);
 

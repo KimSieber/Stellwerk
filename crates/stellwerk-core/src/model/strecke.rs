@@ -88,6 +88,8 @@ pub enum Quelle {
     Ftps(FtpsEndpunkt),
     /// Samba-Freigabe mit eigener Anmeldung (v0.7.1).
     Smb(SmbEndpunkt),
+    /// SFTP-Server (v0.7.2).
+    Sftp(SftpEndpunkt),
     /// Das Ziel einer vorhergehenden Stufe ist die Quelle dieser Stufe.
     Stufe { stufe: String },
 }
@@ -99,6 +101,7 @@ pub enum Endpunkt {
     Lokal { pfad: PathBuf },
     Ftps(FtpsEndpunkt),
     Smb(SmbEndpunkt),
+    Sftp(SftpEndpunkt),
 }
 
 impl From<Endpunkt> for Quelle {
@@ -107,6 +110,7 @@ impl From<Endpunkt> for Quelle {
             Endpunkt::Lokal { pfad } => Quelle::Lokal { pfad },
             Endpunkt::Ftps(f) => Quelle::Ftps(f),
             Endpunkt::Smb(s) => Quelle::Smb(s),
+            Endpunkt::Sftp(s) => Quelle::Sftp(s),
         }
     }
 }
@@ -150,6 +154,28 @@ pub struct SmbEndpunkt {
     pub pfad: String,
     pub benutzer: String,
     pub konto_ref: String,
+}
+
+/// SFTP-Server (SSH File Transfer Protocol, v0.7.2). Wie bei FTPS kein Passwort –
+/// nur `konto_ref` in den Schlüsselbund (E7).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SftpEndpunkt {
+    pub host: String,
+    #[serde(default = "sftp_port")]
+    pub port: u16,
+    /// Absoluter Pfad auf dem Server, z. B. `/web/sieber-bw.de`.
+    pub pfad: String,
+    pub benutzer: String,
+    pub konto_ref: String,
+    /// Bewusst bestätigter Host-Schlüssel (`SHA256:…`, wie OpenSSH ihn anzeigt). Ohne
+    /// Eintrag verbindet Stellwerk nicht – der Schlüssel muss erst bestätigt werden.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hostschluessel: Option<String>,
+}
+
+fn sftp_port() -> u16 {
+    22
 }
 
 fn smb_port() -> u16 {
@@ -318,6 +344,9 @@ mod tests {
             toml::from_str("host = \"pi\"\nfreigabe = \"f\"\nbenutzer = \"b\"\nkonto_ref = \"k\"").unwrap();
         assert_eq!((s.port, s.pfad.as_str()), (445, "/"));
         assert_eq!(Quelle::from(Endpunkt::Smb(s.clone())), Quelle::Smb(s));
+        let s: SftpEndpunkt = toml::from_str("host = \"h\"\npfad = \"/\"\nbenutzer = \"b\"\nkonto_ref = \"k\"").unwrap();
+        assert_eq!((s.port, s.hostschluessel.as_deref()), (22, None));
+        assert_eq!(Quelle::from(Endpunkt::Sftp(s.clone())), Quelle::Sftp(s));
     }
 
     #[test]

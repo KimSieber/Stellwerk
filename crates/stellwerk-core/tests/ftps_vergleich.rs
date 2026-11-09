@@ -82,7 +82,7 @@ fn erster_vergleich_liest_den_server_mlsd_und_list() {
         let f = fall(Aufbau::default());
         webseite(&f);
         let ftps = if nur_list { f.ftps().nur_list() } else { f.ftps() };
-        let v = f.vergleichen(EntfernterStand::Server { ftps: &ftps, manifest: &[] }).unwrap();
+        let v = f.vergleichen(EntfernterStand::Server { server: &ftps, manifest: &[] }).unwrap();
         assert_eq!(
             status(&v),
             [
@@ -109,7 +109,7 @@ fn erster_vergleich_liest_den_server_mlsd_und_list() {
 #[test]
 fn nicht_lesbares_wird_gemeldet_wurzel_ist_ein_fehler() {
     let f = fall(Aufbau { gesperrt: &["geheim", "httpdocs"], ..Default::default() });
-    let e = f.vergleichen(EntfernterStand::Server { ftps: &f.ftps(), manifest: &[] }).unwrap_err();
+    let e = f.vergleichen(EntfernterStand::Server { server: &f.ftps(), manifest: &[] }).unwrap_err();
     assert!(matches!(e, StellwerkError::NichtGefunden(ref m) if m.contains("nicht lesbar")), "{e}");
 
     // „.git“ ist ignoriert und wird nicht betreten – sonst gäbe es hier einen Lesefehler mehr
@@ -118,7 +118,7 @@ fn nicht_lesbares_wird_gemeldet_wurzel_ist_ein_fehler() {
     datei(&f.z, ".git/HEAD", "h");
     datei(&f.z, "zeilen\numbruch", "u");
     for (ftps, zeile) in [(f.ftps(), "ohne Namen"), (f.ftps().nur_list(), "LIST-Zeile nicht lesbar")] {
-        let v = f.vergleichen(EntfernterStand::Server { ftps: &ftps, manifest: &[] }).unwrap();
+        let v = f.vergleichen(EntfernterStand::Server { server: &ftps, manifest: &[] }).unwrap();
         let fehler: Vec<_> = v.vergleich.lesefehler.iter().map(|l| l.meldung.clone()).collect();
         assert_eq!(fehler.len(), 2, "{fehler:?}");
         assert!(fehler.iter().any(|m| m.starts_with("Ordner nicht lesbar")));
@@ -137,7 +137,7 @@ fn abbruch_waehrend_des_einlesens() {
         &f.strecke,
         "server",
         &GlobalConfig::default(),
-        EntfernterStand::Server { ftps: &ftps, manifest: &[] },
+        EntfernterStand::Server { server: &ftps, manifest: &[] },
         &abbruch,
         &mut |fs| {
             if fs.phase == Phase::Ziel {
@@ -228,7 +228,7 @@ fn manifest_abgleichen_behaelt_hash_nur_bei_gleicher_groesse_und_art() {
     datei(&f.z, "gleich.txt", "xyz");
     datei(&f.z, "groesser.txt", "abcd");
     datei(&f.z, "jetzt-ordner/a", "a");
-    let v = f.vergleichen(EntfernterStand::Server { ftps: &f.ftps(), manifest: &alt }).unwrap();
+    let v = f.vergleichen(EntfernterStand::Server { server: &f.ftps(), manifest: &alt }).unwrap();
     let neu = v.neues_manifest.unwrap();
     assert_eq!(neu[0], alt[0], "gleiche Größe: Hash und Zeit bleiben");
     assert_eq!((neu[1].groesse, neu[1].hash, neu[1].lauf_id.as_deref()), (4, None, None));
