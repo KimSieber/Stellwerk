@@ -67,6 +67,14 @@ button:disabled { opacity: .5; cursor: default; }
 .karte.defekt { border-color: var(--loeschen); }
 .kennung { color: var(--text-leise); font-size: 12px; }
 
+/* Suche der Startseite (v0.8.2): Feld in der Mitte der Leiste */
+.leiste.mit-suche { display: grid; grid-template-columns: 1fr minmax(180px, 340px) 1fr; gap: 12px; }
+.leiste.mit-suche .knoepfe { justify-self: end; }
+.suchfeld {
+  font: inherit; padding: 5px 10px; border-radius: 6px; border: 1px solid var(--rand);
+  background: var(--hg); color: var(--text); min-width: 0;
+}
+
 /* Gruppen der Startseite (v0.8.1): schmale Balken, aufklappbar wie Ordner im Vergleich */
 .gruppen { display: grid; gap: 8px; }
 .gruppen-knoepfe { display: flex; justify-content: flex-end; gap: 4px; margin-top: -6px; }

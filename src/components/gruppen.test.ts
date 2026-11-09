@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { StreckeUebersicht } from "../api";
-import { gruppenNamen, gruppieren, OHNE_GRUPPE, sortiert, vergleichDeutsch } from "./gruppen";
+import { gruppenNamen, gruppieren, OHNE_GRUPPE, sortiert, suchen, suchWoerter, vergleichDeutsch } from "./gruppen";
 
 function strecke(name: string | null, gruppe?: string | null, id = (name ?? "x").toLowerCase()): StreckeUebersicht {
   return { id, name, gruppe, stufen: [], probleme: [], fehler: name === null ? "kaputt" : null };
@@ -65,5 +65,41 @@ describe("Gruppen", () => {
 
   it("ohne „Ohne Gruppe“, wenn jede Strecke eine Gruppe hat", () => {
     expect(gruppieren([strecke("A", "X")]).map((x) => x.name)).toEqual(["X"]);
+  });
+});
+
+describe("Suche (v0.8.2)", () => {
+  const liste = [
+    strecke("Mailwerk Webseite", "Webseiten", "mailwerk"),
+    strecke("GymGuard Webseite", "Webseiten", "gymguard-webseite"),
+    strecke("AWS-Müllabfuhr Api", "APIs", "aws-muellabfuhr-app"),
+    strecke("Versuchsstrecke", null, "test-mit-mahlwerk"),
+  ];
+
+  it("zerlegt den Begriff in Wörter", () => {
+    expect(suchWoerter("  Mail  WEB ")).toEqual(["mail", "web"]);
+    expect(suchWoerter("   ")).toEqual([]);
+  });
+
+  it("findet in Name, Kennung und Gruppe – Groß/Klein egal, Ergebnis alphabetisch", () => {
+    expect(namen(suchen(liste, suchWoerter("w")))).toEqual([
+      "AWS-Müllabfuhr Api",
+      "GymGuard Webseite",
+      "Mailwerk Webseite",
+      "Versuchsstrecke",
+    ]);
+    expect(namen(suchen(liste, suchWoerter("MÜLL")))).toEqual(["AWS-Müllabfuhr Api"]);
+    expect(namen(suchen(liste, suchWoerter("muell")))).toEqual(["AWS-Müllabfuhr Api"]); // Kennung
+    expect(namen(suchen(liste, suchWoerter("apis")))).toEqual(["AWS-Müllabfuhr Api"]); // Gruppe
+    expect(namen(suchen(liste, suchWoerter("mahlwerk")))).toEqual(["Versuchsstrecke"]);
+  });
+
+  it("mehrere Wörter müssen alle vorkommen", () => {
+    expect(namen(suchen(liste, suchWoerter("web mail")))).toEqual(["Mailwerk Webseite"]);
+    expect(suchen(liste, suchWoerter("web api"))).toEqual([]);
+  });
+
+  it("defekte Datei: gefunden über die Kennung", () => {
+    expect(namen(suchen([strecke(null, null, "kaputt")], suchWoerter("kap")))).toEqual(["kaputt"]);
   });
 });

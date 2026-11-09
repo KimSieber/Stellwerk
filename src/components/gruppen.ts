@@ -67,3 +67,21 @@ export function gruppieren(liste: StreckeUebersicht[]): Gruppe[] {
   if (ohne.length > 0) gruppen.push({ name: OHNE_GRUPPE, strecken: ohne });
   return gruppen;
 }
+
+/** Suchbegriff in Wörter zerlegt, klein geschrieben; leer = keine Suche. */
+export function suchWoerter(begriff: string): string[] {
+  return begriff.toLocaleLowerCase("de").split(/\s+/).filter((w) => w !== "");
+}
+
+/**
+ * Suche der Startseite (v0.8.2): Jedes Wort muss in Name, Kennung oder Gruppe vorkommen –
+ * Groß/Klein egal, Pfade bewusst nicht. Ergebnis alphabetisch.
+ */
+export function suchen(liste: StreckeUebersicht[], woerter: string[]): StreckeUebersicht[] {
+  return sortiert(
+    liste.filter((s) => {
+      const text = [s.name ?? "", s.id, s.gruppe ?? ""].join("\n").toLocaleLowerCase("de");
+      return woerter.every((w) => text.includes(w));
+    }),
+  );
+}

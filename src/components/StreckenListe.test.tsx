@@ -242,3 +242,79 @@ describe("Startseite – Gruppen (v0.8.1)", () => {
   });
 });
 
+
+describe("Startseite – Suche (v0.8.2)", () => {
+  const karte = (name: string, gruppe?: string): StreckeUebersicht => ({
+    ...mailwerk,
+    id: name.toLowerCase().replace(/ /g, "-"),
+    name,
+    gruppe,
+  });
+  const titel = () => screen.queryAllByRole("heading", { level: 3 }).map((h) => h.textContent);
+  const liste = [karte("Mailwerk Webseite", "Webseiten"), karte("Garagentor Api", "APIs"), karte("Versuchsstrecke")];
+
+  function starten() {
+    rustAttrappe({ strecken_liste: () => liste, konfig_ort: () => ORT });
+    mitQuery(<StreckenListe onNeu={vi.fn()} onAnzeigen={vi.fn()} />);
+    return screen.findByRole("searchbox", { name: "Strecken suchen" });
+  }
+
+  it("filtert ab dem ersten Zeichen, Treffer als ganze Karten mit Gruppe; ohne Balken", async () => {
+    const feld = await starten();
+    expect(titel()).toEqual([]); // Gruppen zu
+
+    await userEvent.type(feld, "e");
+    expect(titel()).toEqual(["Garagentor Api", "Mailwerk Webseite", "Versuchsstrecke"]);
+    expect(screen.queryByRole("button", { name: "Alle aufklappen" })).toBeNull();
+    expect(screen.queryByRole("button", { name: /Ohne Gruppe/ })).toBeNull();
+    expect(screen.getByText("· Webseiten")).toHaveClass("karte-gruppe");
+    expect(screen.getAllByText(/^· /)).toHaveLength(2); // Versuchsstrecke ohne Gruppe
+
+    await userEvent.type(feld, "b");
+    expect(titel()).toEqual(["Mailwerk Webseite"]);
+    await userEvent.type(feld, " API");
+    expect(screen.getByText("Keine Strecke gefunden.")).toBeInTheDocument();
+  });
+
+  it("Esc leert die Suche, die Gruppen kommen zurück", async () => {
+    const feld = await starten();
+    await userEvent.type(feld, "api");
+    expect(titel()).toEqual(["Garagentor Api"]);
+    await userEvent.keyboard("{Escape}");
+    expect(feld).toHaveValue("");
+    expect(titel()).toEqual([]);
+    expect(screen.getByRole("button", { name: "Alle aufklappen" })).toBeInTheDocument();
+    // Andere Tasten lassen die Suche stehen
+    await userEvent.type(feld, "x{Enter}");
+    expect(feld).toHaveValue("x");
+  });
+
+  it("nur Leerzeichen gelten nicht als Suche", async () => {
+    const feld = await starten();
+    await userEvent.type(feld, "   ");
+    expect(screen.getByRole("button", { name: "Alle aufklappen" })).toBeInTheDocument();
+  });
+
+  it("⌘F und Strg+F springen ins Suchfeld und markieren den Begriff; andere Tasten nicht", async () => {
+    const feld = await starten();
+    await userEvent.type(feld, "mail");
+    (feld as HTMLInputElement).blur();
+    await userEvent.keyboard("f");
+    expect(feld).not.toHaveFocus();
+    await userEvent.keyboard("{Meta>}g{/Meta}");
+    expect(feld).not.toHaveFocus();
+    await userEvent.keyboard("{Meta>}f{/Meta}");
+    expect(feld).toHaveFocus();
+    expect([(feld as HTMLInputElement).selectionStart, (feld as HTMLInputElement).selectionEnd]).toEqual([0, 4]);
+    (feld as HTMLInputElement).blur();
+    await userEvent.keyboard("{Control>}F{/Control}");
+    expect(feld).toHaveFocus();
+  });
+
+  it("ohne Strecken kein Suchfeld", async () => {
+    rustAttrappe({ strecken_liste: () => [], konfig_ort: () => ORT });
+    mitQuery(<StreckenListe onNeu={vi.fn()} onAnzeigen={vi.fn()} />);
+    await screen.findByText("Noch keine Strecke angelegt.");
+    expect(screen.queryByRole("searchbox")).toBeNull();
+  });
+});

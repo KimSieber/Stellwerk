@@ -1,10 +1,11 @@
+import { useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 
 import { api, fehlerText, type Problem, type StreckeUebersicht } from "../api";
 import { useOffeneGruppen } from "../hooks/useOffeneGruppen";
 import { stufenKreis } from "../vergleich/format";
 import { Dreieck } from "./Dreieck";
-import { gruppieren, OHNE_GRUPPE, sortiert, type Gruppe } from "./gruppen";
+import { gruppieren, OHNE_GRUPPE, sortiert, suchen, suchWoerter, type Gruppe } from "./gruppen";
 
 /**
  * Startseite: Strecken als Karten mit ihren Stufen (ARCHITEKTUR Kap. 10, Ansicht 1).
@@ -12,6 +13,7 @@ import { gruppieren, OHNE_GRUPPE, sortiert, type Gruppe } from "./gruppen";
  * Hier wird bewusst nichts verglichen – das kostet je Strecke Zeit, bei FTPS erst recht.
  * Die Kreise der Stufen zeigen den zuletzt bekannten Stand (v0.6.6).
  * Strecken mit Gruppe erscheinen unter aufklappbaren Balken, alphabetisch (v0.8.1).
+ * Die Suche filtert ab dem ersten Zeichen, ohne Knopf; Treffer erscheinen flach (v0.8.2).
  */
 type Props = {
   onNeu: () => void;
@@ -22,14 +24,45 @@ type Props = {
 export function StreckenListe({ onNeu, onAnzeigen }: Props) {
   const liste = useQuery({ queryKey: ["strecken"], queryFn: api.streckenListe });
   const ort = useQuery({ queryKey: ["konfig_ort"], queryFn: api.konfigOrt });
+  const [suche, setSuche] = useState("");
+  const suchfeld = useRef<HTMLInputElement>(null);
+
+  // ⌘F (bzw. Strg+F) springt ins Suchfeld
+  useEffect(() => {
+    function taste(e: KeyboardEvent) {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "f") {
+        e.preventDefault();
+        suchfeld.current?.focus();
+        suchfeld.current?.select();
+      }
+    }
+    window.addEventListener("keydown", taste);
+    return () => window.removeEventListener("keydown", taste);
+  }, []);
 
   if (liste.isPending) return <p className="hinweis">Strecken werden geladen …</p>;
   if (liste.isError) return <p className="meldung fehler">{fehlerText(liste.error)}</p>;
 
   return (
     <section>
-      <div className="leiste">
+      <div className="leiste mit-suche">
         <h2>Strecken</h2>
+        {liste.data.length > 0 ? (
+          <input
+            ref={suchfeld}
+            type="search"
+            className="suchfeld"
+            aria-label="Strecken suchen"
+            placeholder="Suchen (⌘F)"
+            value={suche}
+            onChange={(e) => setSuche(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Escape") setSuche("");
+            }}
+          />
+        ) : (
+          <span />
+        )}
         <div className="knoepfe">
           <button onClick={() => liste.refetch()} disabled={liste.isFetching}>
             Neu laden
@@ -53,16 +86,24 @@ export function StreckenListe({ onNeu, onAnzeigen }: Props) {
           </p>
         </div>
       ) : (
-        <Strecken liste={liste.data} onAnzeigen={onAnzeigen} />
+        <Strecken liste={liste.data} suche={suche} onAnzeigen={onAnzeigen} />
       )}
     </section>
   );
 }
 
-/** Ohne vergebene Gruppe flach wie bisher, sonst nach Gruppen. */
-function Strecken({ liste, onAnzeigen }: { liste: StreckeUebersicht[]; onAnzeigen: Props["onAnzeigen"] }) {
+type StreckenProps = { liste: StreckeUebersicht[]; suche: string; onAnzeigen: Props["onAnzeigen"] };
+
+/** Suche: Treffer flach mit Gruppe. Sonst ohne vergebene Gruppe flach wie bisher, mit Gruppen als Balken. */
+function Strecken({ liste, suche, onAnzeigen }: StreckenProps) {
   const gruppen = gruppieren(liste);
   const klappen = useOffeneGruppen();
+  const woerter = suchWoerter(suche);
+  if (woerter.length > 0) {
+    const treffer = suchen(liste, woerter);
+    if (treffer.length === 0) return <p className="hinweis">Keine Strecke gefunden.</p>;
+    return <Karten liste={treffer} mitGruppe onAnzeigen={onAnzeigen} />;
+  }
   if (gruppen.length === 0) return <Karten liste={sortiert(liste)} onAnzeigen={onAnzeigen} />;
   return (
     <div className="gruppen">
@@ -111,11 +152,18 @@ function GruppeBlock({ gruppe, offen, onKlappen, onAnzeigen }: GruppeProps) {
   );
 }
 
-function Karten({ liste, onAnzeigen }: { liste: StreckeUebersicht[]; onAnzeigen: Props["onAnzeigen"] }) {
+type KartenProps = {
+  liste: StreckeUebersicht[];
+  /** Gruppe auf der Karte nennen (Suchergebnis, v0.8.2). */
+  mitGruppe?: boolean;
+  onAnzeigen: Props["onAnzeigen"];
+};
+
+function Karten({ liste, mitGruppe, onAnzeigen }: KartenProps) {
   return (
     <div className="karten">
       {liste.map((s) => (
-        <StreckeKarte key={s.id} strecke={s} onAnzeigen={() => onAnzeigen(s)} />
+        <StreckeKarte key={s.id} strecke={s} mitGruppe={mitGruppe} onAnzeigen={() => onAnzeigen(s)} />
       ))}
     </div>
   );
@@ -123,10 +171,12 @@ function Karten({ liste, onAnzeigen }: { liste: StreckeUebersicht[]; onAnzeigen:
 
 type KarteProps = {
   strecke: StreckeUebersicht;
+  mitGruppe?: boolean;
   onAnzeigen: () => void;
 };
 
-function StreckeKarte({ strecke, onAnzeigen }: KarteProps) {
+function StreckeKarte({ strecke, mitGruppe, onAnzeigen }: KarteProps) {
+  const gruppe = mitGruppe ? strecke.gruppe?.trim() : undefined;
   if (strecke.fehler) {
     return (
       <article className="karte defekt">
@@ -151,7 +201,10 @@ function StreckeKarte({ strecke, onAnzeigen }: KarteProps) {
       }}
     >
       <h3>{strecke.name}</h3>
-      <span className="kennung">{strecke.id}</span>
+      <span className="kennung">
+        {strecke.id}
+        {gruppe && <span className="karte-gruppe"> · {gruppe}</span>}
+      </span>
       <ol className="stufen">
         {strecke.stufen.map((st, i) => {
           const kreis = stufenKreis(st);
