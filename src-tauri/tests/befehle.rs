@@ -1729,3 +1729,96 @@ fn inhalte_pruefen_nur_fuer_ftps() {
     assert_eq!(a.aufruf("inhalte_pruefen", json!({ "vergleichId": "x", "fortschritt": KANAL })).unwrap_err()["kategorie"], "nicht_gefunden");
     assert!(a.aufruf("inhalte_pruefen", json!({ "vergleichId": id })).is_err(), "ohne Kanal");
 }
+
+// --- Samba-Freigaben (v0.7.1) ----------------------------------------------------
+
+fn smb_ep(s: &stellwerk_testserver::smb::SambaServer, pfad: &str, konto: &str) -> Value {
+    json!({ "typ": "smb", "host": "127.0.0.1", "port": s.port, "freigabe": "test", "pfad": pfad,
+            "benutzer": s.benutzer, "konto_ref": konto })
+}
+
+fn smb_vergleich(a: &Testapp, stufe: &str) -> Result<Value, Value> {
+    a.aufruf("vergleich_starten", json!({ "strecke": "smb", "stufe": stufe, "fortschritt": KANAL }))
+}
+
+#[test]
+fn smb_ablegen_und_holen() {
+    let a = app();
+    let s = stellwerk_testserver::smb::starten();
+    let q = a.wurzel.join("daten/quelle");
+    std::fs::create_dir_all(q.join("css")).unwrap();
+    std::fs::write(q.join("index.html"), "hallo").unwrap();
+    std::fs::write(q.join("css/a.css"), "body{}").unwrap();
+    s.ordner("web");
+    std::fs::write(s.ordner("logs").join("x.log"), "zeile").unwrap();
+    let geholt = a.wurzel.join("daten/geholt");
+    std::fs::create_dir_all(&geholt).unwrap();
+    let strecke = json!({ "id": "smb", "name": "SMB", "version": 1, "stufen": [
+        { "id": "ablegen", "name": "lokal → Pi", "modus": "direkt",
+          "quelle": { "typ": "lokal", "pfad": q }, "ziel": smb_ep(&s, "/web", "stellwerk:smb:ablegen") },
+        { "id": "holen", "name": "Pi → lokal", "modus": "direkt",
+          "quelle": smb_ep(&s, "/logs", "stellwerk:smb:holen:quelle"), "ziel": { "typ": "lokal", "pfad": geholt } }
+    ] });
+    a.aufruf("strecke_anlegen", json!({ "strecke": strecke })).unwrap();
+    let liste = a.aufruf("strecken_liste", json!({})).unwrap();
+    assert_eq!(liste[0]["stufen"][0]["ziel"], "smb://127.0.0.1/test/web");
+    assert_eq!(liste[0]["stufen"][1]["quelle"], "smb://127.0.0.1/test/logs");
+
+    // Ohne Passwort im Schlüsselbund
+    assert_eq!(smb_vergleich(&a, "ablegen").unwrap_err()["kategorie"], "nicht_gefunden");
+    a.aufruf("passwort_speichern", json!({ "konto": "stellwerk:smb:ablegen", "passwort": stellwerk_testserver::PASSWORT })).unwrap();
+    a.aufruf("passwort_speichern", json!({ "konto": "stellwerk:smb:holen:quelle", "passwort": stellwerk_testserver::PASSWORT }))
+        .unwrap();
+
+    // Lokal → Freigabe
+    let v = smb_vergleich(&a, "ablegen").unwrap();
+    assert_eq!(v["ziel"], json!(format!("smb://127.0.0.1:{}/test/web", s.port)));
+    assert_eq!(v["zusammenfassung"]["neu"], 3);
+    let vorschau = a.aufruf("plan_erstellen", json!({ "vergleichId": v["vergleich_id"] })).unwrap();
+    assert_eq!(vorschau["worker"], 4);
+    let r = uebertragen(&a, &v["vergleich_id"], false, false).unwrap();
+    assert_eq!(r["ergebnis"]["fehler"], json!([]), "{r}");
+    assert_eq!(std::fs::read_to_string(s.wurzel().join("web/css/a.css")).unwrap(), "body{}");
+    let v = smb_vergleich(&a, "ablegen").unwrap();
+    assert_eq!(v["zusammenfassung"]["ausgewaehlt"], 0, "{v}");
+
+    // Freigabe → lokal
+    let v = smb_vergleich(&a, "holen").unwrap();
+    assert_eq!(v["quelle"], json!(format!("smb://127.0.0.1:{}/test/logs", s.port)));
+    let vorschau = a.aufruf("plan_erstellen", json!({ "vergleichId": v["vergleich_id"] })).unwrap();
+    assert_eq!(vorschau["worker"], json!(stellwerk_core::exec::standard_worker()));
+    let r = uebertragen(&a, &v["vergleich_id"], false, false).unwrap();
+    assert_eq!(r["phase"], "fertig", "{r}");
+    assert_eq!(std::fs::read_to_string(geholt.join("x.log")).unwrap(), "zeile");
+}
+
+#[test]
+fn smb_und_ftps_gemischt() {
+    let a = app();
+    let s = stellwerk_testserver::smb::starten();
+    let f = stellwerk_testserver::starten(Default::default());
+    std::fs::write(f.ordner("logs").join("a.log"), "a").unwrap();
+    s.ordner("logs");
+    std::fs::write(s.ordner("web").join("i.html"), "i").unwrap();
+    f.ordner("web");
+    let mut ftps_quelle = ftps_ziel(f.port, Some(&f.fingerprint));
+    ftps_quelle["pfad"] = json!("/logs");
+    ftps_quelle["konto_ref"] = json!("ftps");
+    let mut ftps_ziel = ftps_ziel(f.port, Some(&f.fingerprint));
+    ftps_ziel["pfad"] = json!("/web");
+    ftps_ziel["konto_ref"] = json!("ftps");
+    let strecke = json!({ "id": "smb", "name": "SMB", "version": 1, "stufen": [
+        { "id": "holen", "name": "Server → Pi", "quelle": ftps_quelle, "ziel": smb_ep(&s, "/logs", "pi") },
+        { "id": "hoch", "name": "Pi → Server", "quelle": smb_ep(&s, "/web", "pi"), "ziel": ftps_ziel }
+    ] });
+    a.aufruf("strecke_anlegen", json!({ "strecke": strecke })).unwrap();
+    a.aufruf("passwort_speichern", json!({ "konto": "pi", "passwort": stellwerk_testserver::PASSWORT })).unwrap();
+    a.aufruf("passwort_speichern", json!({ "konto": "ftps", "passwort": stellwerk_testserver::PASSWORT })).unwrap();
+
+    let v = smb_vergleich(&a, "holen").unwrap();
+    assert_eq!(v["zusammenfassung"]["neu"], 1, "{v}");
+    let v = a.aufruf("vergleich_starten", json!({ "strecke": "smb", "stufe": "hoch", "fortschritt": KANAL, "server": true })).unwrap();
+    assert_eq!((v["zusammenfassung"]["neu"].clone(), v["ziel_stand"].clone()), (json!(1), json!("server")), "{v}");
+    let v = a.aufruf("vergleich_starten", json!({ "strecke": "smb", "stufe": "hoch", "fortschritt": KANAL })).unwrap();
+    assert_eq!(v["ziel_stand"], "manifest");
+}

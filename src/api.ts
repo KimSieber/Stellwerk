@@ -93,6 +93,17 @@ export interface FtpsEndpunkt {
   zertifikat?: string;
 }
 
+/** Samba-Freigabe (v0.7.1), angesprochen ohne eingehängtes Laufwerk. */
+export interface SmbEndpunkt {
+  host: string;
+  port: number;
+  freigabe: string;
+  /** Ordner in der Freigabe, mit „/“ beginnend. */
+  pfad: string;
+  benutzer: string;
+  konto_ref: string;
+}
+
 /** Ergebnis von „Verbindung testen“ (stellwerk_core::endpoint::ftps::Verbindungstest). */
 export interface Verbindungstest {
   begruessung: string | null;
@@ -104,7 +115,10 @@ export interface Verbindungstest {
   umbenennen_ueberschreibt: boolean | null;
 }
 
-export type Endpunkt = { typ: "lokal"; pfad: string } | ({ typ: "ftps" } & FtpsEndpunkt);
+export type Endpunkt =
+  | { typ: "lokal"; pfad: string }
+  | ({ typ: "ftps" } & FtpsEndpunkt)
+  | ({ typ: "smb" } & SmbEndpunkt);
 export type Quelle = Endpunkt | { typ: "stufe"; stufe: string };
 
 export type Rechte =

@@ -299,4 +299,9 @@ fn konten_der_strecke() {
         stellwerk_core::secrets::konten_der_strecke(&s),
         vec!["stellwerk:mailwerk-web:spiegel:quelle", "stellwerk:mailwerk-web:server"]
     );
+    // v0.7.1: Samba-Freigaben als Quelle und Ziel
+    let smb = |k: &str| SmbEndpunkt { host: "pi".into(), port: 445, freigabe: "f".into(), pfad: "/".into(), benutzer: "b".into(), konto_ref: k.into() };
+    s.stufen[0].quelle = Quelle::Smb(smb("q"));
+    s.stufen[1].ziel = Endpunkt::Smb(smb("z"));
+    assert_eq!(stellwerk_core::secrets::konten_der_strecke(&s), vec!["q", "z"]);
 }

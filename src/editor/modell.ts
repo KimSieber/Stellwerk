@@ -1,6 +1,6 @@
 // Reine Hilfsfunktionen des Strecken-Editors (ohne Oberfläche, voll testbar).
 
-import type { Endpunkt, Problem, Quelle, Regel, RegelTyp, Stufe, Strecke } from "../api";
+import type { Endpunkt, Problem, Quelle, Regel, RegelTyp, SmbEndpunkt, Stufe, Strecke } from "../api";
 
 /** Anzeigenamen der Regeltypen. */
 export const REGEL_TYPEN: [RegelTyp, string][] = [
@@ -65,10 +65,38 @@ export function neueStrecke(): Strecke {
 }
 
 /** Leerer Endpunkt des gewünschten Typs. */
-export function endpunktVom(typ: "lokal" | "ftps", konto: string): Endpunkt {
-  return typ === "lokal"
-    ? { typ: "lokal", pfad: "" }
-    : { typ: "ftps", host: "", port: 21, pfad: "/", benutzer: "", tls: "explizit", konto_ref: konto };
+export function endpunktVom(typ: Endpunkt["typ"], konto: string): Endpunkt {
+  if (typ === "lokal") return { typ: "lokal", pfad: "" };
+  if (typ === "smb") return { typ: "smb", host: "", port: 445, freigabe: "", pfad: "/", benutzer: "", konto_ref: konto };
+  return { typ: "ftps", host: "", port: 21, pfad: "/", benutzer: "", tls: "explizit", konto_ref: konto };
+}
+
+/** Hat der Endpunkt ein Passwort im Schlüsselbund? (FTPS und Samba-Freigabe) */
+export function mitPasswort(e: Quelle): e is Endpunkt & { typ: "ftps" | "smb" } {
+  return e.typ === "ftps" || e.typ === "smb";
+}
+
+/** Adresse einer Freigabe wie im Finder: `smb://host[:port]/freigabe/ordner`. */
+export function smbAdresse(e: SmbEndpunkt): string {
+  if (!e.host && !e.freigabe) return "";
+  const port = e.port === 445 ? "" : `:${e.port}`;
+  const pfad = e.pfad === "/" ? "" : e.pfad.replace(/\/+$/, "");
+  return `smb://${e.host}${port}/${e.freigabe}${pfad}`;
+}
+
+/** Liest eine Adresse (`smb://…`, auch ohne Präfix oder aus dem Finder mit `%20`) in die Felder. */
+export function smbAusAdresse<T extends SmbEndpunkt>(text: string, e: T): T {
+  let rest = text.trim().replace(/^smb:\/\//i, "");
+  try {
+    rest = decodeURIComponent(rest);
+  } catch {
+    // Unvollständige %-Folge beim Tippen: so lassen
+  }
+  const [server = "", freigabe = "", ...ordner] = rest.split("/");
+  const m = /^(.*?)(?::(\d*))?$/.exec(server)!;
+  const port = m[2] === undefined ? 445 : Number.parseInt(m[2], 10) || 0;
+  const teile = ordner.filter((t) => t !== "");
+  return { ...e, host: m[1], port, freigabe, pfad: `/${teile.join("/")}` };
 }
 
 /** Leere Quelle des gewünschten Typs; `stufe` verweist auf die Vorstufe, `ftps` erhält `konto` (v0.6.5). */
@@ -77,14 +105,14 @@ export function quelleVom(typ: Quelle["typ"], vorstufe?: string, konto = ""): Qu
   return endpunktVom(typ, konto);
 }
 
-/** Setzt bei allen FTPS-Zielen und -Quellen den internen Schlüsselbund-Namen passend zu Strecke und Stufe. */
+/** Setzt bei allen FTPS- und Samba-Zielen und -Quellen den internen Schlüsselbund-Namen passend zu Strecke und Stufe. */
 export function kontenAngleichen(s: Strecke): Strecke {
   return {
     ...s,
     stufen: s.stufen.map((st) => {
       let neu = st;
-      if (neu.ziel.typ === "ftps") neu = { ...neu, ziel: { ...neu.ziel, konto_ref: kontoRef(s.id, st.id) } };
-      if (neu.quelle.typ === "ftps") neu = { ...neu, quelle: { ...neu.quelle, konto_ref: kontoRefQuelle(s.id, st.id) } };
+      if (mitPasswort(neu.ziel)) neu = { ...neu, ziel: { ...neu.ziel, konto_ref: kontoRef(s.id, st.id) } };
+      if (mitPasswort(neu.quelle)) neu = { ...neu, quelle: { ...neu.quelle, konto_ref: kontoRefQuelle(s.id, st.id) } };
       return neu;
     }),
   };
@@ -126,6 +154,7 @@ const ORT_NAMEN: Record<string, string> = {
   ziel: "Ziel",
   pfad: "Pfad",
   host: "Server",
+  freigabe: "Freigabe",
   port: "Port",
   benutzer: "Benutzer",
   konto_ref: "Passwort",
@@ -141,6 +170,14 @@ const ORT_NAMEN: Record<string, string> = {
   global: "Global",
 };
 
+/** So heißt das Feld „pfad“ je Art des Endpunkts. */
+const PFAD_NAME: Record<Quelle["typ"], string> = {
+  lokal: "Ordner",
+  ftps: "Serverpfad",
+  smb: "Ordner in der Freigabe",
+  stufe: "Ordner",
+};
+
 /** Ort einer Meldung für Menschen: `stufen[1].ziel.pfad` → `Stufe 2 „Server“ › Ziel › Pfad`. */
 export function ortLesbar(ort: string, s?: Strecke): string {
   const teile = ort.split(".").map((teil) => {
@@ -154,10 +191,10 @@ export function ortLesbar(ort: string, s?: Strecke): string {
   });
   // Regeln auf oberster Ebene gehören zur Strecke
   if (ort.startsWith("regeln.")) teile[0] = "Regeln der Strecke";
-  // „Pfad“ heißt am Feld „Ordner“ (lokal) bzw. „Serverpfad“ (FTPS)
+  // „Pfad“ heißt am Feld „Ordner“ (lokal), „Serverpfad“ (FTPS) bzw. „Ordner in der Freigabe“ (SMB)
   const m = /^stufen\[(\d+)\]\.(quelle|ziel)\.pfad$/.exec(ort);
   const endpunkt = m ? s?.stufen[Number(m[1])]?.[m[2] as "quelle" | "ziel"] : undefined;
-  if (endpunkt) teile[2] = endpunkt.typ === "ftps" ? "Serverpfad" : "Ordner";
+  if (endpunkt) teile[2] = PFAD_NAME[endpunkt.typ];
   return teile.join(" › ");
 }
 

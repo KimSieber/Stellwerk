@@ -3,9 +3,9 @@
 import { createContext, useContext, useId, useState, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 
-import { api, type Endpunkt, type Problem, type Quelle, type Stufe } from "../api";
+import { api, type Endpunkt, type Problem, type Quelle, type SmbEndpunkt, type Stufe } from "../api";
 import { system } from "../system";
-import { endpunktVom, problemeAn, quelleVom } from "./modell";
+import { endpunktVom, problemeAn, quelleVom, smbAdresse, smbAusAdresse } from "./modell";
 import { Verbindungstest } from "./Verbindungstest";
 
 /** Meldung zu einer Ablage (z. B. „ist kein Ordner“), angezeigt direkt am Feld. */
@@ -122,10 +122,10 @@ export function PfadFeld(props: { label: string; ort: string; wert: string; onCh
   );
 }
 
-/** Eingabe des Passworts für ein FTPS-Ziel (verdeckt). */
+/** Eingabe des Passworts für ein FTPS-Ziel oder eine Samba-Freigabe (verdeckt). */
 export type PasswortEingabe = { wert: string; onChange: (w: string) => void };
 
-/** Felder eines lokalen oder FTPS-Endpunkts. `ort` ist z. B. `stufen[0].ziel`. */
+/** Felder eines lokalen, FTPS- oder Samba-Endpunkts. `ort` ist z. B. `stufen[0].ziel`. */
 export function EndpunktFelder(props: {
   wert: Endpunkt;
   ort: string;
@@ -137,6 +137,9 @@ export function EndpunktFelder(props: {
     return (
       <PfadFeld label="Ordner" ort={`${ort}.pfad`} wert={wert.pfad} onChange={(pfad) => onChange({ ...wert, pfad })} />
     );
+  }
+  if (wert.typ === "smb") {
+    return <SmbFelder wert={wert} ort={ort} onChange={onChange} passwort={props.passwort} />;
   }
   const setze = (teil: Partial<Endpunkt & { typ: "ftps" }>) => onChange({ ...wert, ...teil });
   return (
@@ -171,7 +174,54 @@ export function EndpunktFelder(props: {
 }
 
 /**
- * Passwort eines FTPS-Ziels. Ist bereits eines im Schlüsselbund, wird nur das
+ * Samba-Freigabe (v0.7.1): Adresse wie im Finder („Mit Server verbinden“), Benutzer
+ * und Passwort. Die Adresse wird beim Tippen in Server, Port, Freigabe und Ordner
+ * zerlegt; Meldungen zu diesen Teilen erscheinen unter der Adresse.
+ */
+function SmbFelder(props: {
+  wert: SmbEndpunkt & { typ: "smb" };
+  ort: string;
+  onChange: (e: Endpunkt) => void;
+  passwort?: PasswortEingabe;
+}) {
+  const { wert, ort, onChange } = props;
+  const [text, setText] = useState(() => smbAdresse(wert));
+  const id = useId();
+  const alle = useContext(ProblemeKontext);
+  const meldungen = ["host", "port", "freigabe", "pfad"].flatMap((teil) => problemeAn(alle, `${ort}.${teil}`));
+  return (
+    <div className="smb">
+      <div className="feld">
+        <label htmlFor={id}>Adresse</label>
+        <input
+          id={id}
+          value={text}
+          placeholder="smb://192.168.1.11/freigabe"
+          onChange={(e) => {
+            setText(e.target.value);
+            onChange(smbAusAdresse(e.target.value, wert));
+          }}
+        />
+        {meldungen.map((p, i) => (
+          <span key={i} className={`feld-meldung ${p.schwere}`}>
+            {p.meldung}
+          </span>
+        ))}
+      </div>
+      <TextFeld
+        label="Benutzer"
+        ort={`${ort}.benutzer`}
+        wert={wert.benutzer}
+        onChange={(benutzer) => onChange({ ...wert, benutzer })}
+      />
+      {props.passwort && <PasswortFeld konto={wert.konto_ref} ort={`${ort}.passwort`} {...props.passwort} />}
+      <p className="hinweis">Direkter Zugriff auf die Freigabe (SMB 2/3) – ohne sie im Finder zu verbinden.</p>
+    </div>
+  );
+}
+
+/**
+ * Passwort eines FTPS-Ziels oder einer Samba-Freigabe. Ist bereits eines im Schlüsselbund, wird nur das
  * angezeigt („hinterlegt“); ändern lässt es sich auf Knopfdruck. Das Passwort
  * selbst kommt nie aus Rust zurück.
  */
@@ -219,7 +269,7 @@ export function PasswortFeld(props: { konto: string; ort: string } & PasswortEin
   );
 }
 
-/** Quelle einer Stufe: lokaler Ordner oder das Ziel einer Vorstufe. FTPS ist nur Ziel (Einbahn). */
+/** Quelle einer Stufe: lokaler Ordner, Server, Samba-Freigabe oder das Ziel einer Vorstufe. */
 export function QuelleFelder(props: {
   wert: Quelle;
   ort: string;
@@ -234,6 +284,7 @@ export function QuelleFelder(props: {
   const typen: [Quelle["typ"], string][] = [
     ["lokal", "Lokaler Ordner"],
     ["ftps", "FTPS-Server"],
+    ["smb", "Samba-Freigabe"],
   ];
   // Auch ohne Vorstufe anbieten, wenn bereits gesetzt (z. B. nach Entfernen der Vorstufe) –
   // die Prüfung meldet den Fehler dann am Feld.
@@ -280,6 +331,7 @@ export function ZielFelder(props: {
         optionen={[
           ["lokal", "Lokaler Ordner"],
           ["ftps", "FTPS-Server"],
+          ["smb", "Samba-Freigabe"],
         ]}
         onChange={(typ) => props.onChange(endpunktVom(typ, props.konto))}
       />

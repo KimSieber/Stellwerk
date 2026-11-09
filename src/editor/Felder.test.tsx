@@ -166,10 +166,18 @@ describe("QuelleFelder", () => {
     return werte;
   }
 
-  it("erste Stufe: lokaler Ordner oder FTPS-Server (v0.6.5)", () => {
+  it("erste Stufe: lokaler Ordner, FTPS-Server (v0.6.5) oder Samba-Freigabe (v0.7.1)", () => {
     aufbau({ typ: "lokal", pfad: "" }, []);
     const optionen = Array.from(screen.getByLabelText<HTMLSelectElement>("Art").options).map((o) => o.text);
-    expect(optionen).toEqual(["Lokaler Ordner", "FTPS-Server"]);
+    expect(optionen).toEqual(["Lokaler Ordner", "FTPS-Server", "Samba-Freigabe"]);
+  });
+
+  it("Samba-Freigabe als Quelle: eigenes Konto", async () => {
+    const werte = aufbau({ typ: "lokal", pfad: "" }, []);
+    await userEvent.selectOptions(screen.getByLabelText("Art"), "Samba-Freigabe");
+    expect(werte.at(-1)).toEqual({
+      typ: "smb", host: "", port: 445, freigabe: "", pfad: "/", benutzer: "", konto_ref: "stellwerk:s:x:quelle",
+    });
   });
 
   it("FTPS-Server als Quelle: Felder wie beim Ziel, eigenes Konto; zurück auf lokal", async () => {
@@ -199,6 +207,58 @@ describe("QuelleFelder", () => {
     aufbau({ typ: "stufe", stufe: "weg" }, []);
     expect(screen.getByLabelText("Art")).toHaveValue("stufe");
     expect(screen.getByLabelText<HTMLSelectElement>("Vorstufe").options).toHaveLength(0);
+  });
+});
+
+describe("Samba-Freigabe (v0.7.1)", () => {
+  const smb: Endpunkt = { typ: "smb", host: "", port: 445, freigabe: "", pfad: "/", benutzer: "", konto_ref: "stellwerk:s:z" };
+
+  it("Adresse wird beim Tippen zerlegt, Benutzer wirkt", async () => {
+    let zuletzt: Endpunkt = smb;
+    render(<Zustand<Endpunkt> start={smb} beobachter={(w) => (zuletzt = w)} kind={(w, s) => <EndpunktFelder wert={w} ort="z" onChange={s} />} />);
+    const adresse = screen.getByLabelText("Adresse");
+    expect(adresse).toHaveValue("");
+    expect(adresse).toHaveAttribute("placeholder", "smb://192.168.1.11/freigabe");
+    await userEvent.type(adresse, "smb://192.168.1.11/manitu/web");
+    expect(adresse).toHaveValue("smb://192.168.1.11/manitu/web");
+    await userEvent.type(screen.getByLabelText("Benutzer"), "manitu");
+    expect(zuletzt).toEqual({ ...smb, host: "192.168.1.11", freigabe: "manitu", pfad: "/web", benutzer: "manitu" });
+    expect(screen.getByText(/ohne sie im Finder zu verbinden/)).toBeInTheDocument();
+    expect(screen.queryByLabelText("Passwort")).toBeNull();
+  });
+
+  it("vorhandene Adresse wird angezeigt; Meldungen aller Teile stehen unter der Adresse", () => {
+    const e: Endpunkt = { ...smb, host: "pi", port: 4445, freigabe: "f", pfad: "/a" };
+    render(
+      <ProblemeKontext.Provider
+        value={[
+          { schwere: "fehler", ort: "z.freigabe", meldung: "Freigabe fehlt" },
+          { schwere: "fehler", ort: "z.pfad", meldung: "Pfad falsch" },
+          { schwere: "fehler", ort: "anders.host", meldung: "nicht hier" },
+        ]}
+      >
+        <EndpunktFelder wert={e} ort="z" onChange={() => {}} />
+      </ProblemeKontext.Provider>,
+    );
+    expect(screen.getByLabelText("Adresse")).toHaveValue("smb://pi:4445/f/a");
+    expect(screen.getByText("Freigabe fehlt")).toHaveClass("fehler");
+    expect(screen.getByText("Pfad falsch")).toBeInTheDocument();
+    expect(screen.queryByText("nicht hier")).toBeNull();
+  });
+
+  it("ZielFelder: Samba-Freigabe wählen, mit Passwort", async () => {
+    rustAttrappe({ passwort_vorhanden: () => false });
+    let zuletzt: Endpunkt = { typ: "lokal", pfad: "/a" };
+    mitQuery(
+      <Zustand<Endpunkt>
+        start={zuletzt}
+        beobachter={(w) => (zuletzt = w)}
+        kind={(w, s) => <ZielFelder wert={w} ort="z" konto="stellwerk:s:z" onChange={s} passwort={{ wert: "", onChange: () => {} }} />}
+      />,
+    );
+    await userEvent.selectOptions(screen.getByLabelText("Art"), "Samba-Freigabe");
+    expect(zuletzt).toEqual(smb);
+    expect(await screen.findByLabelText("Passwort")).toHaveAttribute("type", "password");
   });
 });
 

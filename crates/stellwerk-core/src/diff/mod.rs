@@ -95,6 +95,8 @@ pub struct DiffOptionen {
     pub inhalt_immer_pruefen: bool,
     /// Die Quelle liegt auf einem Server – ihr Inhalt wird nie gelesen (v0.6.5).
     pub quelle_entfernt: bool,
+    /// Zeiten nur auf 100 ns genau vergleichen – so genau speichert SMB (v0.7.1).
+    pub zeit_grob: bool,
 }
 
 /// Liefert Inhalts-Hashes beider Seiten – lokal aus Dateien, bei entfernten Zielen
@@ -124,27 +126,6 @@ impl InhaltPruefer for LokalerInhalt {
     }
     fn hash_ziel(&self, pfad: &RelPath) -> Result<Option<Hash>> {
         hash_datei(&self.ziel.join(pfad.as_str())).map(Some)
-    }
-}
-
-/// Entferntes Ziel (FTPS): Die Quelle wird gelesen, das Ziel nie – sein Hash steht,
-/// soweit bekannt, im Manifest und damit schon im Eintrag.
-pub struct EntfernterInhalt {
-    quelle: PathBuf,
-}
-
-impl EntfernterInhalt {
-    pub fn new(quelle: &Path) -> Self {
-        Self { quelle: quelle.to_path_buf() }
-    }
-}
-
-impl InhaltPruefer for EntfernterInhalt {
-    fn hash_quelle(&self, pfad: &RelPath) -> Result<Hash> {
-        hash_datei(&self.quelle.join(pfad.as_str()))
-    }
-    fn hash_ziel(&self, _pfad: &RelPath) -> Result<Option<Hash>> {
-        Ok(None)
     }
 }
 
@@ -314,7 +295,11 @@ fn beide_seiten(
     if q.groesse != z.groesse {
         return DiffStatus::Geaendert;
     }
-    let zeit_gleich = q.mtime_ns.is_some() && q.mtime_ns == z.mtime_ns;
+    let zeit_gleich = match (q.mtime_ns, z.mtime_ns) {
+        (Some(a), Some(b)) if opt.zeit_grob => a.div_euclid(100) == b.div_euclid(100),
+        (Some(a), Some(b)) => a == b,
+        _ => false,
+    };
     if q.nur_online || z.nur_online {
         // Inhalt nicht prüfbar, ohne den Download auszulösen
         return if zeit_gleich && !opt.inhalt_immer_pruefen { DiffStatus::Gleich } else { DiffStatus::Geaendert };

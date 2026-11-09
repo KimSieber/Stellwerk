@@ -9,6 +9,6 @@ pub use eintrag::{Eintrag, EintragArt, Hash, Warnung};
 pub use path::{RelPath, RelPathError};
 pub use regel::{Regel, RegelEbene, RegelTyp};
 pub use strecke::{
-    Dateimodus, Endpunkt, FtpsEndpunkt, Modus, NurOnline, Quelle, Rechte, RechteMuster, Stufe,
+    Dateimodus, Endpunkt, FtpsEndpunkt, Modus, NurOnline, Quelle, Rechte, RechteMuster, SmbEndpunkt, Stufe,
     Strecke, Tls, KONFIG_VERSION,
 };

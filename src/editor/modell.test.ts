@@ -19,6 +19,9 @@ import {
   neueStufe,
   problemeAn,
   quelleVom,
+  mitPasswort,
+  smbAdresse,
+  smbAusAdresse,
 } from "./modell";
 
 describe("kennungAus", () => {
@@ -214,5 +217,41 @@ describe("Übernommene Regeln", () => {
   it("musterAnzeige", () => {
     expect(musterAnzeige("Icon[\r]")).toBe("Icon[\\r]");
     expect(musterAnzeige("*.log")).toBe("*.log");
+  });
+});
+
+describe("Samba-Freigabe (v0.7.1)", () => {
+  const leer = { host: "", port: 445, freigabe: "", pfad: "/", benutzer: "b", konto_ref: "k" };
+
+  it("Adresse aus den Feldern", () => {
+    expect(smbAdresse(leer)).toBe("");
+    expect(smbAdresse({ ...leer, host: "pi" })).toBe("smb://pi/");
+    expect(smbAdresse({ ...leer, freigabe: "f" })).toBe("smb:///f");
+    expect(smbAdresse({ ...leer, host: "pi", freigabe: "f", pfad: "/a/b/" })).toBe("smb://pi/f/a/b");
+    expect(smbAdresse({ ...leer, host: "pi", port: 4445, freigabe: "f" })).toBe("smb://pi:4445/f");
+  });
+
+  it("Felder aus der Adresse – auch ohne Präfix und aus dem Finder", () => {
+    expect(smbAusAdresse("smb://192.168.1.11/manitu", leer)).toEqual({ ...leer, host: "192.168.1.11", freigabe: "manitu" });
+    expect(smbAusAdresse(" SMB://pi:4445/f/a//b/ ", leer)).toEqual({ ...leer, host: "pi", port: 4445, freigabe: "f", pfad: "/a/b" });
+    expect(smbAusAdresse("pi/Meine%20Daten", leer)).toMatchObject({ host: "pi", freigabe: "Meine Daten" });
+    expect(smbAusAdresse("pi:/f", leer).port).toBe(0);
+    expect(smbAusAdresse("smb://pi/f%2", leer).freigabe).toBe("f%2"); // beim Tippen unvollständig
+    expect(smbAusAdresse("", leer)).toEqual({ ...leer, host: "", freigabe: "", pfad: "/" });
+  });
+
+  it("Passwort, Konten und Feldnamen", () => {
+    const smb = { typ: "smb" as const, ...leer };
+    expect(mitPasswort(smb)).toBe(true);
+    expect(mitPasswort({ typ: "lokal", pfad: "" })).toBe(false);
+    expect(endpunktVom("smb", "k2")).toEqual({ typ: "smb", host: "", port: 445, freigabe: "", pfad: "/", benutzer: "", konto_ref: "k2" });
+    const s: Strecke = {
+      id: "s", name: "S", version: 1,
+      stufen: [{ id: "a", name: "A", modus: "direkt", quelle: smb, ziel: smb, nur_online: "herunterladen" }],
+    };
+    const k = kontenAngleichen(s).stufen[0];
+    expect([k.ziel, k.quelle].map((e) => (e as typeof smb).konto_ref)).toEqual(["stellwerk:s:a", "stellwerk:s:a:quelle"]);
+    expect(ortLesbar("stufen[0].ziel.pfad", s)).toBe("Stufe 1 „A“ › Ziel › Ordner in der Freigabe");
+    expect(ortLesbar("stufen[0].ziel.freigabe", s)).toBe("Stufe 1 „A“ › Ziel › Freigabe");
   });
 });

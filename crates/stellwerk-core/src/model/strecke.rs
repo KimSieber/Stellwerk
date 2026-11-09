@@ -86,6 +86,8 @@ pub enum NurOnline {
 pub enum Quelle {
     Lokal { pfad: PathBuf },
     Ftps(FtpsEndpunkt),
+    /// Samba-Freigabe mit eigener Anmeldung (v0.7.1).
+    Smb(SmbEndpunkt),
     /// Das Ziel einer vorhergehenden Stufe ist die Quelle dieser Stufe.
     Stufe { stufe: String },
 }
@@ -96,6 +98,7 @@ pub enum Quelle {
 pub enum Endpunkt {
     Lokal { pfad: PathBuf },
     Ftps(FtpsEndpunkt),
+    Smb(SmbEndpunkt),
 }
 
 impl From<Endpunkt> for Quelle {
@@ -103,6 +106,7 @@ impl From<Endpunkt> for Quelle {
         match e {
             Endpunkt::Lokal { pfad } => Quelle::Lokal { pfad },
             Endpunkt::Ftps(f) => Quelle::Ftps(f),
+            Endpunkt::Smb(s) => Quelle::Smb(s),
         }
     }
 }
@@ -129,6 +133,31 @@ pub struct FtpsEndpunkt {
 
 fn ftp_port() -> u16 {
     21
+}
+
+/// Samba-Freigabe (SMB 2/3), angesprochen ohne eingehängtes Laufwerk (v0.7.1).
+/// Wie bei FTPS kein Passwort – nur `konto_ref` in den Schlüsselbund (E7).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SmbEndpunkt {
+    pub host: String,
+    #[serde(default = "smb_port")]
+    pub port: u16,
+    /// Name der Freigabe, z. B. `manitu`.
+    pub freigabe: String,
+    /// Ordner innerhalb der Freigabe, mit `/` beginnend (`/` = ganze Freigabe).
+    #[serde(default = "smb_pfad")]
+    pub pfad: String,
+    pub benutzer: String,
+    pub konto_ref: String,
+}
+
+fn smb_port() -> u16 {
+    445
+}
+
+fn smb_pfad() -> String {
+    "/".into()
 }
 
 /// TLS-Variante. Klartext-FTP wird bewusst nicht angeboten (E6).
@@ -285,6 +314,10 @@ mod tests {
             zertifikat: None,
         };
         assert_eq!(Quelle::from(Endpunkt::Ftps(f.clone())), Quelle::Ftps(f));
+        let s: SmbEndpunkt =
+            toml::from_str("host = \"pi\"\nfreigabe = \"f\"\nbenutzer = \"b\"\nkonto_ref = \"k\"").unwrap();
+        assert_eq!((s.port, s.pfad.as_str()), (445, "/"));
+        assert_eq!(Quelle::from(Endpunkt::Smb(s.clone())), Quelle::Smb(s));
     }
 
     #[test]

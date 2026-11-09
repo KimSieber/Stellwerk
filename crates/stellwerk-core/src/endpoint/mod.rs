@@ -13,6 +13,7 @@
 
 pub mod ftps;
 pub mod lokal;
+pub mod smb;
 
 use std::io::{Read, Write};
 use std::path::Path;
@@ -21,6 +22,7 @@ use std::time::SystemTime;
 
 pub use ftps::{Ftps, FtpsQuelle};
 pub use lokal::Lokal;
+pub use smb::Smb;
 
 use crate::error::{Result, StellwerkError};
 use crate::model::{Hash, RelPath};
@@ -50,6 +52,13 @@ pub struct Geschrieben {
 pub trait QuellEndpunkt: Send + Sync {
     /// Öffnet eine Datei zum Lesen; Ordner, Links und Fehlendes sind Fehler.
     fn oeffnen(&self, p: &RelPath) -> Result<QuellDatei>;
+}
+
+/// Eine geliehene Quelle ist ebenfalls eine Quelle.
+impl<T: QuellEndpunkt + ?Sized> QuellEndpunkt for &T {
+    fn oeffnen(&self, p: &RelPath) -> Result<QuellDatei> {
+        (**self).oeffnen(p)
+    }
 }
 
 /// Ziel einer Stufe – schreibend über je eine Verbindung pro Worker.

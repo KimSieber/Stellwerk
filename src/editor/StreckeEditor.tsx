@@ -12,6 +12,7 @@ import {
   hatFehler,
   kennungAus,
   kontenAngleichen,
+  mitPasswort,
   neueStrecke,
   neueStufe,
   ortLesbar,
@@ -110,8 +111,8 @@ function Bearbeiten(props: Props & { start: Strecke; neu: boolean }) {
       await (props.neu ? api.streckeAnlegen(s) : api.streckeSpeichern(s));
       // Erst nach erfolgreichem Speichern: Passwörter in den Schlüsselbund
       for (const [i, st] of s.stufen.entries()) {
-        if (passwoerter[i] && st.ziel.typ === "ftps") await api.passwortSpeichern(st.ziel.konto_ref, passwoerter[i]);
-        if (quellPasswoerter[i] && st.quelle.typ === "ftps") await api.passwortSpeichern(st.quelle.konto_ref, quellPasswoerter[i]);
+        if (passwoerter[i] && mitPasswort(st.ziel)) await api.passwortSpeichern(st.ziel.konto_ref, passwoerter[i]);
+        if (quellPasswoerter[i] && mitPasswort(st.quelle)) await api.passwortSpeichern(st.quelle.konto_ref, quellPasswoerter[i]);
       }
     },
     onSuccess: async () => {

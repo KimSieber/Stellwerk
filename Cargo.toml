@@ -3,7 +3,7 @@ resolver = "2"
 members = ["crates/*", "src-tauri"]
 
 [workspace.package]
-version = "0.6.0"
+version = "0.7.1"
 edition = "2021"
 license = "MIT"
 authors = ["Kim Sieber"]
@@ -26,4 +26,6 @@ suppaftp = { version = "12", default-features = false, features = ["rustls-ring"
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
 rustls-platform-verifier = "0.7"
 sha2 = "0.10"
+# SMB: reines Rust, synchrone Variante (v0.7.1)
+smb = { version = "0.12", default-features = false, features = ["multi_threaded", "sign", "encrypt"] }
 stellwerk-core = { path = "crates/stellwerk-core" }

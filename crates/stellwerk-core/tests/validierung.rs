@@ -287,3 +287,75 @@ fn problem_und_fehler_als_text() {
     assert!(json["schwere"] == "fehler" || json["schwere"] == "warnung");
     let _: &Problem = &p[0];
 }
+
+// --- Samba-Freigaben (v0.7.1) --------------------------------------------------
+
+fn smb(host: &str, port: u16, freigabe: &str, pfad: &str, benutzer: &str, konto: &str) -> SmbEndpunkt {
+    SmbEndpunkt { host: host.into(), port, freigabe: freigabe.into(), pfad: pfad.into(), benutzer: benutzer.into(), konto_ref: konto.into() }
+}
+
+#[test]
+fn smb_jedes_feld() {
+    let mut s = beispiel();
+    s.stufen[1].ziel = Endpunkt::Smb(smb("192.168.1.11", 445, "manitu", "/", "manitu", "k"));
+    assert_eq!(fehler_orte(&s), Vec::<String>::new());
+    for (e, ort) in [
+        (smb(" ", 445, "f", "/", "b", "k"), "stufen[1].ziel.host"),
+        (smb("h", 0, "f", "/", "b", "k"), "stufen[1].ziel.port"),
+        (smb("h", 445, " ", "/", "b", "k"), "stufen[1].ziel.freigabe"),
+        (smb("h", 445, "f/g", "/", "b", "k"), "stufen[1].ziel.freigabe"),
+        (smb("h", 445, "f\\g", "/", "b", "k"), "stufen[1].ziel.freigabe"),
+        (smb("h", 445, "f", "web", "b", "k"), "stufen[1].ziel.pfad"),
+        (smb("h", 445, "f", "/a/../b", "b", "k"), "stufen[1].ziel.pfad"),
+        (smb("h", 445, "f", "/", "", "k"), "stufen[1].ziel.benutzer"),
+        (smb("h", 445, "f", "/", "b", " "), "stufen[1].ziel.konto_ref"),
+    ] {
+        s.stufen[1].ziel = Endpunkt::Smb(e);
+        assert_eq!(fehler_orte(&s), vec![ort]);
+    }
+    // Als Quelle genauso
+    s.stufen[1].ziel = Endpunkt::Smb(smb("h", 445, "f", "/", "b", "k"));
+    s.stufen[0].quelle = Quelle::Smb(smb("", 445, "f", "/", "b", "k"));
+    assert_eq!(fehler_orte(&s), vec!["stufen[0].quelle.host"]);
+}
+
+#[test]
+fn smb_rechte_werden_nicht_gesetzt() {
+    let mut s = beispiel();
+    s.stufen[1].ziel = Endpunkt::Smb(smb("h", 445, "f", "/", "b", "k"));
+    let p = validiere_strecke(&s, &GlobalConfig::default());
+    assert!(p.iter().any(|p| p.ort == "stufen[1].rechte" && p.schwere == Schwere::Warnung && p.meldung.contains("keine Unix-Rechte")), "{p:?}");
+}
+
+#[test]
+fn smb_zu_smb_nur_ohne_ueberschneidung() {
+    let mut s = beispiel();
+    s.stufen[1].rechte = Rechte::NichtSetzen;
+    s.stufen[1].ziel = Endpunkt::Smb(smb("pi", 445, "manitu", "/web", "a", "k"));
+    // Andere Freigabe oder anderer Pfad: erlaubt
+    s.stufen[1].quelle = Quelle::Smb(smb("pi", 445, "andere", "/web", "a", "k"));
+    assert_eq!(fehler_orte(&s), Vec::<String>::new());
+    s.stufen[1].quelle = Quelle::Smb(smb("pi", 445, "manitu", "/logs", "a", "k"));
+    assert_eq!(fehler_orte(&s), Vec::<String>::new());
+    s.stufen[1].quelle = Quelle::Smb(smb("pi", 4445, "manitu", "/web", "a", "k"));
+    assert_eq!(fehler_orte(&s), Vec::<String>::new());
+    // Gleiche Freigabe (Groß/Klein egal), überschneidende Pfade – auch mit anderem Benutzer
+    s.stufen[1].quelle = Quelle::Smb(smb("PI", 445, "Manitu", "/web/unter", "anderer", "k"));
+    let p = validiere_strecke(&s, &GlobalConfig::default());
+    assert!(p.iter().any(|p| p.ist_fehler() && p.meldung.contains("auf derselben Freigabe")), "{p:?}");
+    // Quelle einer früheren Stufe
+    let mut s = beispiel();
+    s.stufen[1].rechte = Rechte::NichtSetzen;
+    s.stufen[1].ziel = Endpunkt::Smb(smb("pi", 445, "manitu", "/web", "a", "k"));
+    s.stufen[0].quelle = Quelle::Smb(smb("pi", 445, "manitu", "/", "a", "k"));
+    let p = validiere_strecke(&s, &GlobalConfig::default());
+    assert!(p.iter().any(|p| p.ort == "stufen[1].ziel.pfad" && p.meldung.contains("früheren Stufe 'spiegel'")), "{p:?}");
+}
+
+#[test]
+fn smb_ordner_werden_nicht_lokal_geprueft() {
+    let mut s = beispiel();
+    s.stufen[0].ziel = Endpunkt::Smb(smb("pi", 445, "f", "/", "b", "k"));
+    s.stufen[0].quelle = Quelle::Smb(smb("pi", 445, "g", "/", "b", "k"));
+    assert!(stellwerk_core::config::pruefe_ordner(&s).is_empty());
+}

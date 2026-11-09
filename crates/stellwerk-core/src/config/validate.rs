@@ -5,7 +5,7 @@ use std::path::{Component, Path, PathBuf};
 use serde::Serialize;
 
 use super::GlobalConfig;
-use crate::model::{Endpunkt, FtpsEndpunkt, Quelle, RegelEbene, Strecke, KONFIG_VERSION};
+use crate::model::{Endpunkt, FtpsEndpunkt, Quelle, RegelEbene, SmbEndpunkt, Strecke, KONFIG_VERSION};
 use crate::rules::{ersatz, muster_fehler};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -91,6 +91,7 @@ pub fn validiere_strecke(s: &Strecke, global: &GlobalConfig) -> Vec<Problem> {
             Quelle::Lokal { pfad } => pruefe_lokal(pfad, &format!("{ort}.quelle.pfad"), &mut p),
             // v0.6.5: Ein Server kann auch Quelle sein – gelesen wird nur (E3)
             Quelle::Ftps(f) => pruefe_ftps(f, &format!("{ort}.quelle"), &mut p),
+            Quelle::Smb(f) => pruefe_smb(f, &format!("{ort}.quelle"), &mut p),
             Quelle::Stufe { stufe } => {
                 let vor = s.stufen[..i].iter().any(|v| &v.id == stufe);
                 if !vor {
@@ -106,6 +107,7 @@ pub fn validiere_strecke(s: &Strecke, global: &GlobalConfig) -> Vec<Problem> {
         match &st.ziel {
             Endpunkt::Lokal { pfad } => pruefe_lokal(pfad, &format!("{ort}.ziel.pfad"), &mut p),
             Endpunkt::Ftps(f) => pruefe_ftps(f, &format!("{ort}.ziel"), &mut p),
+            Endpunkt::Smb(f) => pruefe_smb(f, &format!("{ort}.ziel"), &mut p),
         }
 
         // Einbahn (E3): Eine Stufe schreibt nie in ihre eigene Quelle und nie in die
@@ -154,6 +156,29 @@ pub fn validiere_strecke(s: &Strecke, global: &GlobalConfig) -> Vec<Problem> {
             }
         }
 
+        // Dasselbe auf einer Samba-Freigabe (v0.7.1): gleicher Server und gleiche
+        // Freigabe – anders als bei FTP bestimmt der Benutzer hier nicht die Wurzel.
+        if let Endpunkt::Smb(ziel) = &st.ziel {
+            for j in (0..=i).rev() {
+                let Some(Quelle::Smb(q)) = effektive_quelle(s, j) else { continue };
+                let gleiche_freigabe =
+                    q.host.eq_ignore_ascii_case(&ziel.host) && q.port == ziel.port && q.freigabe.eq_ignore_ascii_case(&ziel.freigabe);
+                if !gleiche_freigabe || !ueberlappen(Path::new(&q.pfad), Path::new(&ziel.pfad)) {
+                    continue;
+                }
+                let meldung = if j == i {
+                    format!("Ziel '{}' und Quelle '{}' überschneiden sich auf derselben Freigabe", ziel.pfad, q.pfad)
+                } else {
+                    format!("Ziel überschneidet sich mit der Quelle der früheren Stufe '{}' – Quellen werden nie beschrieben", s.stufen[j].id)
+                };
+                p.push(Problem::fehler(format!("{ort}.ziel.pfad"), meldung));
+            }
+        }
+
+        if matches!(st.ziel, Endpunkt::Smb(_)) && !st.rechte.ist_nicht_setzen() {
+            p.push(Problem::warnung(format!("{ort}.rechte"), "Samba-Freigaben kennen keine Unix-Rechte – sie werden nicht gesetzt"));
+        }
+
         for m in st.rechte.alle_modi() {
             if m.ist_weltschreibbar() {
                 p.push(Problem::warnung(
@@ -192,7 +217,7 @@ pub fn pruefe_ordner(s: &Strecke) -> Vec<Problem> {
         };
         let ziel = match &st.ziel {
             Endpunkt::Lokal { pfad } => Some(pfad),
-            Endpunkt::Ftps(_) => None,
+            Endpunkt::Ftps(_) | Endpunkt::Smb(_) => None,
         };
         for (seite, pfad) in [("quelle", quelle), ("ziel", ziel)] {
             let Some(pfad) = pfad.filter(|p| p.is_absolute()) else { continue };
@@ -269,6 +294,31 @@ fn pruefe_ftps(f: &FtpsEndpunkt, ort: &str, p: &mut Vec<Problem>) {
     }
     if f.zertifikat.as_deref().is_some_and(|z| crate::endpoint::ftps::fingerprint_bytes(z).is_none()) {
         p.push(Problem::fehler(format!("{ort}.zertifikat"), "Zertifikat-Fingerprint ist kein SHA-256-Wert (64 Hex-Zeichen)"));
+    }
+}
+
+fn pruefe_smb(f: &SmbEndpunkt, ort: &str, p: &mut Vec<Problem>) {
+    if f.host.trim().is_empty() {
+        p.push(Problem::fehler(format!("{ort}.host"), "Server fehlt"));
+    }
+    if f.port == 0 {
+        p.push(Problem::fehler(format!("{ort}.port"), "Port 0 ist ungültig"));
+    }
+    if f.freigabe.trim().is_empty() {
+        p.push(Problem::fehler(format!("{ort}.freigabe"), "Freigabe fehlt"));
+    } else if f.freigabe.contains(['/', '\\']) {
+        p.push(Problem::fehler(format!("{ort}.freigabe"), "Freigabe ist nur ein Name, ohne '/'"));
+    }
+    if !f.pfad.starts_with('/') {
+        p.push(Problem::fehler(format!("{ort}.pfad"), "Pfad in der Freigabe muss mit '/' beginnen"));
+    } else if f.pfad.split('/').any(|s| s == "..") {
+        p.push(Problem::fehler(format!("{ort}.pfad"), "Pfad darf kein '..' enthalten"));
+    }
+    if f.benutzer.trim().is_empty() {
+        p.push(Problem::fehler(format!("{ort}.benutzer"), "Benutzer fehlt"));
+    }
+    if f.konto_ref.trim().is_empty() {
+        p.push(Problem::fehler(format!("{ort}.konto_ref"), "Schlüsselbund-Verweis fehlt"));
     }
 }
 
