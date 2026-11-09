@@ -573,3 +573,81 @@ fn kein_manifest_hat_eigene_kategorie() {
     assert_eq!(e.kategorie(), "kein_manifest");
     assert!(e.to_string().contains("Mit Server vergleichen"));
 }
+
+// --- Bereich und alle (v0.8.3) --------------------------------------------------
+
+/// Sichtbare Reihenfolge (Filter „Alle“, nichts zugeklappt):
+///  0 alt  1 alt/x.txt  2 alt/y.txt  3 bilder  4 bilder/neu  5 bilder/neu/a.png  6 bilder/neu/b.png
+///  7 css (gleich)  8 css/neu.css  9 css/site.css (gleich)  10 config.php (geschützt)  11 index.php
+/// 12 notiz (Konfliktkopie)  13 Über.html  14 zebra.txt
+fn angehakt(s: &VergleichsSitzung) -> Vec<String> {
+    s.eintraege().iter().filter(|e| e.ausgewaehlt).map(|e| e.pfad.to_string()).collect()
+}
+
+#[test]
+fn alle_ab_und_wieder_an() {
+    let a = aufbau();
+    let mut s = webseite(&a);
+    let vorher = angehakt(&s);
+    assert_eq!(s.alle_setzen(Filter::Aenderungen, false).ausgewaehlt, 0);
+    assert_eq!(s.alle_setzen(Filter::Alle, true).ausgewaehlt, 11, "nur Wählbares – wie die Vorauswahl");
+    assert_eq!(angehakt(&s), vorher);
+}
+
+#[test]
+fn alle_wirkt_auch_in_zugeklappten_ordnern_aber_nur_im_filter() {
+    let a = aufbau();
+    let mut s = webseite(&a);
+    s.alle_setzen(Filter::Alle, false);
+    // Filter „Warnungen“: hier ohne wählbare Zeile – es ändert sich nichts
+    assert_eq!(s.alle_setzen(Filter::Warnungen, true).ausgewaehlt, 0);
+    s.alle_setzen(Filter::Aenderungen, true);
+    assert!(haekchen(&s, "bilder/neu/a.png") && haekchen(&s, "css/neu.css"));
+}
+
+#[test]
+fn bereich_setzt_nur_waehlbare_zeilen_reihenfolge_egal() {
+    let a = aufbau();
+    let mut s = webseite(&a);
+    s.alle_setzen(Filter::Alle, false);
+    let z = s.bereich_setzen(9, 6, Filter::Alle, &keine(), true).clone();
+    assert_eq!(angehakt(&s), ["bilder", "bilder/neu", "bilder/neu/b.png", "css/neu.css"], "neue Ordner darüber kommen mit");
+    assert!(!haekchen(&s, "css") && !haekchen(&s, "css/site.css"), "gleich bleibt ohne Häkchen");
+    assert_eq!(s.zusammenfassung(), &z);
+
+    // Abwählen genauso
+    s.bereich_setzen(6, 8, Filter::Alle, &keine(), false);
+    assert_eq!(angehakt(&s), ["bilder", "bilder/neu"]);
+}
+
+#[test]
+fn bereich_ueber_das_ende_wird_gekuerzt() {
+    let a = aufbau();
+    let mut s = webseite(&a);
+    s.alle_setzen(Filter::Alle, false);
+    s.bereich_setzen(13, 99, Filter::Alle, &keine(), true);
+    assert_eq!(angehakt(&s), ["Über.html", "zebra.txt"]);
+    assert_eq!(s.bereich_setzen(50, 60, Filter::Alle, &keine(), true).ausgewaehlt, 2, "ganz hinter dem Ende: nichts");
+}
+
+#[test]
+fn bereich_mit_zugeklappten_ordnern() {
+    let a = aufbau();
+    let mut s = webseite(&a);
+    s.alle_setzen(Filter::Alle, false);
+    // Zugeklappt: 3 bilder, 4 css, 5 config.php …
+    let zu: HashSet<RelPath> = [p("bilder"), p("css")].into_iter().collect();
+    s.bereich_setzen(3, 5, Filter::Alle, &zu, true);
+    assert_eq!(angehakt(&s), ["bilder", "bilder/neu", "bilder/neu/a.png", "bilder/neu/b.png"], "wählbarer Ordner mit Inhalt");
+    assert!(!haekchen(&s, "css/neu.css"), "nicht wählbarer Ordner: auch sein Inhalt bleibt");
+}
+
+#[test]
+fn bereich_richtet_sich_nach_dem_filter() {
+    let a = aufbau();
+    let mut s = webseite(&a);
+    s.alle_setzen(Filter::Alle, false);
+    // „Änderungen“: 0 alt … 6 bilder/neu/b.png, 7 css, 8 css/neu.css, 9 index.php …
+    s.bereich_setzen(8, 9, Filter::Aenderungen, &keine(), true);
+    assert_eq!(angehakt(&s), ["css/neu.css", "index.php"]);
+}

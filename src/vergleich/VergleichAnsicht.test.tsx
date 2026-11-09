@@ -295,6 +295,78 @@ describe("Vergleichsansicht – Ergebnis", () => {
     expect(aufrufeVon(aufrufe, "diff_seite").length).toBeGreaterThan(vorher);
   });
 
+  it("Shift-Klick wählt den Bereich ab dem zuletzt normal geklickten Haken (v0.8.3)", async () => {
+    const aufrufe = rust({ auswahl_bereich: () => summe({ ausgewaehlt: 4, bytes_uebertragen: 6000 }) });
+    ansicht();
+    const haken = (pfad: string) => screen.getByRole("checkbox", { name: `${pfad} übertragen` });
+    await screen.findByRole("checkbox", { name: "bilder/a.png übertragen" });
+
+    // Ohne Startpunkt wirkt Shift-Klick wie ein normaler Klick und setzt den Startpunkt
+    fireEvent.click(haken("bilder/a.png"), { shiftKey: true });
+    await waitFor(() => expect(aufrufeVon(aufrufe, "auswahl_setzen")).toHaveLength(1));
+    expect(aufrufeVon(aufrufe, "auswahl_bereich")).toHaveLength(0);
+
+    fireEvent.click(haken("config.php"), { shiftKey: true });
+    await waitFor(() => expect(aufrufeVon(aufrufe, "auswahl_bereich")).toHaveLength(1));
+    expect(aufrufeVon(aufrufe, "auswahl_bereich")[0].args).toEqual({
+      vergleichId: "web/spiegel#1",
+      filter: "alle",
+      zugeklappt: [],
+      von: 1,
+      bis: 3,
+      an: false,
+    });
+    await waitFor(() => expect(screen.getByText(/Ausgewählt:/)).toHaveTextContent("Ausgewählt: 4 · 6 KB"));
+
+    // Der Startpunkt bleibt beim Shift-Klick stehen
+    fireEvent.click(haken("bilder"), { shiftKey: true });
+    await waitFor(() => expect(aufrufeVon(aufrufe, "auswahl_bereich")).toHaveLength(2));
+    expect(aufrufeVon(aufrufe, "auswahl_bereich")[1].args).toMatchObject({ von: 1, bis: 0 });
+    expect(aufrufeVon(aufrufe, "auswahl_setzen")).toHaveLength(1);
+  });
+
+  it("Startpunkt verfällt bei Filterwechsel und beim Auf-/Zuklappen", async () => {
+    const aufrufe = rust({ auswahl_bereich: () => summe() });
+    ansicht();
+    const haken = async (pfad: string) => screen.findByRole("checkbox", { name: `${pfad} übertragen` });
+    fireEvent.click(await haken("alt.txt"));
+    await userEvent.click(screen.getByRole("button", { name: "Nur Änderungen" }));
+    await userEvent.click(screen.getByRole("button", { name: "Alle" }));
+    fireEvent.click(await haken("config.php"), { shiftKey: true });
+    await waitFor(() => expect(aufrufeVon(aufrufe, "auswahl_setzen")).toHaveLength(2));
+
+    await userEvent.click(screen.getByRole("button", { name: "bilder zuklappen" }));
+    await waitFor(() => expect(zeileVon("bilder/a.png")).toBeNull());
+    fireEvent.click(await haken("alt.txt"), { shiftKey: true });
+    await waitFor(() => expect(aufrufeVon(aufrufe, "auswahl_setzen")).toHaveLength(3));
+    expect(aufrufeVon(aufrufe, "auswahl_bereich")).toHaveLength(0);
+  });
+
+  it("Alle auswählen / Alle abwählen für den aktuellen Filter (v0.8.3)", async () => {
+    const aufrufe = rust({
+      auswahl_alle: (a) => summe({ ausgewaehlt: (a as { an: boolean }).an ? 4 : 0 }),
+    });
+    ansicht();
+    await screen.findByRole("checkbox", { name: "bilder/a.png übertragen" });
+    expect(within(screen.getByRole("group", { name: "Filter" })).queryByRole("button", { name: "Alle abwählen" })).toBeNull();
+
+    await userEvent.click(screen.getByRole("button", { name: "Alle abwählen" }));
+    await waitFor(() => expect(screen.getByText(/Ausgewählt:/)).toHaveTextContent("Ausgewählt: 0"));
+    expect(aufrufeVon(aufrufe, "auswahl_alle")[0].args).toEqual({ vergleichId: "web/spiegel#1", filter: "alle", an: false });
+
+    await userEvent.click(screen.getByRole("button", { name: "Nur Änderungen" }));
+    await userEvent.click(screen.getByRole("button", { name: "Alle auswählen" }));
+    await waitFor(() => expect(screen.getByText(/Ausgewählt:/)).toHaveTextContent("Ausgewählt: 4"));
+    expect(aufrufeVon(aufrufe, "auswahl_alle")[1].args).toEqual({ vergleichId: "web/spiegel#1", filter: "aenderungen", an: true });
+  });
+
+  it("ohne sichtbare Zeilen sind „Alle auswählen/abwählen“ gesperrt", async () => {
+    rust({ diff_seite: seiteAus([]) });
+    ansicht();
+    expect(await screen.findByRole("button", { name: "Alle auswählen" })).toBeDisabled();
+    await waitFor(() => expect(screen.getByRole("button", { name: "Alle abwählen" })).toBeDisabled());
+  });
+
   it("Fehler beim Setzen der Auswahl wird gezeigt und beim nächsten Erfolg entfernt", async () => {
     let n = 0;
     rust({

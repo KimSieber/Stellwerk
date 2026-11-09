@@ -444,6 +444,12 @@ export const api = {
     invoke<Seite>("diff_seite", { vergleichId, offset, limit, filter, zugeklappt }),
   auswahlSetzen: (vergleichId: string, pfade: string[], an: boolean) =>
     invoke<Zusammenfassung>("auswahl_setzen", { vergleichId, pfade, an }),
+  /** Shift-Klick (v0.8.3): sichtbare Zeilen `von`…`bis` der aktuellen Ansicht; nicht Wählbares bleibt. */
+  auswahlBereich: (vergleichId: string, filter: Filter, zugeklappt: string[], von: number, bis: number, an: boolean) =>
+    invoke<Zusammenfassung>("auswahl_bereich", { vergleichId, filter, zugeklappt, von, bis, an }),
+  /** „Alle auswählen“ / „Alle abwählen“ für den Filter (v0.8.3). */
+  auswahlAlle: (vergleichId: string, filter: Filter, an: boolean) =>
+    invoke<Zusammenfassung>("auswahl_alle", { vergleichId, filter, an }),
   vergleichSchliessen: (vergleichId: string) => invoke<void>("vergleich_schliessen", { vergleichId }),
   /** Regel für genau `pfad` setzen und die Strecke speichern; liefert verbleibende Warnungen. */
   regelSetzen: (strecke: string, ort: RegelOrt, pfad: string, ordner: boolean, typ: RegelTyp, ersatz: string | null) =>

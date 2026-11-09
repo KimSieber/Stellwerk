@@ -670,6 +670,33 @@ pub fn auswahl_setzen(
     })
 }
 
+/// Shift-Klick: Häkchen für den Bereich sichtbarer Zeilen `von`…`bis` (v0.8.3).
+#[tauri::command]
+pub fn auswahl_bereich(
+    state: State<'_, AppState>,
+    vergleich_id: String,
+    filter: Filter,
+    zugeklappt: Vec<RelPath>,
+    von: usize,
+    bis: usize,
+    an: bool,
+) -> Antwort<Zusammenfassung> {
+    let zu: HashSet<RelPath> = zugeklappt.into_iter().collect();
+    mit_vergleich(&state, &vergleich_id, |o| {
+        o.plan = None;
+        Ok(o.sitzung.bereich_setzen(von, bis, filter, &zu, an).clone())
+    })
+}
+
+/// „Alle auswählen“ / „Alle abwählen“ für den aktuellen Filter (v0.8.3).
+#[tauri::command]
+pub fn auswahl_alle(state: State<'_, AppState>, vergleich_id: String, filter: Filter, an: bool) -> Antwort<Zusammenfassung> {
+    mit_vergleich(&state, &vergleich_id, |o| {
+        o.plan = None;
+        Ok(o.sitzung.alle_setzen(filter, an).clone())
+    })
+}
+
 /// Gibt den Speicher eines Vergleichs frei (beim Verlassen der Ansicht).
 #[tauri::command]
 pub fn vergleich_schliessen(state: State<'_, AppState>, vergleich_id: String) {

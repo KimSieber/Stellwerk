@@ -115,6 +115,8 @@ code { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 12px; 
 
 /* --- Knöpfe ------------------------------------------------------------- */
 .knoepfe { display: flex; gap: 8px; }
+.auswahl-knoepfe { align-items: center; gap: 4px; }
+.auswahl-knoepfe .hinweis { margin-right: 6px; }
 button.primaer { background: var(--signal); border-color: var(--signal); color: #fff; font-weight: 500; }
 button.leise { border-color: transparent; background: transparent; color: var(--text-leise); }
 button.link { border: none; background: none; color: var(--blau); padding: 2px; }

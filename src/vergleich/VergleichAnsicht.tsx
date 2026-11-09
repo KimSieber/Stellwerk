@@ -243,16 +243,26 @@ function Ergebnis({ v, strecke, stufe, filter, setFilter, zugeklappt, setZugekla
   const [stand, setStand] = useState(0);
   const [auswahlFehler, setAuswahlFehler] = useState<string | null>(null);
   const zeilen = useZeilen(v.vergleich_id, filter, zugeklappt, stand);
+  // Startpunkt für Shift-Klick: zuletzt ohne Shift geklickter Haken (v0.8.3).
+  // Verfällt, sobald sich die Zeilen verschieben (Filter, Auf-/Zuklappen, neuer Vergleich).
+  const [anker, setAnker] = useState<number | null>(null);
+  useEffect(() => setAnker(null), [filter, zugeklappt, v.vergleich_id]);
 
-  const haken = (z: Zeile, an: boolean) => {
-    api
-      .auswahlSetzen(v.vergleich_id, [z.pfad], an)
+  const auswahl = (aufruf: Promise<Zusammenfassung>) =>
+    aufruf
       .then((s) => {
         setSumme(s);
         setAuswahlFehler(null);
         setStand((n) => n + 1);
       })
       .catch((e) => setAuswahlFehler(fehlerText(e)));
+  const haken = (z: Zeile, an: boolean, index: number, bereich: boolean) => {
+    if (bereich && anker !== null) {
+      void auswahl(api.auswahlBereich(v.vergleich_id, filter, zugeklappt, anker, index, an));
+      return;
+    }
+    setAnker(index);
+    void auswahl(api.auswahlSetzen(v.vergleich_id, [z.pfad], an));
   };
   const klappen = (z: Zeile) =>
     setZugeklappt((liste) => (liste.includes(z.pfad) ? liste.filter((p) => p !== z.pfad) : [...liste, z.pfad]));
@@ -308,15 +318,23 @@ function Ergebnis({ v, strecke, stufe, filter, setFilter, zugeklappt, setZugekla
           </ul>
         </details>
       )}
-      <div className="leiste filter" role="group" aria-label="Filter">
-        <div className="knoepfe">
+      <div className="leiste filter">
+        <div className="knoepfe" role="group" aria-label="Filter">
           {FILTER.map((f) => (
             <button key={f.wert} className={filter === f.wert ? "aktiv" : ""} aria-pressed={filter === f.wert} onClick={() => setFilter(f.wert)}>
               {f.text}
             </button>
           ))}
         </div>
-        <span className="hinweis">{zeilenText(zeilen.sichtbar)}</span>
+        <div className="knoepfe auswahl-knoepfe">
+          <span className="hinweis">{zeilenText(zeilen.sichtbar)}</span>
+          <button className="leise" disabled={!zeilen.sichtbar} onClick={() => void auswahl(api.auswahlAlle(v.vergleich_id, filter, true))}>
+            Alle auswählen
+          </button>
+          <button className="leise" disabled={!zeilen.sichtbar} onClick={() => void auswahl(api.auswahlAlle(v.vergleich_id, filter, false))}>
+            Alle abwählen
+          </button>
+        </div>
       </div>
       {auswahlFehler && <p className="meldung fehler">{auswahlFehler}</p>}
       {zeilen.fehler && <p className="meldung fehler">{zeilen.fehler}</p>}

@@ -19,7 +19,8 @@ const KOPFHOEHE = 32;
 type Props = {
   sichtbar: number;
   zeile: (i: number) => Zeile | undefined;
-  onHaken: (z: Zeile, an: boolean) => void;
+  /** Haken geklickt; `index` = Position in der Ansicht, `bereich` = mit gedrückter Shift-Taste. */
+  onHaken: (z: Zeile, an: boolean, index: number, bereich: boolean) => void;
   onKlappen: (z: Zeile) => void;
   /** Rechtsklick auf eine Zeile: Kontextmenü „Regel setzen“ an Position x/y. */
   onMenue: (z: Zeile, x: number, y: number) => void;
@@ -58,7 +59,15 @@ export function ZeilenListe({ sichtbar, zeile, onHaken, onKlappen, onMenue }: Pr
             height: ZEILENHOEHE,
           };
           return z ? (
-            <ZeilenAnzeige key={z.pfad} z={z} stil={stil} onHaken={onHaken} onKlappen={onKlappen} onMenue={onMenue} />
+            <ZeilenAnzeige
+              key={z.pfad}
+              z={z}
+              index={v.index}
+              stil={stil}
+              onHaken={onHaken}
+              onKlappen={onKlappen}
+              onMenue={onMenue}
+            />
           ) : (
             <div key={`laden-${v.index}`} className="vergleich-zeile laedt" style={stil}>
               <span className="zelle" />
@@ -79,13 +88,15 @@ export function ZeilenListe({ sichtbar, zeile, onHaken, onKlappen, onMenue }: Pr
 
 type ZeileProps = {
   z: Zeile;
+  index: number;
   stil: React.CSSProperties;
-  onHaken: (z: Zeile, an: boolean) => void;
+  /** Haken geklickt; `index` = Position in der Ansicht, `bereich` = mit gedrückter Shift-Taste. */
+  onHaken: (z: Zeile, an: boolean, index: number, bereich: boolean) => void;
   onKlappen: (z: Zeile) => void;
   onMenue: (z: Zeile, x: number, y: number) => void;
 };
 
-function ZeilenAnzeige({ z, stil, onHaken, onKlappen, onMenue }: ZeileProps) {
+function ZeilenAnzeige({ z, index, stil, onHaken, onKlappen, onMenue }: ZeileProps) {
   const warnung = z.warnungen.length > 0;
   return (
     <div
@@ -106,7 +117,8 @@ function ZeilenAnzeige({ z, stil, onHaken, onKlappen, onMenue }: ZeileProps) {
           aria-label={`${z.pfad} übertragen`}
           checked={z.ausgewaehlt}
           disabled={!z.auswaehlbar}
-          onChange={(e) => onHaken(z, e.target.checked)}
+          // Bei Checkboxen ist das ursprüngliche Ereignis der Klick (auch per Leertaste) – mit Shift-Taste
+          onChange={(e) => onHaken(z, e.target.checked, index, (e.nativeEvent as MouseEvent).shiftKey === true)}
         />
         <span className="status-marke">{STATUS_TEXT[z.status]}</span>
         {warnung && (

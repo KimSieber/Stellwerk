@@ -39,6 +39,8 @@ pub fn befehle<R: Runtime>(builder: tauri::Builder<R>) -> tauri::Builder<R> {
         commands::vergleich_abbrechen,
         commands::diff_seite,
         commands::auswahl_setzen,
+        commands::auswahl_bereich,
+        commands::auswahl_alle,
         commands::vergleich_schliessen,
         commands::regel_setzen,
         commands::regel_entfernen,

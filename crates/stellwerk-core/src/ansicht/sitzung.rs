@@ -146,24 +146,7 @@ impl VergleichsSitzung {
     /// Sichtbare Zeilen ab `offset`, höchstens `limit`. Ein Eintrag ist sichtbar, wenn er
     /// zum Filter passt oder etwas Passendes enthält und kein Vorfahr zugeklappt ist.
     pub fn seite(&self, offset: usize, limit: usize, filter: Filter, zugeklappt: &HashSet<RelPath>) -> Seite {
-        let n = self.eintraege.len();
-        let mut passt = vec![false; n];
-        for i in (0..n).filter(|&i| filter.passt(&self.eintraege[i])) {
-            let mut k = Some(i);
-            while let Some(j) = k.filter(|&j| !passt[j]) {
-                passt[j] = true;
-                k = self.eltern[j];
-            }
-        }
-        let mut kinder = vec![false; n];
-        let mut versteckt = vec![false; n];
-        for i in 0..n {
-            if let Some(p) = self.eltern[i] {
-                kinder[p] |= passt[i];
-                versteckt[i] = versteckt[p] || zugeklappt.contains(&self.eintraege[p].pfad);
-            }
-        }
-        let sichtbar: Vec<usize> = (0..n).filter(|&i| passt[i] && !versteckt[i]).collect();
+        let (sichtbar, kinder) = self.sichtbare(filter, zugeklappt);
         let zeilen = sichtbar
             .iter()
             .skip(offset)
@@ -187,6 +170,30 @@ impl VergleichsSitzung {
         Seite { zeilen, sichtbar: sichtbar.len() }
     }
 
+    /// Indizes der sichtbaren Einträge in Anzeige-Reihenfolge und je Eintrag, ob er
+    /// sichtbaren Inhalt hat.
+    fn sichtbare(&self, filter: Filter, zugeklappt: &HashSet<RelPath>) -> (Vec<usize>, Vec<bool>) {
+        let n = self.eintraege.len();
+        let mut passt = vec![false; n];
+        for i in (0..n).filter(|&i| filter.passt(&self.eintraege[i])) {
+            let mut k = Some(i);
+            while let Some(j) = k.filter(|&j| !passt[j]) {
+                passt[j] = true;
+                k = self.eltern[j];
+            }
+        }
+        let mut kinder = vec![false; n];
+        let mut versteckt = vec![false; n];
+        for i in 0..n {
+            if let Some(p) = self.eltern[i] {
+                kinder[p] |= passt[i];
+                versteckt[i] = versteckt[p] || zugeklappt.contains(&self.eintraege[p].pfad);
+            }
+        }
+        let sichtbar: Vec<usize> = (0..n).filter(|&i| passt[i] && !versteckt[i]).collect();
+        (sichtbar, kinder)
+    }
+
     /// Dateien der Quelle im selben Ordner wie `pfad` (ohne `pfad` selbst) –
     /// Vorschläge für „Ersetzen durch …“.
     pub fn quelldateien_neben(&self, pfad: &RelPath) -> Vec<RelPath> {
@@ -206,6 +213,34 @@ impl VergleichsSitzung {
             .iter()
             .map(|p| self.index.get(p).copied().ok_or_else(|| StellwerkError::NichtGefunden(format!("Zeile „{p}“"))))
             .collect::<Result<_>>()?;
+        Ok(self.setzen(start, an))
+    }
+
+    /// Shift-Klick (v0.8.3): alle sichtbaren Zeilen von `von` bis `bis` (Positionen in der
+    /// Ansicht, Reihenfolge egal, über das Ende hinaus wird gekürzt). Nicht wählbare Zeilen
+    /// bleiben unverändert – auch ihr Inhalt; ein wählbarer Ordner wirkt wie sein Häkchen.
+    pub fn bereich_setzen(
+        &mut self,
+        von: usize,
+        bis: usize,
+        filter: Filter,
+        zugeklappt: &HashSet<RelPath>,
+        an: bool,
+    ) -> &Zusammenfassung {
+        let (sichtbar, _) = self.sichtbare(filter, zugeklappt);
+        let (a, b) = (von.min(bis), von.max(bis));
+        let start = sichtbar.into_iter().skip(a).take(b - a + 1).filter(|&i| self.auswaehlbar[i]).collect();
+        self.setzen(start, an)
+    }
+
+    /// „Alle auswählen“ / „Alle abwählen“ (v0.8.3): jede wählbare Zeile, die zum Filter
+    /// passt – auch in zugeklappten Ordnern.
+    pub fn alle_setzen(&mut self, filter: Filter, an: bool) -> &Zusammenfassung {
+        let start = (0..self.eintraege.len()).filter(|&i| self.auswaehlbar[i] && filter.passt(&self.eintraege[i])).collect();
+        self.setzen(start, an)
+    }
+
+    fn setzen(&mut self, start: Vec<usize>, an: bool) -> &Zusammenfassung {
         for i in start {
             for j in (i..self.teilbaum_ende[i]).filter(|&j| self.auswaehlbar[j]) {
                 self.eintraege[j].ausgewaehlt = an;
@@ -220,7 +255,7 @@ impl VergleichsSitzung {
         }
         self.bleibendes_abwaehlen();
         self.zusammenfassung = zusammenfassen(&self.eintraege);
-        Ok(&self.zusammenfassung)
+        &self.zusammenfassung
     }
 
     /// Ein zu löschender Ordner darf nur weg, wenn sein gesamter Inhalt mit gelöscht wird.

@@ -443,6 +443,33 @@ fn auswahl_setzen_liefert_neue_zusammenfassung() {
 }
 
 #[test]
+fn auswahl_alle_und_bereich() {
+    let a = app();
+    mit_vergleichsdaten(&a);
+    let start = starten(&a);
+    let id = start["vergleich_id"].clone();
+    // Reihenfolge: css, css/site.css, alt.txt, index.php
+    let z = a.aufruf("auswahl_alle", json!({ "vergleichId": id, "filter": "alle", "an": false })).unwrap();
+    assert_eq!(z["ausgewaehlt"], 0);
+    let z = a
+        .aufruf(
+            "auswahl_bereich",
+            json!({ "vergleichId": id, "filter": "alle", "zugeklappt": [], "von": 3, "bis": 2, "an": true }),
+        )
+        .unwrap();
+    assert_eq!(z["ausgewaehlt"], 2);
+    let z = a.aufruf("auswahl_alle", json!({ "vergleichId": id, "filter": "aenderungen", "an": true })).unwrap();
+    assert_eq!(z["ausgewaehlt"], start["zusammenfassung"]["ausgewaehlt"], "wie die Vorauswahl");
+
+    let e = a.aufruf("auswahl_alle", json!({ "vergleichId": "x", "filter": "alle", "an": true })).unwrap_err();
+    assert_eq!(e["kategorie"], "nicht_gefunden");
+    let e = a
+        .aufruf("auswahl_bereich", json!({ "vergleichId": "x", "filter": "alle", "zugeklappt": [], "von": 0, "bis": 0, "an": true }))
+        .unwrap_err();
+    assert_eq!(e["kategorie"], "nicht_gefunden");
+}
+
+#[test]
 fn unbekannter_oder_geschlossener_vergleich() {
     let a = app();
     mit_vergleichsdaten(&a);
