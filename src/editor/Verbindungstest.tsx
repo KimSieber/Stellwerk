@@ -1,4 +1,4 @@
-// „Verbindung testen“ für ein FTPS-Ziel (v0.4) und eine Samba-Freigabe (v0.7.1b) im Editor. Liest nur – auf dem Server
+// „Verbindung testen“ für ein FTPS-Ziel (v0.4), eine Samba-Freigabe (v0.7.1b) und einen SFTP-Server (v0.7.2) im Editor. Liest nur – auf dem Server
 // wird nichts verändert. Ein nicht anerkanntes Zertifikat lässt sich nach Prüfung
 // des Fingerprints bewusst bestätigen; gespeichert wird das mit der Strecke.
 
@@ -9,6 +9,7 @@ import {
   fehlerText,
   type BefehlsFehler,
   type Endpunkt,
+  type SftpVerbindungstest,
   type SmbVerbindungstest,
   type Verbindungstest as Ergebnis,
 } from "../api";
@@ -155,6 +156,92 @@ export function SmbVerbindungstestKnopf(props: { ziel: SmbZiel; passwort: string
         </div>
       )}
       {s?.art === "fehler" && <p className="test-ergebnis fehler">✗ {fehlerText(s.f)}</p>}
+    </div>
+  );
+}
+
+type SftpZiel = Endpunkt & { typ: "sftp" };
+type SftpStand = { art: "laeuft" } | { art: "ok"; e: SftpVerbindungstest } | { art: "fehler"; f: unknown };
+
+/**
+ * „Verbindung testen“ für einen SFTP-Server (v0.7.2). Den Host-Schlüssel meldet der Server
+ * beim ersten Kontakt; erst nach bewusster Bestätigung verbindet Stellwerk. Nach dem
+ * Bestätigen wird sofort erneut getestet.
+ */
+export function SftpVerbindungstestKnopf(props: {
+  ziel: SftpZiel;
+  passwort: string;
+  onHostschluessel: (fingerprint: string | undefined) => void;
+}) {
+  const fuer = (ziel: SftpZiel) => JSON.stringify([ziel, props.passwort]);
+  const [stand, setStand] = useState<{ fuer: string; s: SftpStand } | null>(null);
+  const s = stand?.fuer === fuer(props.ziel) ? stand.s : null;
+
+  async function testen(ziel: SftpZiel) {
+    setStand({ fuer: fuer(ziel), s: { art: "laeuft" } });
+    try {
+      setStand({ fuer: fuer(ziel), s: { art: "ok", e: await api.sftpVerbindungTesten(ziel, props.passwort) } });
+    } catch (f) {
+      setStand({ fuer: fuer(ziel), s: { art: "fehler", f } });
+    }
+  }
+
+  function bestaetigen(fp: string) {
+    props.onHostschluessel(fp);
+    void testen({ ...props.ziel, hostschluessel: fp });
+  }
+
+  return (
+    <div className="verbindungstest">
+      <div className="knoepfe">
+        <button type="button" onClick={() => testen(props.ziel)} disabled={s?.art === "laeuft" || !props.ziel.host.trim()}>
+          {s?.art === "laeuft" ? "Teste Verbindung …" : "Verbindung testen"}
+        </button>
+      </div>
+      {props.ziel.hostschluessel && (
+        <div className="zertifikat-bestaetigt">
+          <span className="hinweis klein">
+            Bestätigter Host-Schlüssel: <code>{props.ziel.hostschluessel}</code>
+          </span>
+          <button type="button" onClick={() => props.onHostschluessel(undefined)}>
+            Zurücksetzen
+          </button>
+        </div>
+      )}
+      {s?.art === "ok" && (
+        <div className="test-ergebnis ok" role="status">
+          <strong>✓ Verbunden mit {props.ziel.host}</strong>
+          <span>
+            Serverpfad <code>{s.e.verzeichnis}</code> · {s.e.eintraege} {s.e.eintraege === 1 ? "Eintrag" : "Einträge"}
+          </span>
+          {s.e.server && <span className="hinweis klein">{s.e.server}</span>}
+        </div>
+      )}
+      {s?.art === "fehler" && <SftpFehler f={s.f} geaendert={!!props.ziel.hostschluessel} onBestaetigen={bestaetigen} />}
+    </div>
+  );
+}
+
+function SftpFehler(props: { f: unknown; geaendert: boolean; onBestaetigen: (fp: string) => void }) {
+  const e = props.f as BefehlsFehler;
+  const fp = e?.kategorie === "host_schluessel" ? e.fingerprint : undefined;
+  if (!fp) return <p className="test-ergebnis fehler">✗ {fehlerText(props.f)}</p>;
+  return (
+    <div className="test-ergebnis fehler">
+      <strong>{props.geaendert ? "⚠ Der Host-Schlüssel hat sich geändert" : "Unbekannter Host-Schlüssel"}</strong>
+      <span>
+        Fingerabdruck: <code>{fp}</code>
+      </span>
+      <span className="hinweis klein">
+        {props.geaendert
+          ? "Das kann ein Serverwechsel sein, aber auch ein Angriff. Nur bestätigen, wenn dein Hoster den neuen Schlüssel angekündigt hat."
+          : "Nur bestätigen, wenn der Fingerabdruck mit dem deines Hosters übereinstimmt (z. B. im Kundenmenü). Die Bestätigung wird mit der Strecke gespeichert."}
+      </span>
+      <div className="knoepfe">
+        <button type="button" onClick={() => props.onBestaetigen(fp)}>
+          {props.geaendert ? "Neuen Host-Schlüssel bestätigen" : "Host-Schlüssel bestätigen"}
+        </button>
+      </div>
     </div>
   );
 }

@@ -3,10 +3,10 @@
 import { createContext, useContext, useId, useState, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 
-import { api, type Endpunkt, type Problem, type Quelle, type SmbEndpunkt, type Stufe } from "../api";
+import { api, type Endpunkt, type Problem, type Quelle, type SftpEndpunkt, type SmbEndpunkt, type Stufe } from "../api";
 import { system } from "../system";
 import { endpunktVom, problemeAn, quelleVom, smbAdresse, smbAusAdresse } from "./modell";
-import { SmbVerbindungstestKnopf, Verbindungstest } from "./Verbindungstest";
+import { SftpVerbindungstestKnopf, SmbVerbindungstestKnopf, Verbindungstest } from "./Verbindungstest";
 
 /** Meldung zu einer Ablage (z. B. „ist kein Ordner“), angezeigt direkt am Feld. */
 export type AblageMeldung = { ort: string; text: string; fehler: boolean };
@@ -122,10 +122,14 @@ export function PfadFeld(props: { label: string; ort: string; wert: string; onCh
   );
 }
 
-/** Eingabe des Passworts für ein FTPS-Ziel oder eine Samba-Freigabe (verdeckt). */
+/** Eingabe des Passworts für einen Server oder eine Samba-Freigabe (verdeckt). */
 export type PasswortEingabe = { wert: string; onChange: (w: string) => void };
 
-/** Felder eines lokalen, FTPS- oder Samba-Endpunkts. `ort` ist z. B. `stufen[0].ziel`. */
+/**
+ * Felder eines lokalen, FTPS-, SFTP- oder Samba-Endpunkts. `ort` ist z. B. `stufen[0].ziel`.
+ * Server und Benutzer verlieren Leerzeichen am Rand gleich bei der Eingabe (oft beim Kopieren
+ * mitgenommen) – das Passwort bleibt, wie es ist.
+ */
 export function EndpunktFelder(props: {
   wert: Endpunkt;
   ort: string;
@@ -141,6 +145,9 @@ export function EndpunktFelder(props: {
   if (wert.typ === "smb") {
     return <SmbFelder wert={wert} ort={ort} onChange={onChange} passwort={props.passwort} />;
   }
+  if (wert.typ === "sftp") {
+    return <SftpFelder wert={wert} ort={ort} onChange={onChange} passwort={props.passwort} />;
+  }
   const setze = (teil: Partial<Endpunkt & { typ: "ftps" }>) => onChange({ ...wert, ...teil });
   return (
     <div className="ftps">
@@ -149,7 +156,7 @@ export function EndpunktFelder(props: {
         ort={`${ort}.host`}
         wert={wert.host}
         platzhalter="ftp.example.de"
-        onChange={(host) => setze({ host })}
+        onChange={(host) => setze({ host: host.trim() })}
       />
       <TextFeld
         label="Port"
@@ -162,12 +169,60 @@ export function EndpunktFelder(props: {
         label="Benutzer"
         ort={`${ort}.benutzer`}
         wert={wert.benutzer}
-        onChange={(benutzer) => setze({ benutzer })}
+        onChange={(benutzer) => setze({ benutzer: benutzer.trim() })}
       />
       {props.passwort && <PasswortFeld konto={wert.konto_ref} ort={`${ort}.passwort`} {...props.passwort} />}
       <p className="hinweis">Verbindung immer verschlüsselt (FTP mit explizitem TLS).</p>
       {props.passwort && (
         <Verbindungstest ziel={wert} passwort={props.passwort.wert} onZertifikat={(zertifikat) => setze({ zertifikat })} />
+      )}
+    </div>
+  );
+}
+
+/**
+ * SFTP-Server (v0.7.2). Ändern sich Server oder Port, verfällt der bestätigte
+ * Host-Schlüssel – er gehört zu genau diesem Server.
+ */
+function SftpFelder(props: {
+  wert: SftpEndpunkt & { typ: "sftp" };
+  ort: string;
+  onChange: (e: Endpunkt) => void;
+  passwort?: PasswortEingabe;
+}) {
+  const { wert, ort, onChange } = props;
+  const setze = (teil: Partial<SftpEndpunkt>) => onChange({ ...wert, ...teil });
+  return (
+    <div className="sftp">
+      <TextFeld
+        label="Server"
+        ort={`${ort}.host`}
+        wert={wert.host}
+        platzhalter="sftp.example.de"
+        onChange={(host) => setze({ host: host.trim(), hostschluessel: undefined })}
+      />
+      <Feld
+        label="Port"
+        ort={`${ort}.port`}
+        kind={(id) => (
+          <input
+            id={id}
+            value={String(wert.port)}
+            onChange={(e) => setze({ port: Number.parseInt(e.target.value, 10) || 0, hostschluessel: undefined })}
+          />
+        )}
+        nachher={<span className="hinweis klein">Üblich ist 22 – manche Hoster nutzen einen anderen, z. B. manitu den Port 23.</span>}
+      />
+      <TextFeld label="Serverpfad" ort={`${ort}.pfad`} wert={wert.pfad} onChange={(pfad) => setze({ pfad })} />
+      <TextFeld label="Benutzer" ort={`${ort}.benutzer`} wert={wert.benutzer} onChange={(benutzer) => setze({ benutzer: benutzer.trim() })} />
+      {props.passwort && <PasswortFeld konto={wert.konto_ref} ort={`${ort}.passwort`} {...props.passwort} />}
+      <p className="hinweis">Verbindung immer verschlüsselt (SSH), Anmeldung mit Passwort.</p>
+      {props.passwort && (
+        <SftpVerbindungstestKnopf
+          ziel={wert}
+          passwort={props.passwort.wert}
+          onHostschluessel={(hostschluessel) => setze({ hostschluessel })}
+        />
       )}
     </div>
   );
@@ -212,7 +267,7 @@ function SmbFelder(props: {
         label="Benutzer"
         ort={`${ort}.benutzer`}
         wert={wert.benutzer}
-        onChange={(benutzer) => onChange({ ...wert, benutzer })}
+        onChange={(benutzer) => onChange({ ...wert, benutzer: benutzer.trim() })}
       />
       {props.passwort && <PasswortFeld konto={wert.konto_ref} ort={`${ort}.passwort`} {...props.passwort} />}
       <p className="hinweis">Direkter Zugriff auf die Freigabe (SMB 2/3) – ohne sie im Finder zu verbinden.</p>
@@ -286,6 +341,7 @@ export function QuelleFelder(props: {
     ["lokal", "Lokaler Ordner"],
     ["ftps", "FTPS-Server"],
     ["smb", "Samba-Freigabe"],
+    ["sftp", "SFTP-Server"],
   ];
   // Auch ohne Vorstufe anbieten, wenn bereits gesetzt (z. B. nach Entfernen der Vorstufe) –
   // die Prüfung meldet den Fehler dann am Feld.
@@ -333,6 +389,7 @@ export function ZielFelder(props: {
           ["lokal", "Lokaler Ordner"],
           ["ftps", "FTPS-Server"],
           ["smb", "Samba-Freigabe"],
+          ["sftp", "SFTP-Server"],
         ]}
         onChange={(typ) => props.onChange(endpunktVom(typ, props.konto))}
       />

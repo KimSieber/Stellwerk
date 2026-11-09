@@ -68,12 +68,13 @@ export function neueStrecke(): Strecke {
 export function endpunktVom(typ: Endpunkt["typ"], konto: string): Endpunkt {
   if (typ === "lokal") return { typ: "lokal", pfad: "" };
   if (typ === "smb") return { typ: "smb", host: "", port: 445, freigabe: "", pfad: "/", benutzer: "", konto_ref: konto };
+  if (typ === "sftp") return { typ: "sftp", host: "", port: 22, pfad: "/", benutzer: "", konto_ref: konto };
   return { typ: "ftps", host: "", port: 21, pfad: "/", benutzer: "", tls: "explizit", konto_ref: konto };
 }
 
-/** Hat der Endpunkt ein Passwort im Schlüsselbund? (FTPS und Samba-Freigabe) */
-export function mitPasswort(e: Quelle): e is Endpunkt & { typ: "ftps" | "smb" } {
-  return e.typ === "ftps" || e.typ === "smb";
+/** Hat der Endpunkt ein Passwort im Schlüsselbund? (FTPS, Samba-Freigabe, SFTP) */
+export function mitPasswort(e: Quelle): e is Endpunkt & { typ: "ftps" | "smb" | "sftp" } {
+  return e.typ === "ftps" || e.typ === "smb" || e.typ === "sftp";
 }
 
 /** Adresse einer Freigabe wie im Finder: `smb://host[:port]/freigabe/ordner`. */
@@ -105,7 +106,7 @@ export function quelleVom(typ: Quelle["typ"], vorstufe?: string, konto = ""): Qu
   return endpunktVom(typ, konto);
 }
 
-/** Setzt bei allen FTPS- und Samba-Zielen und -Quellen den internen Schlüsselbund-Namen passend zu Strecke und Stufe. */
+/** Setzt bei allen Server- und Samba-Zielen und -Quellen den internen Schlüsselbund-Namen passend zu Strecke und Stufe. */
 export function kontenAngleichen(s: Strecke): Strecke {
   return {
     ...s,
@@ -155,6 +156,7 @@ const ORT_NAMEN: Record<string, string> = {
   pfad: "Pfad",
   host: "Server",
   freigabe: "Freigabe",
+  hostschluessel: "Host-Schlüssel",
   port: "Port",
   benutzer: "Benutzer",
   konto_ref: "Passwort",
@@ -175,6 +177,7 @@ const PFAD_NAME: Record<Quelle["typ"], string> = {
   lokal: "Ordner",
   ftps: "Serverpfad",
   smb: "Ordner in der Freigabe",
+  sftp: "Serverpfad",
   stufe: "Ordner",
 };
 

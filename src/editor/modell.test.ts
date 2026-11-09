@@ -255,3 +255,21 @@ describe("Samba-Freigabe (v0.7.1)", () => {
     expect(ortLesbar("stufen[0].ziel.freigabe", s)).toBe("Stufe 1 „A“ › Ziel › Freigabe");
   });
 });
+
+describe("SFTP-Server (v0.7.2)", () => {
+  it("leer mit Port 22, mit Passwort, eigene Konten, Ortsnamen", () => {
+    const sftp = endpunktVom("sftp", "k");
+    expect(sftp).toEqual({ typ: "sftp", host: "", port: 22, pfad: "/", benutzer: "", konto_ref: "k" });
+    expect(mitPasswort(sftp)).toBe(true);
+    const s = kontenAngleichen({
+      id: "s", name: "S", version: 1,
+      stufen: [{ id: "a", name: "A", modus: "direkt", quelle: sftp, ziel: sftp, nur_online: "herunterladen" }],
+    });
+    expect([s.stufen[0].ziel, s.stufen[0].quelle].map((e) => (e as typeof sftp & { konto_ref: string }).konto_ref)).toEqual([
+      "stellwerk:s:a",
+      "stellwerk:s:a:quelle",
+    ]);
+    expect(ortLesbar("stufen[0].ziel.pfad", s)).toBe("Stufe 1 „A“ › Ziel › Serverpfad");
+    expect(ortLesbar("stufen[0].ziel.hostschluessel", s)).toBe("Stufe 1 „A“ › Ziel › Host-Schlüssel");
+  });
+});

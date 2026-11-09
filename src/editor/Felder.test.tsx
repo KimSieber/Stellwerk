@@ -114,11 +114,12 @@ describe("Endpunkte", () => {
   it("FTPS: jedes Feld wirkt", async () => {
     let zuletzt: Endpunkt = ftps;
     render(<Zustand<Endpunkt> start={ftps} beobachter={(w) => (zuletzt = w)} kind={(w, s) => <EndpunktFelder wert={w} ort="z" onChange={s} />} />);
-    await userEvent.type(screen.getByLabelText("Server"), "ftp.x.de");
+    // Leerzeichen am Rand (beim Kopieren mitgenommen) fallen weg
+    await userEvent.type(screen.getByLabelText("Server"), " ftp.x.de ");
     await userEvent.clear(screen.getByLabelText("Port"));
     await userEvent.type(screen.getByLabelText("Port"), "990");
     await userEvent.type(screen.getByLabelText("Serverpfad"), "httpdocs");
-    await userEvent.type(screen.getByLabelText("Benutzer"), "kim");
+    await userEvent.type(screen.getByLabelText("Benutzer"), "kim ");
     expect(zuletzt).toEqual({ ...ftps, host: "ftp.x.de", port: 990, pfad: "/httpdocs", benutzer: "kim" });
     expect(screen.getByText(/explizitem TLS/)).toBeInTheDocument();
     // Der interne Schlüsselbund-Name ist kein Eingabefeld
@@ -166,10 +167,10 @@ describe("QuelleFelder", () => {
     return werte;
   }
 
-  it("erste Stufe: lokaler Ordner, FTPS-Server (v0.6.5) oder Samba-Freigabe (v0.7.1)", () => {
+  it("erste Stufe: lokaler Ordner, FTPS-Server (v0.6.5), Samba-Freigabe (v0.7.1) oder SFTP-Server (v0.7.2)", () => {
     aufbau({ typ: "lokal", pfad: "" }, []);
     const optionen = Array.from(screen.getByLabelText<HTMLSelectElement>("Art").options).map((o) => o.text);
-    expect(optionen).toEqual(["Lokaler Ordner", "FTPS-Server", "Samba-Freigabe"]);
+    expect(optionen).toEqual(["Lokaler Ordner", "FTPS-Server", "Samba-Freigabe", "SFTP-Server"]);
   });
 
   it("Samba-Freigabe als Quelle: eigenes Konto", async () => {
@@ -219,9 +220,9 @@ describe("Samba-Freigabe (v0.7.1)", () => {
     const adresse = screen.getByLabelText("Adresse");
     expect(adresse).toHaveValue("");
     expect(adresse).toHaveAttribute("placeholder", "smb://192.168.1.11/freigabe");
-    await userEvent.type(adresse, "smb://192.168.1.11/manitu/web");
-    expect(adresse).toHaveValue("smb://192.168.1.11/manitu/web");
-    await userEvent.type(screen.getByLabelText("Benutzer"), "manitu");
+    await userEvent.type(adresse, "smb://192.168.1.11/manitu/web ");
+    expect(adresse).toHaveValue("smb://192.168.1.11/manitu/web ");
+    await userEvent.type(screen.getByLabelText("Benutzer"), "manitu ");
     expect(zuletzt).toEqual({ ...smb, host: "192.168.1.11", freigabe: "manitu", pfad: "/web", benutzer: "manitu" });
     expect(screen.getByText(/ohne sie im Finder zu verbinden/)).toBeInTheDocument();
     expect(screen.queryByLabelText("Passwort")).toBeNull();
@@ -259,6 +260,45 @@ describe("Samba-Freigabe (v0.7.1)", () => {
     await userEvent.selectOptions(screen.getByLabelText("Art"), "Samba-Freigabe");
     expect(zuletzt).toEqual(smb);
     expect(await screen.findByLabelText("Passwort")).toHaveAttribute("type", "password");
+  });
+});
+
+describe("SFTP-Server (v0.7.2)", () => {
+  const sftp: Endpunkt = { typ: "sftp", host: "", port: 22, pfad: "/", benutzer: "", konto_ref: "stellwerk:s:z" };
+  const HK = `SHA256:${"A".repeat(43)}`;
+
+  it("jedes Feld wirkt; Server oder Port ändern verwirft den bestätigten Host-Schlüssel", async () => {
+    const start: Endpunkt = { ...sftp, hostschluessel: HK };
+    let zuletzt: Endpunkt = start;
+    render(<Zustand<Endpunkt> start={start} beobachter={(w) => (zuletzt = w)} kind={(w, s) => <EndpunktFelder wert={w} ort="z" onChange={s} />} />);
+    expect(screen.getByText(/manitu den Port 23/)).toBeInTheDocument();
+    expect(screen.getByText(/immer verschlüsselt \(SSH\)/)).toBeInTheDocument();
+    await userEvent.type(screen.getByLabelText("Serverpfad"), "web");
+    await userEvent.type(screen.getByLabelText("Benutzer"), " kim");
+    expect(zuletzt).toMatchObject({ pfad: "/web", benutzer: "kim", hostschluessel: HK });
+    await userEvent.type(screen.getByLabelText("Server"), "h ");
+    expect(zuletzt).toMatchObject({ host: "h", hostschluessel: undefined });
+    zuletzt = { ...zuletzt, hostschluessel: HK };
+    await userEvent.clear(screen.getByLabelText("Port"));
+    await userEvent.type(screen.getByLabelText("Port"), "23");
+    expect(zuletzt).toEqual({ ...sftp, host: "h", port: 23, pfad: "/web", benutzer: "kim", hostschluessel: undefined });
+    expect(screen.queryByLabelText("Passwort")).toBeNull();
+  });
+
+  it("ZielFelder: SFTP-Server wählen, mit Passwort", async () => {
+    rustAttrappe({ passwort_vorhanden: () => false });
+    let zuletzt: Endpunkt = { typ: "lokal", pfad: "/a" };
+    mitQuery(
+      <Zustand<Endpunkt>
+        start={zuletzt}
+        beobachter={(w) => (zuletzt = w)}
+        kind={(w, s) => <ZielFelder wert={w} ort="z" konto="stellwerk:s:z" onChange={s} passwort={{ wert: "", onChange: () => {} }} />}
+      />,
+    );
+    await userEvent.selectOptions(screen.getByLabelText("Art"), "SFTP-Server");
+    expect(zuletzt).toEqual(sftp);
+    expect(await screen.findByLabelText("Passwort")).toHaveAttribute("type", "password");
+    expect(screen.getByRole("button", { name: "Verbindung testen" })).toBeDisabled();
   });
 });
 

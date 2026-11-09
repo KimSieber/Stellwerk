@@ -2,10 +2,10 @@ import { describe, expect, it, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
-import type { Endpunkt, SmbVerbindungstest, Verbindungstest as Ergebnis } from "../api";
+import type { Endpunkt, SftpVerbindungstest, SmbVerbindungstest, Verbindungstest as Ergebnis } from "../api";
 import { aufrufeVon, mitQuery, rustAttrappe, Zustand } from "../test/hilfen";
 import { EndpunktFelder } from "./Felder";
-import { SmbVerbindungstestKnopf, Verbindungstest } from "./Verbindungstest";
+import { SftpVerbindungstestKnopf, SmbVerbindungstestKnopf, Verbindungstest } from "./Verbindungstest";
 
 type Ftps = Endpunkt & { typ: "ftps" };
 const ziel: Ftps = {
@@ -220,5 +220,97 @@ describe("Verbindung testen – Samba-Freigabe (v0.7.1b)", () => {
     rustAttrappe({ passwort_vorhanden: () => true });
     mitQuery(<EndpunktFelder wert={smb} ort="z" onChange={() => {}} passwort={{ wert: "", onChange: () => {} }} />);
     expect(await screen.findByRole("button", { name: "Verbindung testen" })).toBeEnabled();
+  });
+});
+
+describe("Verbindung testen – SFTP-Server (v0.7.2)", () => {
+  const sftp: Endpunkt & { typ: "sftp" } = {
+    typ: "sftp", host: "ngcobalt418.manitu.net", port: 23, pfad: "/web", benutzer: "kim", konto_ref: "stellwerk:s:z",
+  };
+  const HK = `SHA256:${"A".repeat(43)}`;
+  const ok = (teil: Partial<SftpVerbindungstest> = {}): SftpVerbindungstest => ({
+    server: "SSH-2.0-OpenSSH_9.6", verzeichnis: "/web", eintraege: 1, hostschluessel: HK, ...teil,
+  });
+  const unbekannt = { kategorie: "host_schluessel", meldung: "noch nicht bestätigt", fingerprint: HK };
+
+  it("zeigt den Lauf und danach Serverpfad, Einträge und Server-Software", async () => {
+    let fertig: (e: SftpVerbindungstest) => void = () => {};
+    const a = rustAttrappe({ sftp_verbindung_testen: () => new Promise<SftpVerbindungstest>((r) => (fertig = r)) });
+    render(<SftpVerbindungstestKnopf ziel={{ ...sftp, hostschluessel: HK }} passwort="" onHostschluessel={() => {}} />);
+    await userEvent.click(knopf());
+    expect(knopf()).toHaveTextContent("Teste Verbindung …");
+    expect(knopf()).toBeDisabled();
+    expect(aufrufeVon(a, "sftp_verbindung_testen")[0].args).toMatchObject({ ziel: { ...sftp, hostschluessel: HK }, passwort: null });
+    fertig(ok());
+    const status = await screen.findByRole("status");
+    expect(status).toHaveTextContent("✓ Verbunden mit ngcobalt418.manitu.net");
+    expect(status).toHaveTextContent("Serverpfad /web · 1 Eintrag");
+    expect(status).toHaveTextContent("SSH-2.0-OpenSSH_9.6");
+  });
+
+  it("mehrere Einträge, ohne Server-Kennung; eingegebenes Passwort wird mitgeschickt", async () => {
+    const a = rustAttrappe({ sftp_verbindung_testen: () => ok({ eintraege: 3, server: null }) });
+    render(<SftpVerbindungstestKnopf ziel={sftp} passwort="geheim" onHostschluessel={() => {}} />);
+    await userEvent.click(knopf());
+    const status = await screen.findByRole("status");
+    expect(status).toHaveTextContent("3 Einträge");
+    expect(status).not.toHaveTextContent("SSH-2.0");
+    expect(aufrufeVon(a, "sftp_verbindung_testen")[0].args).toMatchObject({ passwort: "geheim" });
+  });
+
+  it("unbekannter Host-Schlüssel: bestätigen setzt ihn und testet sofort erneut", async () => {
+    let n = 0;
+    const a = rustAttrappe({
+      sftp_verbindung_testen: () => {
+        if (n++ === 0) throw unbekannt;
+        return ok();
+      },
+    });
+    let zuletzt: Endpunkt = sftp;
+    mitQuery(
+      <Zustand<Endpunkt>
+        start={sftp}
+        beobachter={(w) => (zuletzt = w)}
+        kind={(w, s) => <EndpunktFelder wert={w} ort="z" onChange={s} passwort={{ wert: "pw", onChange: () => {} }} />}
+      />,
+    );
+    await userEvent.click(knopf());
+    expect(await screen.findByText("Unbekannter Host-Schlüssel")).toBeInTheDocument();
+    expect(screen.getByText(HK)).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Host-Schlüssel bestätigen" }));
+    expect(zuletzt).toEqual({ ...sftp, hostschluessel: HK });
+    expect(await screen.findByRole("status")).toHaveTextContent("✓ Verbunden");
+    expect(aufrufeVon(a, "sftp_verbindung_testen")[1].args).toMatchObject({ ziel: { hostschluessel: HK } });
+    expect(screen.getByText(/Bestätigter Host-Schlüssel/)).toBeInTheDocument();
+  });
+
+  it("geänderter Host-Schlüssel: deutliche Warnung", async () => {
+    const neu = `SHA256:${"B".repeat(43)}`;
+    rustAttrappe({ sftp_verbindung_testen: () => Promise.reject({ ...unbekannt, fingerprint: neu }) });
+    const gesetzt: (string | undefined)[] = [];
+    render(<SftpVerbindungstestKnopf ziel={{ ...sftp, hostschluessel: HK }} passwort="" onHostschluessel={(h) => gesetzt.push(h)} />);
+    await userEvent.click(knopf());
+    expect(await screen.findByText("⚠ Der Host-Schlüssel hat sich geändert")).toBeInTheDocument();
+    expect(screen.getByText(/auch ein Angriff/)).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Neuen Host-Schlüssel bestätigen" }));
+    expect(gesetzt).toEqual([neu]);
+  });
+
+  it("Zurücksetzen entfernt den bestätigten Schlüssel; andere Fehler als Text", async () => {
+    rustAttrappe({ sftp_verbindung_testen: () => Promise.reject({ kategorie: "anmeldung", meldung: "Benutzer oder Passwort falsch" }) });
+    const gesetzt: (string | undefined)[] = [];
+    render(<SftpVerbindungstestKnopf ziel={{ ...sftp, hostschluessel: HK }} passwort="" onHostschluessel={(h) => gesetzt.push(h)} />);
+    await userEvent.click(screen.getByRole("button", { name: "Zurücksetzen" }));
+    expect(gesetzt).toEqual([undefined]);
+    await userEvent.click(knopf());
+    expect(await screen.findByText(/✗ .*Benutzer oder Passwort falsch/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /bestätigen/ })).toBeNull();
+  });
+
+  it("ohne Server nicht klickbar; im Editor nur mit Passwortfeld", () => {
+    const { rerender } = render(<SftpVerbindungstestKnopf ziel={{ ...sftp, host: " " }} passwort="" onHostschluessel={() => {}} />);
+    expect(knopf()).toBeDisabled();
+    rerender(<EndpunktFelder wert={sftp} ort="z" onChange={() => {}} />);
+    expect(screen.queryByRole("button", { name: "Verbindung testen" })).toBeNull();
   });
 });

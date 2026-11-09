@@ -30,10 +30,11 @@ export interface BefehlsFehler {
     | "keine_rechte"
     | "lauf_offen"
     | "zertifikat"
+    | "host_schluessel"
     | "io";
   meldung: string;
   probleme?: Problem[];
-  /** Bei „zertifikat“: SHA-256 des nicht anerkannten Serverzertifikats. */
+  /** Bei „zertifikat“: SHA-256 des nicht anerkannten Serverzertifikats; bei „host_schluessel“: `SHA256:…` des Host-Schlüssels. */
   fingerprint?: string;
 }
 
@@ -104,6 +105,26 @@ export interface SmbEndpunkt {
   konto_ref: string;
 }
 
+/** SFTP-Server (v0.7.2): SSH-Dateiübertragung, Anmeldung mit Passwort. */
+export interface SftpEndpunkt {
+  host: string;
+  port: number;
+  pfad: string;
+  benutzer: string;
+  konto_ref: string;
+  /** Bewusst bestätigter Host-Schlüssel (`SHA256:…`); ohne ihn verbindet Stellwerk nicht. */
+  hostschluessel?: string;
+}
+
+/** Ergebnis von „Verbindung testen“ für einen SFTP-Server (v0.7.2). */
+export interface SftpVerbindungstest {
+  /** Kennung der Server-Software, z. B. `SSH-2.0-OpenSSH_9.6`. */
+  server: string | null;
+  verzeichnis: string;
+  eintraege: number;
+  hostschluessel: string;
+}
+
 /** Ergebnis von „Verbindung testen“ für eine Samba-Freigabe (v0.7.1b). */
 export interface SmbVerbindungstest {
   /** `smb://host:port/freigabe/ordner` */
@@ -125,7 +146,8 @@ export interface Verbindungstest {
 export type Endpunkt =
   | { typ: "lokal"; pfad: string }
   | ({ typ: "ftps" } & FtpsEndpunkt)
-  | ({ typ: "smb" } & SmbEndpunkt);
+  | ({ typ: "smb" } & SmbEndpunkt)
+  | ({ typ: "sftp" } & SftpEndpunkt);
 export type Quelle = Endpunkt | { typ: "stufe"; stufe: string };
 
 export type Rechte =
@@ -401,6 +423,9 @@ export const api = {
   /** Samba-Freigabe: anmelden und Ordner lesen (v0.7.1b). Ohne Eingabe gilt das Passwort aus dem Schlüsselbund. */
   smbVerbindungTesten: (ziel: Endpunkt, passwort: string) =>
     invoke<SmbVerbindungstest>("smb_verbindung_testen", { ziel, passwort: passwort || null }),
+  /** SFTP-Server: anmelden, Host-Schlüssel prüfen, Ordner lesen (v0.7.2). Ohne Eingabe gilt das Passwort aus dem Schlüsselbund. */
+  sftpVerbindungTesten: (ziel: Endpunkt, passwort: string) =>
+    invoke<SftpVerbindungstest>("sftp_verbindung_testen", { ziel, passwort: passwort || null }),
   /** Scannt und vergleicht eine Stufe; verändert nichts. Fortschritt kommt gedrosselt. */
   /** `server`: FTPS-Ziel vom Server einlesen statt gegen das Manifest (lokale Ziele: ohne Wirkung). */
   vergleichStarten: (strecke: string, stufe: string, beiFortschritt: (f: Fortschritt) => void, server = false) =>
