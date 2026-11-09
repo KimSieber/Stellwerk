@@ -7,6 +7,7 @@ import { useRef } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 
 import type { Eintrag, Zeile } from "../api";
+import { Dreieck } from "../components/Dreieck";
 import { symbolFuer } from "./dateiart";
 import { groesse, STATUS_TEXT, warnungText, zeilenTooltip, zeit } from "./format";
 
@@ -144,14 +145,5 @@ function Seite({ z, e, onKlappen }: { z: Zeile; e: Eintrag | null; onKlappen: (z
       {e.art === "datei" && <span className="groesse">{groesse(e.groesse)}</span>}
       <span className="zeit">{e.art === "ordner" ? "" : zeit(e.mtime_ns)}</span>
     </span>
-  );
-}
-
-/** Aufklapp-Dreieck wie im Finder; zeigt nach rechts (zu) oder unten (offen, per CSS gedreht). */
-function Dreieck() {
-  return (
-    <svg viewBox="0 0 10 10" width="10" height="10" aria-hidden="true">
-      <path d="M3 1.5 L8 5 L3 8.5 Z" fill="currentColor" />
-    </svg>
   );
 }

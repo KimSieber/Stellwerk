@@ -67,6 +67,21 @@ button:disabled { opacity: .5; cursor: default; }
 .karte.defekt { border-color: var(--loeschen); }
 .kennung { color: var(--text-leise); font-size: 12px; }
 
+/* Gruppen der Startseite (v0.8.1): schmale Balken, aufklappbar wie Ordner im Vergleich */
+.gruppen { display: grid; gap: 8px; }
+.gruppen-knoepfe { display: flex; justify-content: flex-end; gap: 4px; margin-top: -6px; }
+.gruppen-knoepfe button { font-size: 12px; padding: 2px 8px; }
+.gruppe { display: grid; gap: 10px; }
+.gruppe-balken {
+  display: flex; align-items: center; gap: 8px; width: 100%; text-align: left;
+  padding: 7px 12px; border-radius: 8px; background: var(--flaeche);
+}
+.gruppe-balken .klappe svg { transition: transform .12s; }
+.gruppe-balken[aria-expanded="true"] .klappe svg { transform: rotate(90deg); }
+.gruppe-name { font-weight: 600; }
+.gruppe-anzahl { margin-left: auto; color: var(--text-leise); font-size: 12px; }
+.gruppe > .karten { margin-bottom: 8px; }
+
 .stufen { list-style: none; padding: 0; margin: 12px 0 0; display: grid; gap: 8px; }
 .stufen li { display: flex; gap: 10px; align-items: flex-start; }
 .stufe-nr {

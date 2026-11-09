@@ -120,6 +120,8 @@ pub(crate) fn staende_nach_lauf(state: &AppState, strecke: &str, stufe: &str) ->
 pub struct StreckeUebersicht {
     pub id: String,
     pub name: Option<String>,
+    /// Gruppe der Startseite (v0.8.1); `None` = ohne Gruppe.
+    pub gruppe: Option<String>,
     pub stufen: Vec<StufeKurz>,
     pub probleme: Vec<Problem>,
     pub fehler: Option<String>,
@@ -177,11 +179,19 @@ pub fn strecken_liste(state: State<'_, AppState>) -> Antwort<Vec<StreckeUebersic
                         letzter_lauf,
                     });
                 }
-                StreckeUebersicht { id: e.id, name: Some(s.name.clone()), stufen, probleme: alle_probleme(&s, &global), fehler: None }
+                StreckeUebersicht {
+                    id: e.id,
+                    name: Some(s.name.clone()),
+                    gruppe: s.gruppe_bereinigt(),
+                    stufen,
+                    probleme: alle_probleme(&s, &global),
+                    fehler: None,
+                }
             }
             Err(err) => StreckeUebersicht {
                 id: e.id,
                 name: None,
+                gruppe: None,
                 stufen: vec![],
                 probleme: vec![],
                 fehler: Some(err.to_string()),

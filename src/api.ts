@@ -62,6 +62,8 @@ export interface StufenStand {
 export interface StreckeUebersicht {
   id: string;
   name: string | null;
+  /** Gruppe der Startseite (v0.8.1); fehlt/`null` = ohne Gruppe. */
+  gruppe?: string | null;
   stufen: StufeKurz[];
   probleme: Problem[];
   fehler: string | null;
@@ -176,6 +178,8 @@ export interface Stufe {
 export interface Strecke {
   id: string;
   name: string;
+  /** Freie Gruppe für die Startseite (v0.8.1). */
+  gruppe?: string;
   version: number;
   regeln?: RegelEbene;
   stufen: Stufe[];

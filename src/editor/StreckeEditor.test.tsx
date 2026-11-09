@@ -353,6 +353,40 @@ describe("Ordner aus dem Finder ablegen", () => {
 });
 
 describe("Vorhandene Strecke", () => {
+  it("Gruppe: Vorschläge aus den vorhandenen Gruppen, gespeichert ohne Rand-Leerzeichen (v0.8.1)", async () => {
+    const eintrag = { id: "x", name: "X", stufen: [], probleme: [], fehler: null };
+    const a = rust({
+      strecken_liste: () => [
+        { ...eintrag, gruppe: "Webseiten" },
+        { ...eintrag, id: "y", gruppe: "APIs" },
+        { ...eintrag, id: "z", gruppe: null },
+      ],
+    });
+    editor("mailwerk-web");
+    const feld = await screen.findByLabelText("Gruppe (optional)");
+    expect(feld).toHaveValue("");
+    await waitFor(() =>
+      expect([...document.querySelectorAll(`#${feld.getAttribute("list")} option`)].map((o) => o.getAttribute("value"))).toEqual([
+        "APIs",
+        "Webseiten",
+      ]),
+    );
+
+    await userEvent.type(feld, " Meine Gruppe ");
+    expect(feld).toHaveValue(" Meine Gruppe ");
+    await waitFor(() => expect(speichernKnopf()).toBeEnabled());
+    await userEvent.click(speichernKnopf());
+    await screen.findByText("Gespeichert.");
+    expect((aufrufeVon(a, "strecke_speichern")[0].args as Args).strecke.gruppe).toBe("Meine Gruppe");
+
+    await userEvent.clear(feld);
+    await userEvent.type(feld, "  ");
+    await waitFor(() => expect(speichernKnopf()).toBeEnabled());
+    await userEvent.click(speichernKnopf());
+    await screen.findByText("Gespeichert.");
+    expect(aufrufeVon(a, "strecke_speichern")[1].args as Args).not.toHaveProperty("strecke.gruppe");
+  });
+
   it("lädt, Kennung bleibt fest, Speichern überschreibt", async () => {
     const a = rust();
     editor("mailwerk-web");
@@ -371,7 +405,8 @@ describe("Vorhandene Strecke", () => {
     const gesendet = (aufrufeVon(a, "strecke_speichern")[0].args as Args).strecke;
     expect(gesendet.name).toBe("Mailwerk Webseite neu");
     expect(aufrufeVon(a, "strecke_anlegen")).toHaveLength(0);
-    expect(aufrufeVon(a, "strecken_liste")).toHaveLength(0); // nur bei neuen Strecken nötig
+    // Nur für die Vorschläge der Gruppe: beim Öffnen und nach dem Speichern
+    expect(aufrufeVon(a, "strecken_liste")).toHaveLength(2);
 
     // Nach dem Speichern führt „Zurück“ ohne Rückfrage
     await userEvent.type(screen.getByLabelText("Name"), "!");

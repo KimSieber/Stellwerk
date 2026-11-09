@@ -17,4 +17,5 @@ afterEach(async () => {
   await new Promise((r) => setTimeout(r, 0));
   clearMocks();
   fensterZu.mockClear();
+  localStorage.clear(); // z. B. aufgeklappte Gruppen der Startseite (v0.8.1)
 });

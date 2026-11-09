@@ -1,13 +1,17 @@
 import { useQuery } from "@tanstack/react-query";
 
 import { api, fehlerText, type Problem, type StreckeUebersicht } from "../api";
+import { useOffeneGruppen } from "../hooks/useOffeneGruppen";
 import { stufenKreis } from "../vergleich/format";
+import { Dreieck } from "./Dreieck";
+import { gruppieren, OHNE_GRUPPE, sortiert, type Gruppe } from "./gruppen";
 
 /**
  * Startseite: Strecken als Karten mit ihren Stufen (ARCHITEKTUR Kap. 10, Ansicht 1).
  * Ein Klick auf die Karte öffnet die Streckenansicht (Status und Protokoll je Stufe).
  * Hier wird bewusst nichts verglichen – das kostet je Strecke Zeit, bei FTPS erst recht.
  * Die Kreise der Stufen zeigen den zuletzt bekannten Stand (v0.6.6).
+ * Strecken mit Gruppe erscheinen unter aufklappbaren Balken, alphabetisch (v0.8.1).
  */
 type Props = {
   onNeu: () => void;
@@ -49,17 +53,71 @@ export function StreckenListe({ onNeu, onAnzeigen }: Props) {
           </p>
         </div>
       ) : (
-        <div className="karten">
-          {liste.data.map((s) => (
-            <StreckeKarte
-              key={s.id}
-              strecke={s}
-              onAnzeigen={() => onAnzeigen(s)}
-            />
-          ))}
-        </div>
+        <Strecken liste={liste.data} onAnzeigen={onAnzeigen} />
       )}
     </section>
+  );
+}
+
+/** Ohne vergebene Gruppe flach wie bisher, sonst nach Gruppen. */
+function Strecken({ liste, onAnzeigen }: { liste: StreckeUebersicht[]; onAnzeigen: Props["onAnzeigen"] }) {
+  const gruppen = gruppieren(liste);
+  const klappen = useOffeneGruppen();
+  if (gruppen.length === 0) return <Karten liste={sortiert(liste)} onAnzeigen={onAnzeigen} />;
+  return (
+    <div className="gruppen">
+      <div className="gruppen-knoepfe">
+        <button className="leise" onClick={() => klappen.alleSetzen(gruppen.map((g) => g.name))}>
+          Alle aufklappen
+        </button>
+        <button className="leise" onClick={() => klappen.alleSetzen([])}>
+          Alle zuklappen
+        </button>
+      </div>
+      {gruppen.map((g) => (
+        <GruppeBlock
+          key={g.name}
+          gruppe={g}
+          offen={klappen.istOffen(g.name)}
+          onKlappen={() => klappen.umschalten(g.name)}
+          onAnzeigen={onAnzeigen}
+        />
+      ))}
+    </div>
+  );
+}
+
+type GruppeProps = {
+  gruppe: Gruppe;
+  offen: boolean;
+  onKlappen: () => void;
+  onAnzeigen: Props["onAnzeigen"];
+};
+
+function GruppeBlock({ gruppe, offen, onKlappen, onAnzeigen }: GruppeProps) {
+  const name = gruppe.name === OHNE_GRUPPE ? "Ohne Gruppe" : gruppe.name;
+  const anzahl = gruppe.strecken.length;
+  return (
+    <section className="gruppe">
+      <button className="gruppe-balken" aria-expanded={offen} onClick={onKlappen}>
+        <span className="klappe">
+          <Dreieck />
+        </span>
+        <span className="gruppe-name">{name}</span>
+        <span className="gruppe-anzahl">{anzahl === 1 ? "1 Strecke" : `${anzahl} Strecken`}</span>
+      </button>
+      {offen && <Karten liste={gruppe.strecken} onAnzeigen={onAnzeigen} />}
+    </section>
+  );
+}
+
+function Karten({ liste, onAnzeigen }: { liste: StreckeUebersicht[]; onAnzeigen: Props["onAnzeigen"] }) {
+  return (
+    <div className="karten">
+      {liste.map((s) => (
+        <StreckeKarte key={s.id} strecke={s} onAnzeigen={() => onAnzeigen(s)} />
+      ))}
+    </div>
   );
 }
 

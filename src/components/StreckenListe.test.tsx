@@ -189,3 +189,56 @@ describe("Startseite – Strecken", () => {
     expect(kreise[3].title).toMatch(/^Stand unbekannt/);
   });
 });
+
+describe("Startseite – Gruppen (v0.8.1)", () => {
+  const karte = (name: string, gruppe?: string): StreckeUebersicht => ({
+    ...mailwerk,
+    id: name.toLowerCase().replace(/ /g, "-"),
+    name,
+    gruppe,
+  });
+  const titel = () => screen.queryAllByRole("heading", { level: 3 }).map((h) => h.textContent);
+  const balken = () => screen.getAllByRole("button").filter((b) => b.classList.contains("gruppe-balken"));
+
+  it("ohne Gruppen flach wie bisher, aber alphabetisch", async () => {
+    rustAttrappe({ strecken_liste: () => [karte("Zug"), karte("Ärger"), karte("Bahn")], konfig_ort: () => ORT });
+    mitQuery(<StreckenListe onNeu={vi.fn()} onAnzeigen={vi.fn()} />);
+    await screen.findByRole("heading", { name: "Zug" });
+    expect(titel()).toEqual(["Ärger", "Bahn", "Zug"]);
+    expect(screen.queryByRole("button", { name: "Alle aufklappen" })).toBeNull();
+  });
+
+  it("Balken mit Name und Anzahl, anfangs zu; Klick klappt auf und zu", async () => {
+    rustAttrappe({
+      strecken_liste: () => [karte("Mailwerk Webseite", "Webseiten"), karte("Versuchsstrecke"), karte("GymGuard Webseite", "Webseiten")],
+      konfig_ort: () => ORT,
+    });
+    mitQuery(<StreckenListe onNeu={vi.fn()} onAnzeigen={vi.fn()} />);
+    const web = await screen.findByRole("button", { name: /Webseiten/ });
+    expect(balken().map((b) => b.textContent)).toEqual(["Webseiten2 Strecken", "Ohne Gruppe1 Strecke"]);
+    expect(web).toHaveAttribute("aria-expanded", "false");
+    expect(titel()).toEqual([]);
+
+    await userEvent.click(web);
+    expect(web).toHaveAttribute("aria-expanded", "true");
+    expect(titel()).toEqual(["GymGuard Webseite", "Mailwerk Webseite"]);
+
+    await userEvent.click(web);
+    expect(titel()).toEqual([]);
+  });
+
+  it("alle auf- und zuklappen; der Stand bleibt nach einem Neustart erhalten", async () => {
+    rustAttrappe({ strecken_liste: () => [karte("A", "APIs"), karte("B")], konfig_ort: () => ORT });
+    const erste = mitQuery(<StreckenListe onNeu={vi.fn()} onAnzeigen={vi.fn()} />);
+    await userEvent.click(await screen.findByRole("button", { name: "Alle aufklappen" }));
+    expect(titel()).toEqual(["A", "B"]);
+    await userEvent.click(screen.getByRole("button", { name: "Alle zuklappen" }));
+    expect(titel()).toEqual([]);
+    await userEvent.click(screen.getByRole("button", { name: /Ohne Gruppe/ }));
+    erste.unmount();
+
+    mitQuery(<StreckenListe onNeu={vi.fn()} onAnzeigen={vi.fn()} />);
+    await waitFor(() => expect(titel()).toEqual(["B"]));
+  });
+});
+

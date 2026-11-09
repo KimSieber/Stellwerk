@@ -4,6 +4,7 @@ import type { Strecke } from "../api";
 import {
   endpunktVom,
   freieStufenId,
+  gruppeBereinigt,
   hatFehler,
   kennungAus,
   ausUmschalten,
@@ -40,6 +41,15 @@ describe("kennungAus", () => {
   it("höchstens 64 Zeichen und ohne Strich am Ende", () => {
     expect(kennungAus("a".repeat(63) + " b")).toBe("a".repeat(63));
     expect(kennungAus("x".repeat(100))).toHaveLength(64);
+  });
+});
+
+describe("gruppeBereinigt", () => {
+  it("entfernt Rand-Leerzeichen; leer heißt ohne Gruppe (Feld entfällt)", () => {
+    const s = neueStrecke();
+    expect(gruppeBereinigt({ ...s, gruppe: "  Webseiten " }).gruppe).toBe("Webseiten");
+    expect(gruppeBereinigt({ ...s, gruppe: "  " })).not.toHaveProperty("gruppe");
+    expect(gruppeBereinigt(s)).toEqual(s);
   });
 });
 

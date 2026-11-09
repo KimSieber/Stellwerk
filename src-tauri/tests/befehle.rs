@@ -110,6 +110,7 @@ fn speichern_laden_liste_loeschen() {
         json!([{
             "id": "mailwerk-web",
             "name": "Mailwerk Webseite",
+            "gruppe": null,
             "stufen": [
                 { "id": "spiegel", "name": "Entwicklung → Spiegel",
                   "quelle": a.wurzel.join("daten/quelle").display().to_string(),
@@ -125,6 +126,21 @@ fn speichern_laden_liste_loeschen() {
 
     assert_eq!(a.aufruf("strecke_loeschen", json!({ "id": "mailwerk-web" })).unwrap(), Value::Null);
     assert_eq!(a.aufruf("strecken_liste", json!({})).unwrap(), json!([]));
+}
+
+#[test]
+fn gruppe_wird_gespeichert_und_in_der_liste_bereinigt() {
+    let a = app();
+    let mut s = strecke_json(&a.wurzel);
+    s["gruppe"] = json!("  Webseiten ");
+    a.aufruf("strecke_speichern", json!({ "strecke": s })).unwrap();
+    assert_eq!(a.aufruf("strecke_laden", json!({ "id": "mailwerk-web" })).unwrap()["gruppe"], "  Webseiten ");
+    assert_eq!(a.aufruf("strecken_liste", json!({})).unwrap()[0]["gruppe"], "Webseiten");
+
+    let mut s = strecke_json(&a.wurzel);
+    s["gruppe"] = json!("");
+    a.aufruf("strecke_speichern", json!({ "strecke": s })).unwrap();
+    assert_eq!(a.aufruf("strecken_liste", json!({})).unwrap()[0]["gruppe"], Value::Null);
 }
 
 #[test]

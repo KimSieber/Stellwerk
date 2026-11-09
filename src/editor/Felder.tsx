@@ -46,19 +46,31 @@ export function TextFeld(props: {
   onChange: (w: string) => void;
   nurLesen?: boolean;
   platzhalter?: string;
+  /** Vorschläge beim Tippen; frei eingeben bleibt möglich (v0.8.1). */
+  vorschlaege?: string[];
 }) {
   return (
     <Feld
       label={props.label}
       ort={props.ort}
       kind={(id) => (
-        <input
-          id={id}
-          value={props.wert}
-          readOnly={props.nurLesen}
-          placeholder={props.platzhalter}
-          onChange={(e) => props.onChange(e.target.value)}
-        />
+        <>
+          <input
+            id={id}
+            value={props.wert}
+            readOnly={props.nurLesen}
+            placeholder={props.platzhalter}
+            list={props.vorschlaege ? `${id}-vorschlaege` : undefined}
+            onChange={(e) => props.onChange(e.target.value)}
+          />
+          {props.vorschlaege && (
+            <datalist id={`${id}-vorschlaege`}>
+              {props.vorschlaege.map((v) => (
+                <option key={v} value={v} />
+              ))}
+            </datalist>
+          )}
+        </>
       )}
     />
   );

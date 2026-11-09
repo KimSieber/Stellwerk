@@ -6,9 +6,11 @@ import { useState } from "react";
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { api, fehlerText, type BefehlsFehler, type Problem, type Strecke } from "../api";
+import { gruppenNamen } from "../components/gruppen";
 import { useOrdnerAblage } from "../hooks/useOrdnerAblage";
 import { AblageKontext, ProblemeKontext, TextFeld, type AblageMeldung } from "./Felder";
 import {
+  gruppeBereinigt,
   hatFehler,
   kennungAus,
   kontenAngleichen,
@@ -87,7 +89,9 @@ function Bearbeiten(props: Props & { start: Strecke; neu: boolean }) {
     queryFn: () => api.streckePruefen(s),
     placeholderData: keepPreviousData,
   });
-  const liste = useQuery({ queryKey: ["strecken"], queryFn: api.streckenListe, enabled: props.neu });
+  // Für die Prüfung der Kennung (neue Strecke, immer frisch) und die Vorschläge der Gruppe
+  // (vorhandene Strecke: die Liste der Startseite genügt, kein erneutes Laden)
+  const liste = useQuery({ queryKey: ["strecken"], queryFn: api.streckenListe, refetchOnMount: props.neu });
   const global = useQuery({ queryKey: ["globaleRegeln"], queryFn: api.globaleRegeln }).data ?? [];
 
   const vergeben = props.neu && s.id !== "" && (liste.data ?? []).some((e) => e.id === s.id);
@@ -108,7 +112,8 @@ function Bearbeiten(props: Props & { start: Strecke; neu: boolean }) {
 
   const speichern = useMutation({
     mutationFn: async () => {
-      await (props.neu ? api.streckeAnlegen(s) : api.streckeSpeichern(s));
+      const fertig = gruppeBereinigt(s);
+      await (props.neu ? api.streckeAnlegen(fertig) : api.streckeSpeichern(fertig));
       // Erst nach erfolgreichem Speichern: Passwörter in den Schlüsselbund
       for (const [i, st] of s.stufen.entries()) {
         if (passwoerter[i] && mitPasswort(st.ziel)) await api.passwortSpeichern(st.ziel.konto_ref, passwoerter[i]);
@@ -189,6 +194,14 @@ function Bearbeiten(props: Props & { start: Strecke; neu: boolean }) {
                   setKennungVonHand(true);
                   aendern({ ...s, id });
                 }}
+              />
+              <TextFeld
+                label="Gruppe (optional)"
+                ort="gruppe"
+                wert={s.gruppe ?? ""}
+                platzhalter="z. B. Webseiten"
+                vorschlaege={gruppenNamen(liste.data ?? [])}
+                onChange={(gruppe) => aendern({ ...s, gruppe })}
               />
             </div>
             {!props.neu && <p className="hinweis">Die Kennung ist der Dateiname und bleibt fest.</p>}

@@ -15,6 +15,9 @@ pub struct Strecke {
     /// Kennung, zugleich Dateiname (`<id>.toml`). Erlaubt: `a-z`, `0-9`, `-`.
     pub id: String,
     pub name: String,
+    /// Freie Gruppe für die Startseite (v0.8.1) – optional, nicht zentral angelegt.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gruppe: Option<String>,
     #[serde(default = "konfig_version")]
     pub version: u32,
     /// Regeln der Ebene „Strecke“.
@@ -31,6 +34,11 @@ fn konfig_version() -> u32 {
 impl Strecke {
     pub fn stufe(&self, id: &str) -> Option<&Stufe> {
         self.stufen.iter().find(|s| s.id == id)
+    }
+
+    /// Gruppe ohne Rand-Leerzeichen; leer gilt als „ohne Gruppe“.
+    pub fn gruppe_bereinigt(&self) -> Option<String> {
+        self.gruppe.as_deref().map(str::trim).filter(|g| !g.is_empty()).map(str::to_owned)
     }
 }
 
@@ -356,7 +364,21 @@ mod tests {
 
     #[test]
     fn strecke_findet_stufe() {
-        let s = Strecke { id: "s".into(), name: "S".into(), version: 1, regeln: Default::default(), stufen: vec![] };
+        let s = Strecke { id: "s".into(), name: "S".into(), gruppe: None, version: 1, regeln: Default::default(), stufen: vec![] };
         assert!(s.stufe("x").is_none());
+    }
+
+    #[test]
+    fn gruppe_ist_optional_und_wird_bereinigt() {
+        let mut s: Strecke = toml::from_str("id = \"s\"\nname = \"S\"").unwrap();
+        assert_eq!((s.gruppe.as_deref(), s.gruppe_bereinigt()), (None, None));
+        assert!(!toml::to_string(&s).unwrap().contains("gruppe"), "ohne Gruppe nichts schreiben");
+
+        s = toml::from_str("id = \"s\"\nname = \"S\"\ngruppe = \"  Webseiten \"").unwrap();
+        assert_eq!(s.gruppe_bereinigt().as_deref(), Some("Webseiten"));
+        assert!(toml::to_string(&s).unwrap().contains("gruppe = \"  Webseiten \""));
+
+        s.gruppe = Some("   ".into());
+        assert_eq!(s.gruppe_bereinigt(), None);
     }
 }

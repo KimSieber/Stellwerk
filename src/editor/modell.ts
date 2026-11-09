@@ -26,6 +26,16 @@ export function kennungAus(name: string): string {
     .replace(/-+$/, "");
 }
 
+/**
+ * Gruppe zum Speichern: Rand-Leerzeichen weg, leer = ohne Gruppe (Feld entfällt).
+ * Erst beim Speichern – sonst ließe sich kein Leerzeichen zwischen zwei Wörtern tippen.
+ */
+export function gruppeBereinigt(s: Strecke): Strecke {
+  const { gruppe, ...rest } = s;
+  const g = (gruppe ?? "").trim();
+  return g === "" ? rest : { ...rest, gruppe: g };
+}
+
 /** Interner Name des Schlüsselbund-Eintrags einer Stufe – vergibt Stellwerk selbst. */
 export function kontoRef(streckeId: string, stufeId: string): string {
   return `stellwerk:${streckeId}:${stufeId}`;
