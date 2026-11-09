@@ -91,6 +91,19 @@ fn anmeldung_und_freigabe_werden_geprueft() {
 }
 
 #[test]
+fn verbindung_testen() {
+    let s = starten();
+    datei(&s.ordner("web"), "a.txt", "a", ZEIT);
+    datei(&s.ordner("web"), "b/c.txt", "c", ZEIT);
+    let t = smb(&s, "/web").verbindung_testen().unwrap();
+    assert_eq!(t.ordner, format!("smb://127.0.0.1:{}/test/web", s.port));
+    assert_eq!(t.eintraege, 2, "Unterordner zählt als ein Eintrag");
+    assert!(matches!(smb(&s, "/fehlt").verbindung_testen(), Err(StellwerkError::NichtGefunden(_))));
+    let falsch = Smb::new(&endpunkt(&s, "test", "/"), "falsch");
+    assert!(matches!(falsch.verbindung_testen(), Err(StellwerkError::Anmeldung(_))));
+}
+
+#[test]
 fn auflisten_liest_rekursiv_und_laesst_ignorierte_ordner_aus() {
     let s = starten();
     let w = s.ordner("web");

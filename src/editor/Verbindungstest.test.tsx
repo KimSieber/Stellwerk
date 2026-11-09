@@ -2,10 +2,10 @@ import { describe, expect, it, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
-import type { Endpunkt, Verbindungstest as Ergebnis } from "../api";
+import type { Endpunkt, SmbVerbindungstest, Verbindungstest as Ergebnis } from "../api";
 import { aufrufeVon, mitQuery, rustAttrappe, Zustand } from "../test/hilfen";
 import { EndpunktFelder } from "./Felder";
-import { Verbindungstest } from "./Verbindungstest";
+import { SmbVerbindungstestKnopf, Verbindungstest } from "./Verbindungstest";
 
 type Ftps = Endpunkt & { typ: "ftps" };
 const ziel: Ftps = {
@@ -170,5 +170,55 @@ describe("Verbindung testen im Endpunkt-Editor", () => {
     await userEvent.click(await screen.findByRole("button", { name: "Diesem Zertifikat vertrauen" }));
     expect(zuletzt).toEqual({ ...ziel, zertifikat: FP });
     expect(screen.getByText(/Bestätigtes Zertifikat/)).toBeInTheDocument();
+  });
+});
+
+describe("Verbindung testen – Samba-Freigabe (v0.7.1b)", () => {
+  const smb: Endpunkt & { typ: "smb" } = {
+    typ: "smb", host: "192.168.1.11", port: 445, freigabe: "manitu", pfad: "/web", benutzer: "manitu", konto_ref: "stellwerk:s:z",
+  };
+
+  it("zeigt den Lauf und danach Ordner und Einträge", async () => {
+    let fertig: (e: SmbVerbindungstest) => void = () => {};
+    const a = rustAttrappe({ smb_verbindung_testen: () => new Promise<SmbVerbindungstest>((r) => (fertig = r)) });
+    render(<SmbVerbindungstestKnopf ziel={smb} passwort="" />);
+    await userEvent.click(knopf());
+    expect(knopf()).toHaveTextContent("Teste Verbindung …");
+    expect(knopf()).toBeDisabled();
+    expect(aufrufeVon(a, "smb_verbindung_testen")[0].args).toMatchObject({ ziel: smb, passwort: null });
+    fertig({ ordner: "smb://192.168.1.11:445/manitu/web", eintraege: 1 });
+    const ok = await screen.findByRole("status");
+    expect(ok).toHaveTextContent("✓ Verbunden mit 192.168.1.11");
+    expect(ok).toHaveTextContent("Ordner smb://192.168.1.11:445/manitu/web · 1 Eintrag");
+  });
+
+  it("mehrere Einträge; eingegebenes Passwort wird mitgeschickt", async () => {
+    const a = rustAttrappe({ smb_verbindung_testen: () => ({ ordner: "smb://x", eintraege: 3 }) });
+    render(<SmbVerbindungstestKnopf ziel={smb} passwort="geheim" />);
+    await userEvent.click(knopf());
+    expect(await screen.findByRole("status")).toHaveTextContent("3 Einträge");
+    expect(aufrufeVon(a, "smb_verbindung_testen")[0].args).toMatchObject({ passwort: "geheim" });
+  });
+
+  it("Fehler wird angezeigt", async () => {
+    rustAttrappe({ smb_verbindung_testen: () => Promise.reject({ kategorie: "anmeldung", meldung: "Benutzer oder Passwort falsch" }) });
+    render(<SmbVerbindungstestKnopf ziel={smb} passwort="" />);
+    await userEvent.click(knopf());
+    expect(await screen.findByText(/✗ .*Benutzer oder Passwort falsch/)).toBeInTheDocument();
+  });
+
+  it("ohne Server oder Freigabe nicht klickbar; im Editor nur mit Passwortfeld", () => {
+    const { rerender } = render(<SmbVerbindungstestKnopf ziel={{ ...smb, host: " " }} passwort="" />);
+    expect(knopf()).toBeDisabled();
+    rerender(<SmbVerbindungstestKnopf ziel={{ ...smb, freigabe: "" }} passwort="" />);
+    expect(knopf()).toBeDisabled();
+    rerender(<EndpunktFelder wert={smb} ort="z" onChange={() => {}} />);
+    expect(screen.queryByRole("button", { name: "Verbindung testen" })).toBeNull();
+  });
+
+  it("im Editor mit Passwortfeld vorhanden", async () => {
+    rustAttrappe({ passwort_vorhanden: () => true });
+    mitQuery(<EndpunktFelder wert={smb} ort="z" onChange={() => {}} passwort={{ wert: "", onChange: () => {} }} />);
+    expect(await screen.findByRole("button", { name: "Verbindung testen" })).toBeEnabled();
   });
 });

@@ -104,6 +104,13 @@ export interface SmbEndpunkt {
   konto_ref: string;
 }
 
+/** Ergebnis von „Verbindung testen“ für eine Samba-Freigabe (v0.7.1b). */
+export interface SmbVerbindungstest {
+  /** `smb://host:port/freigabe/ordner` */
+  ordner: string;
+  eintraege: number;
+}
+
 /** Ergebnis von „Verbindung testen“ (stellwerk_core::endpoint::ftps::Verbindungstest). */
 export interface Verbindungstest {
   begruessung: string | null;
@@ -391,6 +398,9 @@ export const api = {
   /** Liest nur. Ohne eingegebenes Passwort gilt das aus dem Schlüsselbund. */
   verbindungTesten: (ziel: Endpunkt, passwort: string) =>
     invoke<Verbindungstest>("verbindung_testen", { ziel, passwort: passwort || null }),
+  /** Samba-Freigabe: anmelden und Ordner lesen (v0.7.1b). Ohne Eingabe gilt das Passwort aus dem Schlüsselbund. */
+  smbVerbindungTesten: (ziel: Endpunkt, passwort: string) =>
+    invoke<SmbVerbindungstest>("smb_verbindung_testen", { ziel, passwort: passwort || null }),
   /** Scannt und vergleicht eine Stufe; verändert nichts. Fortschritt kommt gedrosselt. */
   /** `server`: FTPS-Ziel vom Server einlesen statt gegen das Manifest (lokale Ziele: ohne Wirkung). */
   vergleichStarten: (strecke: string, stufe: string, beiFortschritt: (f: Fortschritt) => void, server = false) =>

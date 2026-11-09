@@ -56,6 +56,15 @@ pub fn kennung(e: &SmbEndpunkt) -> String {
     format!("smb://{}:{}/{}{}", e.host, e.port, e.freigabe, pfad)
 }
 
+/// Ergebnis von „Verbindung testen“.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct SmbVerbindungstest {
+    /// `smb://host:port/freigabe/pfad`
+    pub ordner: String,
+    /// Einträge im Ordner der Stufe (ohne Unterordner).
+    pub eintraege: usize,
+}
+
 /// Eine angemeldete Verbindung zur Freigabe.
 struct Sitzung {
     client: Client,
@@ -178,6 +187,14 @@ impl Smb {
             erg.push(eintrag_aus(ordner, &name, &info));
         }
         Ok(erg)
+    }
+
+    /// „Verbindung testen“ (v0.7.1b): anmelden und den Ordner der Stufe lesen –
+    /// über eine eigene, neue Verbindung. Verändert nichts.
+    pub fn verbindung_testen(&self) -> Result<SmbVerbindungstest> {
+        let s = self.anmelden()?;
+        let eintraege = self.ordner_lesen(&s, &RelPath::wurzel())?.len();
+        Ok(SmbVerbindungstest { ordner: self.kennung(), eintraege })
     }
 
     /// BLAKE3-Hash einer Datei – liest sie einmal über die gemeinsame Verbindung.

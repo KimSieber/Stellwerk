@@ -281,6 +281,26 @@ pub async fn verbindung_testen(
     Ok(VerbindungstestAntwort { test: test?, umbenennen_ueberschreibt })
 }
 
+/// „Verbindung testen“ für eine Samba-Freigabe (v0.7.1b): anmelden und den Ordner
+/// lesen, nichts verändern. Passwort: das eingegebene, sonst das aus dem Schlüsselbund.
+#[tauri::command]
+pub async fn smb_verbindung_testen(
+    state: State<'_, AppState>,
+    ziel: Endpunkt,
+    passwort: Option<String>,
+) -> Antwort<stellwerk_core::endpoint::smb::SmbVerbindungstest> {
+    let Endpunkt::Smb(ziel) = ziel else {
+        return Err(StellwerkError::NichtUnterstuetzt("Dieser Verbindungstest gilt nur für Samba-Freigaben".into()).into());
+    };
+    let passwort = match passwort.filter(|p| !p.is_empty()) {
+        Some(p) => p,
+        None => hinterlegtes_passwort(&state, &ziel.konto_ref)?,
+    };
+    let smb = Smb::new(&ziel, &passwort);
+    let test = tauri::async_runtime::spawn_blocking(move || smb.verbindung_testen()).await.expect("Verbindungstest beendet");
+    Ok(test?)
+}
+
 /// Antwort von `verbindung_testen`.
 #[derive(Debug, Serialize)]
 pub struct VerbindungstestAntwort {

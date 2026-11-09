@@ -1,10 +1,17 @@
-// „Verbindung testen“ für ein FTPS-Ziel im Editor (v0.4). Liest nur – auf dem Server
+// „Verbindung testen“ für ein FTPS-Ziel (v0.4) und eine Samba-Freigabe (v0.7.1b) im Editor. Liest nur – auf dem Server
 // wird nichts verändert. Ein nicht anerkanntes Zertifikat lässt sich nach Prüfung
 // des Fingerprints bewusst bestätigen; gespeichert wird das mit der Strecke.
 
 import { useState } from "react";
 
-import { api, fehlerText, type BefehlsFehler, type Endpunkt, type Verbindungstest as Ergebnis } from "../api";
+import {
+  api,
+  fehlerText,
+  type BefehlsFehler,
+  type Endpunkt,
+  type SmbVerbindungstest,
+  type Verbindungstest as Ergebnis,
+} from "../api";
 
 type FtpsZiel = Endpunkt & { typ: "ftps" };
 
@@ -111,6 +118,43 @@ function Fehler(props: { fehler: unknown; onVertrauen: (f: string) => void }) {
           Diesem Zertifikat vertrauen
         </button>
       </div>
+    </div>
+  );
+}
+
+type SmbZiel = Endpunkt & { typ: "smb" };
+
+/** „Verbindung testen“ für eine Samba-Freigabe (v0.7.1b): anmelden, Ordner lesen, nichts verändern. */
+export function SmbVerbindungstestKnopf(props: { ziel: SmbZiel; passwort: string }) {
+  const schluessel = JSON.stringify([props.ziel, props.passwort]);
+  const [stand, setStand] = useState<{ fuer: string; s: { art: "laeuft" } | { art: "ok"; e: SmbVerbindungstest } | { art: "fehler"; f: unknown } } | null>(null);
+  const s = stand?.fuer === schluessel ? stand.s : null;
+
+  async function testen() {
+    setStand({ fuer: schluessel, s: { art: "laeuft" } });
+    try {
+      setStand({ fuer: schluessel, s: { art: "ok", e: await api.smbVerbindungTesten(props.ziel, props.passwort) } });
+    } catch (f) {
+      setStand({ fuer: schluessel, s: { art: "fehler", f } });
+    }
+  }
+
+  return (
+    <div className="verbindungstest">
+      <div className="knoepfe">
+        <button type="button" onClick={testen} disabled={s?.art === "laeuft" || !props.ziel.host.trim() || !props.ziel.freigabe.trim()}>
+          {s?.art === "laeuft" ? "Teste Verbindung …" : "Verbindung testen"}
+        </button>
+      </div>
+      {s?.art === "ok" && (
+        <div className="test-ergebnis ok" role="status">
+          <strong>✓ Verbunden mit {props.ziel.host}</strong>
+          <span>
+            Ordner <code>{s.e.ordner}</code> · {s.e.eintraege} {s.e.eintraege === 1 ? "Eintrag" : "Einträge"}
+          </span>
+        </div>
+      )}
+      {s?.art === "fehler" && <p className="test-ergebnis fehler">✗ {fehlerText(s.f)}</p>}
     </div>
   );
 }

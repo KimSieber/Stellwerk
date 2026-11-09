@@ -1822,3 +1822,36 @@ fn smb_und_ftps_gemischt() {
     let v = a.aufruf("vergleich_starten", json!({ "strecke": "smb", "stufe": "hoch", "fortschritt": KANAL })).unwrap();
     assert_eq!(v["ziel_stand"], "manifest");
 }
+
+#[test]
+fn smb_verbindung_testen() {
+    let a = app();
+    let s = stellwerk_testserver::smb::starten();
+    std::fs::write(s.ordner("web").join("a.txt"), "a").unwrap();
+    let ziel = smb_ep(&s, "/web", "stellwerk:smb:test");
+    let pw = stellwerk_testserver::PASSWORT;
+
+    // Eingegebenes Passwort
+    let t = a.aufruf("smb_verbindung_testen", json!({ "ziel": ziel, "passwort": pw })).unwrap();
+    assert_eq!(t, json!({ "ordner": format!("smb://127.0.0.1:{}/test/web", s.port), "eintraege": 1 }));
+    assert!(!t.to_string().contains(pw), "Passwort nie in der Antwort");
+
+    // Ohne Eingabe: aus dem Schlüsselbund – noch keines, dann ein falsches, dann das richtige
+    assert_eq!(a.aufruf("smb_verbindung_testen", json!({ "ziel": ziel, "passwort": "" })).unwrap_err()["kategorie"], "nicht_gefunden");
+    a.aufruf("passwort_speichern", json!({ "konto": "stellwerk:smb:test", "passwort": "falsch" })).unwrap();
+    assert_eq!(a.aufruf("smb_verbindung_testen", json!({ "ziel": ziel })).unwrap_err()["kategorie"], "anmeldung");
+    a.aufruf("passwort_speichern", json!({ "konto": "stellwerk:smb:test", "passwort": pw })).unwrap();
+    assert!(a.aufruf("smb_verbindung_testen", json!({ "ziel": ziel })).is_ok());
+
+    // Falscher Ordner; anderes Ziel
+    let fehlt = smb_ep(&s, "/fehlt", "stellwerk:smb:test");
+    assert_eq!(a.aufruf("smb_verbindung_testen", json!({ "ziel": fehlt })).unwrap_err()["kategorie"], "nicht_gefunden");
+    let e = a.aufruf("smb_verbindung_testen", json!({ "ziel": { "typ": "lokal", "pfad": "/tmp" } })).unwrap_err();
+    assert_eq!(e["kategorie"], "nicht_unterstuetzt");
+
+    // Ungültige Angaben werden schon beim Einlesen abgewiesen
+    let e = a.aufruf("smb_verbindung_testen", json!({ "ziel": { "typ": "smb", "host": "h" } })).unwrap_err();
+    assert!(e.to_string().contains("ziel"), "{e}");
+    let e = a.aufruf("smb_verbindung_testen", json!({ "ziel": ziel, "passwort": 42 })).unwrap_err();
+    assert!(e.to_string().contains("passwort"), "{e}");
+}

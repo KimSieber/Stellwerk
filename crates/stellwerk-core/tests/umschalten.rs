@@ -456,3 +456,67 @@ fn fortsetzen_nach_halbem_tausch_und_uebernehmen_laeuft_bei_fehlern_weiter() {
     assert!(!inhalte(&o.z).contains_key("index.php.bak-u1"));
     assert!(!inhalte(&o.z).contains_key("weg.txt.bak-u1"));
 }
+
+// --- Samba-Freigabe (v0.7.1b) ------------------------------------------------------
+
+/// Ziel ist der Ordner `ziel` der Freigabe; der Plan entsteht wie oben gegen dessen Ordner
+/// auf der Platte des Testservers.
+fn samba() -> (stellwerk_testserver::smb::SambaServer, stellwerk_core::endpoint::Smb, PathBuf) {
+    let s = stellwerk_testserver::smb::starten();
+    let z = s.ordner("ziel");
+    let e = stellwerk_core::model::SmbEndpunkt {
+        host: "127.0.0.1".into(),
+        port: s.port,
+        freigabe: "test".into(),
+        pfad: "/ziel".into(),
+        benutzer: s.benutzer.clone(),
+        konto_ref: "k".into(),
+    };
+    let smb = stellwerk_core::endpoint::Smb::new(&e, stellwerk_testserver::smb::PASSWORT);
+    (s, smb, z)
+}
+
+#[test]
+fn samba_hochladen_umschalten_uebernehmen() {
+    let o = ordner();
+    let (_s, ziel, z) = samba();
+    webseite(&o.q, &z);
+    let vorher = inhalte(&z);
+    let plan = plan(&o.q, &z, &Rechte::NichtSetzen);
+
+    // Phase 1: Live unverändert, Schattendateien da
+    assert!(phase1(&plan, &o.q, &ziel).0.vollstaendig());
+    let nach1 = inhalte(&z);
+    for (k, v) in &vorher {
+        assert_eq!(nach1.get(k), Some(v), "{k} unverändert");
+    }
+    assert_eq!(nach1["index.php.dpl-u1"].as_deref(), Some("neu!"));
+
+    // Phase 2 und 3: umgeschaltet, übernommen – Ziel entspricht der Quelle
+    assert!(lauf(umschalten, &plan, &ziel).0.vollstaendig());
+    assert_eq!(inhalte(&z)["index.php.bak-u1"].as_deref(), Some("alt"));
+    assert!(lauf(uebernehmen, &plan, &ziel).0.vollstaendig());
+    assert_eq!(inhalte(&z), inhalte(&o.q));
+    ohne_hilfsdateien(&z);
+}
+
+#[test]
+fn samba_rollback_und_abbrechen() {
+    let o = ordner();
+    let (_s, ziel, z) = samba();
+    webseite(&o.q, &z);
+    let vorher = inhalte(&z);
+    let plan = plan(&o.q, &z, &Rechte::NichtSetzen);
+
+    // Umschalten und zurück: alter Stand
+    assert!(phase1(&plan, &o.q, &ziel).0.vollstaendig());
+    assert!(lauf(umschalten, &plan, &ziel).0.vollstaendig());
+    assert!(lauf(zurueckrollen, &plan, &ziel).0.vollstaendig());
+    assert_eq!(inhalte(&z), vorher);
+
+    // Abbrechen vor dem Umschalten: Schattendateien wieder weg
+    assert!(phase1(&plan, &o.q, &ziel).0.vollstaendig());
+    assert!(lauf(abbrechen, &plan, &ziel).0.vollstaendig());
+    assert_eq!(inhalte(&z), vorher);
+    ohne_hilfsdateien(&z);
+}
