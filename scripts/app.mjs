@@ -3,24 +3,11 @@
 // Bricht ab, wenn Stellwerk läuft oder kein Zertifikat „Developer ID Application“ da ist;
 // warnt bei nicht committeten Änderungen. Die Entscheidungen stecken in app-logik.mjs.
 
-import { execFileSync, spawnSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 
+import { abbruch, lesen, schritt } from "./ablauf.mjs";
 import { bauUmgebung, GEBAUT, gitHinweis, plattformFehler, PROGRAMM, signaturAuswerten, signaturWaehlen } from "./app-logik.mjs";
-
-function abbruch(text) {
-  console.error(`\n✗ ${text}\n`);
-  process.exit(1);
-}
-
-/** Befehl ausführen, Ausgabe läuft sichtbar mit; Fehler → Abbruch. */
-function schritt(name, befehl, argumente, umgebung = process.env) {
-  console.log(`\n▶ ${name} …\n`);
-  const r = spawnSync(befehl, argumente, { stdio: "inherit", env: umgebung });
-  if (r.status !== 0) abbruch(`${name} fehlgeschlagen.`);
-}
-
-const lesen = (befehl, argumente) => execFileSync(befehl, argumente, { encoding: "utf8" });
 
 const fehler = plattformFehler(process.platform, process.arch);
 if (fehler) abbruch(fehler);

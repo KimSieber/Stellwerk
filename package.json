@@ -16,7 +16,8 @@
     "abdeckung": "vitest run --coverage",
     "abdeckung:rust": "cargo llvm-cov --workspace --ignore-filename-regex \"(src-tauri/src/(main|start|schluesselbund)\\.rs|crates/stellwerk-testserver/.*)$\" --fail-under-functions 100 --fail-under-lines 100",
     "pruefen": "node scripts/pruefen.mjs",
-    "app": "node scripts/app.mjs"
+    "app": "node scripts/app.mjs",
+    "dmg": "node scripts/dmg.mjs"
   },
   "dependencies": {
     "@tanstack/react-query": "^5.107.0",

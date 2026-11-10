@@ -50,3 +50,48 @@ export function signaturAuswerten(ausgabe, signatur) {
   }
   return { ok: true, text: `Signiert: ${autoritaet} · Team ${team}` };
 }
+
+// --- npm run dmg (v0.8.4b) ------------------------------------------------------
+
+/** Name der im Schlüsselbund hinterlegten Zugangsdaten für die Beglaubigung (notarytool). */
+export const NOTAR_PROFIL = "stellwerk-notar";
+/** Ablage des fertigen DMG und Arbeitsordner für seinen Inhalt. */
+export const DMG_ORDNER = "target/release/bundle/dmg";
+export const DMG_INHALT = "target/release/bundle/dmg-inhalt";
+
+export function dmgName(version) {
+  return `Stellwerk_${version}_aarch64.dmg`;
+}
+
+/**
+ * Voraussetzungen für Apples Beglaubigung aus `codesign -dv --verbose=2`:
+ * gehärtete Laufzeit und sicherer Zeitstempel. Liefert eine Fehlermeldung oder null.
+ */
+export function beglaubigbarFehler(ausgabe) {
+  if (!/^CodeDirectory .*flags=0x[0-9a-f]*\(.*runtime.*\)/m.test(ausgabe)) {
+    return "Die App ist ohne gehärtete Laufzeit signiert – Apple würde die Beglaubigung ablehnen.";
+  }
+  if (!/^Timestamp=/m.test(ausgabe)) {
+    return "Die Signatur hat keinen sicheren Zeitstempel – Apple würde die Beglaubigung ablehnen.";
+  }
+  return null;
+}
+
+/** Ergebnis von `xcrun notarytool submit … --wait`: Kennung der Einreichung und Status. */
+export function beglaubigungAuswerten(ausgabe) {
+  const id = ausgabe.match(/^\s*id:\s*(\S+)/m)?.[1] ?? null;
+  const status = [...ausgabe.matchAll(/^\s*status:\s*(.+)$/gm)].at(-1)?.[1].trim() ?? null;
+  return { ok: status === "Accepted", id, status };
+}
+
+/** Text bei abgelehnter Beglaubigung – mit Befehl für Apples Protokoll. */
+export function beglaubigungFehlerText({ id, status }) {
+  const grund = `Beglaubigung nicht erfolgreich (Status: ${status ?? "unbekannt"}).`;
+  if (!id) return grund;
+  return `${grund}\nApples Protokoll dazu:\n  xcrun notarytool log ${id} --keychain-profile ${NOTAR_PROFIL}`;
+}
+
+/** Größe für die Abschlussmeldung, z. B. „12,3 MB“. */
+export function megabyte(bytes) {
+  return `${(bytes / 1_000_000).toLocaleString("de-DE", { minimumFractionDigits: 1, maximumFractionDigits: 1 })} MB`;
+}

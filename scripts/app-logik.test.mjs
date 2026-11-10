@@ -1,6 +1,17 @@
 import { describe, expect, it } from "vitest";
 
-import { bauUmgebung, gitHinweis, plattformFehler, signaturAuswerten, signaturWaehlen } from "./app-logik.mjs";
+import {
+  bauUmgebung,
+  beglaubigbarFehler,
+  beglaubigungAuswerten,
+  beglaubigungFehlerText,
+  dmgName,
+  gitHinweis,
+  megabyte,
+  plattformFehler,
+  signaturAuswerten,
+  signaturWaehlen,
+} from "./app-logik.mjs";
 
 const DEV_ID = "Developer ID Application: Kim Jan Sieber (62QD57DH52)";
 
@@ -61,5 +72,54 @@ ${autoritaet ? `Authority=${autoritaet}\nAuthority=Developer ID Certification Au
       text: `Unerwartete Signatur: Apple Development: Kim (erwartet: ${DEV_ID}).`,
     });
     expect(signaturAuswerten(codesign(null), DEV_ID).text).toBe(`Unerwartete Signatur: keine (erwartet: ${DEV_ID}).`);
+  });
+});
+
+describe("DMG (v0.8.4b)", () => {
+  it("Dateiname mit Version und Architektur", () => {
+    expect(dmgName("0.8.4")).toBe("Stellwerk_0.8.4_aarch64.dmg");
+  });
+
+  const signiert = (flags, zeitstempel = true) => `Identifier=de.sieber-bw.stellwerk
+CodeDirectory v=20500 size=1234 flags=${flags} hashes=30+7 location=embedded
+Authority=${DEV_ID}
+${zeitstempel ? "Timestamp=10.11.2026 at 19:40:00\n" : "Signed Time=10.11.2026 at 19:40:00\n"}TeamIdentifier=62QD57DH52
+`;
+
+  it("beglaubigbar: gehärtete Laufzeit und Zeitstempel", () => {
+    expect(beglaubigbarFehler(signiert("0x10000(runtime)"))).toBeNull();
+    expect(beglaubigbarFehler(signiert("0x0(none)"))).toMatch(/ohne gehärtete Laufzeit/);
+    expect(beglaubigbarFehler(signiert("0x10000(runtime)", false))).toMatch(/keinen sicheren Zeitstempel/);
+  });
+
+  it("Ergebnis der Beglaubigung auswerten", () => {
+    const angenommen = `Conducting pre-submission checks for Stellwerk_0.8.4_aarch64.dmg and initiating connection to the Apple notary service...
+Submission ID received
+  id: 2efe2717-52ef-43a5-96dc-0797e4ca1041
+Upload progress: 100,00% (12,3 MB of 12,3 MB)
+Successfully uploaded file
+  id: 2efe2717-52ef-43a5-96dc-0797e4ca1041
+  path: /x/Stellwerk_0.8.4_aarch64.dmg
+Waiting for processing to complete.
+Current status: In Progress....
+Processing complete
+  id: 2efe2717-52ef-43a5-96dc-0797e4ca1041
+  status: Accepted
+`;
+    expect(beglaubigungAuswerten(angenommen)).toEqual({ ok: true, id: "2efe2717-52ef-43a5-96dc-0797e4ca1041", status: "Accepted" });
+    expect(beglaubigungAuswerten(angenommen.replace("status: Accepted", "status: Invalid"))).toMatchObject({ ok: false, status: "Invalid" });
+    expect(beglaubigungAuswerten("Error: HTTP status code: 401")).toEqual({ ok: false, id: null, status: null });
+  });
+
+  it("Fehlertext mit Befehl für Apples Protokoll", () => {
+    expect(beglaubigungFehlerText({ id: "abc", status: "Invalid" })).toBe(
+      "Beglaubigung nicht erfolgreich (Status: Invalid).\nApples Protokoll dazu:\n  xcrun notarytool log abc --keychain-profile stellwerk-notar",
+    );
+    expect(beglaubigungFehlerText({ id: null, status: null })).toBe("Beglaubigung nicht erfolgreich (Status: unbekannt).");
+  });
+
+  it("Größe in MB", () => {
+    expect(megabyte(12_345_678)).toBe("12,3 MB");
+    expect(megabyte(5_000_000)).toBe("5,0 MB");
   });
 });
